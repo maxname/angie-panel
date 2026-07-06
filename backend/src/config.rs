@@ -17,12 +17,21 @@ pub struct PanelConfig {
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
     /// Root-owned opt-in for raw config snippets (see PLAN.md §7).
-    /// Consumed by the generator/linter from M1.
     #[serde(default)]
-    #[allow(dead_code)]
     pub allow_advanced_snippets: bool,
+    /// Permit proxying to loopback/link-local upstreams (SSRF guard opt-out).
+    #[serde(default)]
+    pub allow_loopback_upstreams: bool,
     #[serde(default)]
     pub angie: AngieConfig,
+}
+
+impl PanelConfig {
+    /// Directory served for the custom-HTML default site (world-readable,
+    /// unlike the rest of data_dir).
+    pub fn public_dir(&self) -> std::path::PathBuf {
+        self.data_dir.join("public")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +48,9 @@ pub struct AngieConfig {
     pub angie_conf: PathBuf,
     #[serde(default = "default_status_api_url")]
     pub status_api_url: String,
+    /// Read-only shared snippet files shipped by the package.
+    #[serde(default = "default_snippets_dir")]
+    pub snippets_dir: PathBuf,
 }
 
 impl Default for AngieConfig {
@@ -48,8 +60,13 @@ impl Default for AngieConfig {
             http_d_dir: default_http_d_dir(),
             angie_conf: default_angie_conf(),
             status_api_url: default_status_api_url(),
+            snippets_dir: default_snippets_dir(),
         }
     }
+}
+
+fn default_snippets_dir() -> PathBuf {
+    "/usr/share/angie-panel/snippets".into()
 }
 
 fn default_bind_addr() -> String {

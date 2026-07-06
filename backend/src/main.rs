@@ -1,10 +1,13 @@
 mod api;
+mod apply;
 mod assets;
 mod auth;
 mod config;
 mod db;
 mod error;
+mod generator;
 mod helper;
+mod model;
 mod security;
 mod state;
 mod system;
