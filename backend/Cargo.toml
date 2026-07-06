@@ -1,0 +1,59 @@
+[package]
+name = "angie-panel"
+version = "0.1.0"
+edition = "2021"
+description = "Web configurator for the Angie reverse proxy (nginx-proxy-manager analog, native systemd service)"
+license = "UNLICENSED"
+authors = ["Angie Panel contributors"]
+
+[dependencies]
+anyhow = "1"
+argon2 = "0.5"
+axum = "0.8"
+axum-extra = { version = "0.10", features = ["cookie"] }
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.3"
+hex = "0.4"
+mime_guess = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+rust-embed = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+subtle = "2"
+thiserror = "2"
+time = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "signal", "sync", "time", "net"] }
+toml = "0.8"
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tempfile = "3"
+http-body-util = "0.1"
+
+[profile.release]
+lto = true
+strip = true
+
+# --- cargo-deb (packaging/ carries the referenced assets) ---
+[package.metadata.deb]
+maintainer = "Angie Panel contributors"
+depends = "angie (>= 1.11), dbus, polkitd"
+section = "admin"
+priority = "optional"
+conf-files = ["/etc/angie-panel.toml"]
+maintainer-scripts = "../packaging/debian"
+systemd-units = { unit-name = "angie-panel", enable = true, start = false }
+assets = [
+    ["target/release/angie-panel", "usr/bin/", "755"],
+    ["../packaging/angie-panel.toml", "etc/angie-panel.toml", "644"],
+    ["../packaging/systemd/angie-panel.service", "lib/systemd/system/", "644"],
+    ["../packaging/systemd/angie-panel-configtest.service", "lib/systemd/system/", "644"],
+    ["../packaging/systemd/angie-panel-apply.service", "lib/systemd/system/", "644"],
+    ["../packaging/polkit/10-angie-panel.rules", "usr/share/polkit-1/rules.d/", "644"],
+]

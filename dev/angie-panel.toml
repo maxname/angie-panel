@@ -1,0 +1,13 @@
+# Local development config: cd backend && cargo run -- serve --config ../dev/angie-panel.toml
+bind_addr = "127.0.0.1"
+port = 8080
+data_dir = "../dev-data"
+# Vite dev server origin must pass the Origin check:
+allowed_hosts = ["localhost", "127.0.0.1"]
+
+[angie]
+# Adjust if you have Angie installed locally; probes degrade gracefully if not.
+bin = "/usr/sbin/angie"
+http_d_dir = "/etc/angie/http.d"
+angie_conf = "/etc/angie/angie.conf"
+status_api_url = "http://127.0.0.1:8100/status"
