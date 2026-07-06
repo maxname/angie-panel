@@ -60,4 +60,6 @@ assets = [
     ["../packaging/systemd/angie-panel-configtest.service", "lib/systemd/system/", "644"],
     ["../packaging/systemd/angie-panel-apply.service", "lib/systemd/system/", "644"],
     ["../packaging/polkit/10-angie-panel.rules", "usr/share/polkit-1/rules.d/", "644"],
+    ["../packaging/snippets/block-exploits.conf", "usr/share/angie-panel/snippets/", "644"],
+    ["../packaging/snippets/cache-assets.conf", "usr/share/angie-panel/snippets/", "644"],
 ]

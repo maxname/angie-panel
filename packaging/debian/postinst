@@ -24,6 +24,16 @@ case "$1" in
         # public/ holds the HTML default-site content served by Angie
         # workers, hence world-readable.
         install -d -o angie-panel -g angie-panel -m 0755 /var/lib/angie-panel/public
+
+        # Edge cache directory for the "Cache assets" feature. Owned by the
+        # Angie worker user so the root master can write cache entries; the
+        # keys_zone is declared in the generated 00-panel.conf. Best-effort:
+        # the owner exists only once Angie is installed.
+        if getent passwd angie >/dev/null; then
+            install -d -o angie -g angie -m 0750 /var/cache/angie-panel-assets
+        else
+            install -d -m 0750 /var/cache/angie-panel-assets
+        fi
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

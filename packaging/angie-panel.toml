@@ -36,6 +36,12 @@ allowed_hosts = []
 # snippets still pass the root helper's directive allowlist.
 allow_advanced_snippets = false
 
+# Allow proxying to loopback / link-local upstreams (127.0.0.0/8, ::1,
+# 169.254/16, fe80::/10). Disabled by default: such targets can expose the
+# panel itself or Angie's status API (an SSRF risk). Enable only if you
+# knowingly proxy to a service on this same machine.
+allow_loopback_upstreams = false
+
 [angie]
 # Path to the Angie binary (used for `angie -t` and version/module checks).
 bin = "/usr/sbin/angie"
@@ -51,3 +57,8 @@ status_api_url = "http://127.0.0.1:8100/status"
 # Path to the packaged main config. The panel derives its staging config
 # from it (include rewritten to staging) for pre-flight validation.
 angie_conf = "/etc/angie/angie.conf"
+
+# Directory of read-only shared snippet files (block-exploits.conf,
+# cache-assets.conf) shipped with the package and included by absolute path
+# from generated vhosts. Package-owned, so upgrades refresh them.
+snippets_dir = "/usr/share/angie-panel/snippets"
