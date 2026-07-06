@@ -49,7 +49,7 @@ pnpm dev
 Появится после первого релиза (M0). Планируемый вид — one-liner на основе [packaging/install.sh](packaging/install.sh):
 
 ```bash
-curl -fsSL https://github.com/OWNER/REPO/releases/latest/download/install.sh -o install.sh
+curl -fsSL https://github.com/maxname/angie-panel/releases/latest/download/install.sh -o install.sh
 less install.sh   # сначала прочитайте скрипт
 sudo bash install.sh
 ```
