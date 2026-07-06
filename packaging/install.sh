@@ -18,7 +18,7 @@ set -euo pipefail
 # TODO: replace OWNER, REPO and VERSION with the real GitHub release
 # coordinates before publishing this script. {ARCH} is substituted at
 # runtime with arm64 or amd64.
-PANEL_DEB_URL_TEMPLATE="https://github.com/TODO-OWNER/TODO-REPO/releases/download/vTODO-VERSION/angie-panel_TODO-VERSION_{ARCH}.deb"
+PANEL_DEB_URL_TEMPLATE="https://github.com/maxname/angie-panel/releases/download/vTODO-VERSION/angie-panel_TODO-VERSION_{ARCH}.deb"
 # ---------------------------------------------------------------------------
 
 PANEL_CONF=/etc/angie-panel.toml
