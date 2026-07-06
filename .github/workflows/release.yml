@@ -1,0 +1,133 @@
+# Release: on v* tags, build the frontend, cross-compile static musl binaries for
+# arm64 + x86_64 with cargo-zigbuild, package them with cargo-deb, and publish a
+# GitHub release with the .deb files, install.sh and SHA256 checksums.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Keep in sync with the frontend job in ci.yml.
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+
+      # pnpm version is read from the "packageManager" field of frontend/package.json.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+  build-deb:
+    name: Build .deb (${{ matrix.target }})
+    needs: frontend
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v6
+
+      # rust-embed picks up ../frontend/dist at compile time — the release binary
+      # must embed the real frontend build, so this comes before any cargo step.
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Zig provides the cross C toolchain for cargo-zigbuild (musl targets).
+      # Pinned to a version known to work with cargo-zigbuild; bump deliberately.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: ${{ matrix.target }}
+
+      - name: Install cargo-zigbuild and cargo-deb
+        run: cargo install --locked cargo-zigbuild cargo-deb
+
+      - name: Build release binary (cargo-zigbuild)
+        working-directory: backend
+        run: cargo zigbuild --release --target ${{ matrix.target }}
+
+      # --no-build: reuse the zigbuild-produced binary from target/<target>/release/
+      #   (a plain `cargo deb` build would use the default linker and fail on cross-musl).
+      # --no-strip: cargo-deb would otherwise invoke the host `strip`, which cannot
+      #   handle aarch64 binaries; strip via the release profile in Cargo.toml instead.
+      - name: Package .deb (cargo-deb)
+        working-directory: backend
+        run: cargo deb --target ${{ matrix.target }} --no-build --no-strip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb-${{ matrix.target }}
+          path: backend/target/${{ matrix.target }}/debian/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build-deb
+    runs-on: ubuntu-latest
+    steps:
+      # Needed for packaging/install.sh.
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: deb-*
+          merge-multiple: true
+          path: dist
+
+      - name: Add install.sh and generate checksums
+        run: |
+          cp packaging/install.sh dist/
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # TODO(M4, PLAN.md §8/§10): GPG-sign the release artifacts (detached .asc for
+      # each .deb and for SHA256SUMS.txt) and publish a signed apt repository.
+      # Until then releases are integrity-checked (sha256) but not authenticated.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

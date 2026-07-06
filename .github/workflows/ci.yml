@@ -1,0 +1,123 @@
+# CI: frontend (lint/test/build) -> backend (fmt/clippy/test), plus shellcheck on packaging scripts.
+# The backend embeds frontend assets via rust-embed, so the frontend build artifact
+# is downloaded into frontend/dist before any cargo command runs.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  frontend:
+    name: Frontend (lint, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+
+      # pnpm version is read from the "packageManager" field of frontend/package.json.
+      # If that field is ever removed, add `version:` here explicitly.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+  backend:
+    name: Backend (fmt, clippy, test)
+    needs: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v6
+
+      # rust-embed expects ../frontend/dist to exist at compile time.
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: rustfmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      # PLAN.md §8: the musl builds must stay pure-rustls; fail fast if a native
+      # TLS/OpenSSL dependency sneaks into the graph.
+      - name: Forbid openssl-sys / native-tls
+        run: |
+          for crate in openssl-sys native-tls; do
+            if cargo tree -i "$crate" >/dev/null 2>&1; then
+              echo "::error::dependency graph contains $crate (must stay rustls-only, see PLAN.md §8)"
+              cargo tree -i "$crate"
+              exit 1
+            fi
+          done
+
+  shellcheck:
+    name: ShellCheck (packaging)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: shellcheck packaging scripts
+        run: |
+          shopt -s nullglob globstar
+          files=(packaging/**/*.sh)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No shell scripts under packaging/ yet — nothing to check."
+            exit 0
+          fi
+          shellcheck "${files[@]}"
