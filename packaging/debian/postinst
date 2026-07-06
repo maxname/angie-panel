@@ -1,0 +1,40 @@
+#!/bin/sh
+# postinst for angie-panel (used by cargo-deb).
+# cargo-deb's systemd-units feature substitutes unit handling (enable/start)
+# at the #DEBHELPER# token below — this script only manages the service
+# account and the data directory.
+set -e
+
+case "$1" in
+    configure)
+        # Dedicated unprivileged service account. --group creates a matching
+        # system group; home is the data dir but we create it ourselves below
+        # to control ownership and mode exactly.
+        if ! getent passwd angie-panel >/dev/null; then
+            adduser --system --group \
+                --home /var/lib/angie-panel --no-create-home \
+                --shell /usr/sbin/nologin \
+                --gecos "angie-panel service" \
+                angie-panel
+        fi
+
+        # Data dir is private to the panel (DB, staging, backups, setup
+        # token). install -d also fixes owner/mode on upgrades.
+        install -d -o angie-panel -g angie-panel -m 0700 /var/lib/angie-panel
+        # public/ holds the HTML default-site content served by Angie
+        # workers, hence world-readable.
+        install -d -o angie-panel -g angie-panel -m 0755 /var/lib/angie-panel/public
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

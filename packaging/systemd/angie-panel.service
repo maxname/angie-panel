@@ -1,0 +1,55 @@
+# angie-panel.service — the web panel (unprivileged).
+#
+# The panel runs as the dedicated system user "angie-panel" and can write
+# only inside /var/lib/angie-panel. It never touches /etc: all privileged
+# operations (syncing generated configs into /etc/angie/http.d, reloading
+# Angie) are delegated to the fixed root helper units
+# angie-panel-configtest.service / angie-panel-apply.service, which the
+# panel starts via D-Bus StartUnit, authorized by the polkit rule
+# 10-angie-panel.rules.
+#
+# sudo is not used anywhere: NoNewPrivileges below would break it anyway.
+
+[Unit]
+Description=Angie Panel — web configurator for the Angie reverse proxy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=angie-panel
+Group=angie-panel
+ExecStart=/usr/bin/angie-panel serve
+Restart=on-failure
+RestartSec=2
+
+# --- Hardening ---------------------------------------------------------------
+# The panel needs: its data dir (rw), the system D-Bus socket (AF_UNIX),
+# TCP for the UI and for polling the Angie status API. Nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/angie-panel
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RemoveIPC=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

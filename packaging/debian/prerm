@@ -1,0 +1,23 @@
+#!/bin/sh
+# prerm for angie-panel (used by cargo-deb).
+# Stopping the units on remove/upgrade is handled by the snippets that
+# cargo-deb's systemd-units feature inserts at the #DEBHELPER# token.
+# Nothing package-specific to do here.
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        ;;
+
+    failed-upgrade)
+        ;;
+
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,30 @@
+# angie-panel-configtest.service
+#
+# ============================ PRIVILEGED TRUST BOUNDARY =====================
+# This unit (together with angie-panel-apply.service) is the ONLY bridge
+# between the unprivileged panel and root. The panel starts it via D-Bus
+# StartUnit; the polkit rule 10-angie-panel.rules authorizes exactly this
+# unit name with verb "start" and nothing else.
+#
+# ExecStart is intentionally FIXED. The helper takes NO arguments: it reads
+# only the staging directory under /var/lib/angie-panel and validates it
+# with `angie -t` against a staging copy of angie.conf. NEVER add arguments,
+# templating ("@" instances), EnvironmentFile, or anything else the panel
+# process could influence — any panel-controlled input to this command line
+# would become arbitrary code execution as root.
+# ============================================================================
+#
+# configtest = validation only: lint allowlist + `angie -t` on staging.
+# It must not modify /etc/angie or reload Angie (that is apply's job).
+
+[Unit]
+Description=Angie Panel root helper — validate staged Angie configuration
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/angie-panel helper configtest
+
+# No [Install] section on purpose: this unit must never be enabled or run
+# at boot. It is started on demand — by the panel over D-Bus, or manually
+# by root for debugging (systemctl start angie-panel-configtest.service).

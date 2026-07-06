@@ -1,0 +1,34 @@
+/*
+ * 10-angie-panel.rules — polkit authorization for the angie-panel service.
+ *
+ * Installed to: /usr/share/polkit-1/rules.d/10-angie-panel.rules
+ * Requires polkit >= 0.106 (JS rules) => Debian 12+.
+ *
+ * Grants the system user "angie-panel" exactly ONE capability: starting the
+ * two fixed root helper units over D-Bus (org.freedesktop.systemd1
+ * StartUnit). The units have hardcoded ExecStart lines, so the panel cannot
+ * influence what runs as root — only *whether* it runs.
+ *
+ * Everything else deliberately returns NOT_HANDLED, which falls through to
+ * the default policy: for an unprivileged system user that is a deny.
+ * Do NOT widen this rule (no wildcards, no extra verbs like stop/restart,
+ * no other units) — it is part of the privilege boundary.
+ */
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "angie-panel") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("verb") === "start") {
+        var unit = action.lookup("unit");
+        if (unit === "angie-panel-configtest.service" ||
+            unit === "angie-panel-apply.service") {
+            return polkit.Result.YES;
+        }
+    }
+
+    // Deny by default: anything else from this user is not handled here,
+    // so polkit's default policy applies (deny for a system user).
+    return polkit.Result.NOT_HANDLED;
+});

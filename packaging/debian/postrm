@@ -1,0 +1,40 @@
+#!/bin/sh
+# postrm for angie-panel (used by cargo-deb).
+# systemd cleanup (daemon-reload, disable on purge) is handled by the
+# snippets cargo-deb inserts at the #DEBHELPER# token.
+set -e
+
+case "$1" in
+    purge)
+        # Remove all panel data (database, staging, backups, setup token).
+        # Guard: only if it is a real directory, never follow a symlink.
+        if [ -d /var/lib/angie-panel ] && [ ! -L /var/lib/angie-panel ]; then
+            rm -rf /var/lib/angie-panel
+        fi
+
+        # Drop the service account. deluser may be unavailable if the
+        # adduser package was removed — do not fail the purge over it.
+        if command -v deluser >/dev/null 2>&1; then
+            if getent passwd angie-panel >/dev/null; then
+                deluser --system angie-panel >/dev/null 2>&1 || true
+            fi
+            if getent group angie-panel >/dev/null; then
+                delgroup --system angie-panel >/dev/null 2>&1 || true
+            fi
+        else
+            echo "deluser not available, not removing the angie-panel user" >&2
+        fi
+        ;;
+
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
