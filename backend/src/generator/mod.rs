@@ -44,29 +44,47 @@ pub struct GeneratorInput {
     pub public_dir: std::path::PathBuf,
     /// Certificates referenced by hosts via `certificate_id`.
     ///
-    /// Added by the generator work package. A host's `certificate_id` is
-    /// resolved against this list to obtain the acme_client `name` (which is
-    /// interpolated into `$acme_cert_<name>`) and the `ready` flag. See
-    /// [`Certificate`] for why `ready` gates 443 generation.
+    /// A host's `certificate_id` is resolved against this list to obtain the
+    /// acme_client `name` (which is interpolated into `$acme_cert_<name>`) and
+    /// the `ready` flag. See [`Certificate`] for why `ready` gates 443
+    /// generation.
     pub certificates: Vec<Certificate>,
+    /// Directory for the ACME collector unix sockets (one per certificate).
+    /// The root helper ensures it exists before reload.
+    pub acme_socket_dir: std::path::PathBuf,
 }
+
+/// Let's Encrypt ACME directory endpoints.
+pub const LE_PROD_DIRECTORY: &str = "https://acme-v02.api.letsencrypt.org/directory";
+pub const LE_STAGING_DIRECTORY: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
 
 /// A certificate row, reduced to exactly what the generator needs.
 ///
-/// Added by the generator work package (issuance itself is M2). `ready`
-/// encodes the first-issuance state machine from PLAN.md §4/§5: the
+/// `ready` encodes the first-issuance state machine from PLAN.md §4/§5: the
 /// `$acme_cert_<name>` variable is *empty* until Angie has actually obtained
 /// the certificate for the first time. A freshly created HTTPS host would
 /// therefore pass `angie -t` but fail every TLS handshake. To avoid serving
 /// TLS errors instead of the site, a host whose certificate is not yet `ready`
 /// is rendered HTTP-only (no `:443` server, no force-ssl redirect). Once the
 /// panel observes `certificate: valid` via `/status/http/acme_clients/<name>`
-/// (M2/M3) it flips `ready` and re-applies.
+/// it flips `ready` and re-applies.
 #[derive(Debug, Clone)]
 pub struct Certificate {
     pub id: i64,
     /// acme_client name; `^[a-z0-9_]{1,32}$` (validated on creation).
     pub name: String,
+    /// Authoritative SAN — emitted as the collector block's `server_name`,
+    /// so issuance is independent of which hosts attach the cert (PLAN.md §5).
+    pub domains: Vec<String>,
+    /// "http" | "dns" | "alpn".
+    pub challenge: String,
+    /// "ecdsa" | "rsa".
+    pub key_type: String,
+    pub email: Option<String>,
+    /// Use the Let's Encrypt staging CA (untrusted, high rate limits).
+    pub staging: bool,
+    /// Pause renewal without deleting state (acme_client `enabled=off`).
+    pub enabled: bool,
     /// True once Angie has issued the certificate at least once.
     pub ready: bool,
 }
@@ -100,7 +118,7 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
 
     files.insert("00-panel.conf".to_string(), gen_panel(input));
     files.insert("05-default.conf".to_string(), gen_default(input)?);
-    files.insert("10-acme.conf".to_string(), gen_acme_placeholder());
+    files.insert("10-acme.conf".to_string(), gen_acme(input));
 
     // Index certificates by id so hosts can resolve name + readiness in O(1).
     let certs: BTreeMap<i64, &Certificate> = input.certificates.iter().map(|c| (c.id, c)).collect();
@@ -269,17 +287,70 @@ fn sanitize_redirect_url(url: &str) -> anyhow::Result<String> {
 
 // -------------------------------------------------------------- 10-acme.conf
 
-/// M1 placeholder. Certificate issuance (acme_client blocks + the hidden
-/// per-certificate server blocks with `acme <name>;`) is M2 (PLAN.md §5); we
-/// intentionally emit no `acme_client` directive yet so nothing tries to
-/// contact an ACME CA.
-fn gen_acme_placeholder() -> String {
-    // NOTE: keep this a valid (empty of directives) file so `angie -t` is happy.
+/// ACME clients + collector server blocks (PLAN.md §5).
+///
+/// For each certificate we emit an `acme_client` (the issuance policy) plus a
+/// "collector" `server` block that listens on a unix socket and carries
+/// `acme <name>` + `server_name <domains>`. Angie documents this pattern for
+/// blocks that "only collect domain names": the collector defines the cert's
+/// SAN authoritatively and drives issuance, while it never serves real traffic
+/// and never clashes with the host's :80/:443 blocks (which reference only
+/// `$acme_cert_<name>`). This also breaks the first-issuance deadlock: the
+/// collector (with `acme`) is ALWAYS present so Angie can issue, whereas the
+/// host's serving 443 block appears only once the cert is `ready`.
+fn gen_acme(input: &GeneratorInput) -> String {
     let mut out = String::new();
-    out.push_str("# ACME clients + hidden per-certificate server blocks are generated here.\n");
-    out.push_str("# M2: emit `acme_client <name> <directory-url> [challenge=...] ...;` per\n");
-    out.push_str("# certificate, plus a hidden `server { server_name <domains>; acme <name>; }`\n");
-    out.push_str("# block. For M1 (no issuance) this file is intentionally directive-free.\n");
+    out.push_str("# ACME clients and their collector server blocks (managed).\n\n");
+
+    if input.certificates.is_empty() {
+        return out;
+    }
+
+    // dns-01 needs Angie to answer validation queries on UDP/53 itself.
+    if input.certificates.iter().any(|c| c.challenge == "dns") {
+        out.push_str("# dns-01 certificates: Angie answers ACME DNS queries itself.\n");
+        out.push_str("acme_dns_port 53;\n\n");
+    }
+
+    let mut certs: Vec<&Certificate> = input.certificates.iter().collect();
+    certs.sort_by_key(|c| c.id);
+
+    for cert in certs {
+        let directory = if cert.staging {
+            LE_STAGING_DIRECTORY
+        } else {
+            LE_PROD_DIRECTORY
+        };
+
+        // acme_client <name> <uri> [params];
+        let mut params = String::new();
+        if cert.challenge != "http" {
+            params.push_str(&format!(" challenge={}", cert.challenge));
+        }
+        if cert.key_type != "ecdsa" {
+            params.push_str(&format!(" key_type={}", cert.key_type));
+        }
+        if let Some(email) = &cert.email {
+            params.push_str(&format!(" email={email}"));
+        }
+        if !cert.enabled {
+            // enabled=off keeps the cert usable but pauses renewal.
+            params.push_str(" enabled=off");
+        }
+        let _ = writeln!(out, "acme_client {} {}{};", cert.name, directory, params);
+
+        // Collector block — unix socket, never serves traffic.
+        let sock = input
+            .acme_socket_dir
+            .join(format!("acme-{}.sock", cert.name));
+        let _ = writeln!(out, "server {{");
+        let _ = writeln!(out, "    listen unix:{};", sock.display());
+        let _ = writeln!(out, "    server_name {};", cert.domains.join(" "));
+        let _ = writeln!(out, "    acme {};", cert.name);
+        let _ = writeln!(out, "}}");
+        out.push('\n');
+    }
+
     out
 }
 

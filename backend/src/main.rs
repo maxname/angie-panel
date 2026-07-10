@@ -3,6 +3,7 @@ mod apply;
 mod apply_api;
 mod assets;
 mod auth;
+mod certs;
 mod config;
 mod db;
 mod error;

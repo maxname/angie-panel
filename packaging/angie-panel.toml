@@ -62,3 +62,8 @@ angie_conf = "/etc/angie/angie.conf"
 # cache-assets.conf) shipped with the package and included by absolute path
 # from generated vhosts. Package-owned, so upgrades refresh them.
 snippets_dir = "/usr/share/angie-panel/snippets"
+
+# Directory for the ACME collector unix sockets (one per certificate).
+# Angie's root master creates the sockets here on reload; the directory is
+# created by /usr/lib/tmpfiles.d/angie-panel.conf. A runtime tmpfs path.
+acme_socket_dir = "/run/angie-panel"

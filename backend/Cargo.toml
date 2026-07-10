@@ -63,4 +63,5 @@ assets = [
     ["../packaging/polkit/10-angie-panel.rules", "usr/share/polkit-1/rules.d/", "644"],
     ["../packaging/snippets/block-exploits.conf", "usr/share/angie-panel/snippets/", "644"],
     ["../packaging/snippets/cache-assets.conf", "usr/share/angie-panel/snippets/", "644"],
+    ["../packaging/tmpfiles/angie-panel.conf", "usr/lib/tmpfiles.d/", "644"],
 ]

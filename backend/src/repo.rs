@@ -6,7 +6,10 @@ use anyhow::Context;
 use sqlx::SqlitePool;
 
 use crate::db::now_epoch;
-use crate::model::{CustomLocation, ProxyHost, ProxyHostInput, Scheme};
+use crate::model::{
+    Certificate, CertificateInput, Challenge, CustomLocation, KeyType, ProxyHost, ProxyHostInput,
+    Scheme,
+};
 
 // ------------------------------------------------------------------- rows
 
@@ -189,6 +192,114 @@ pub async fn hosts_revision(db: &SqlitePool) -> anyhow::Result<i64> {
         .fetch_one(db)
         .await?;
     Ok(rev.unwrap_or(0))
+}
+
+// ----------------------------------------------------------- certificates
+
+#[derive(sqlx::FromRow)]
+struct CertRow {
+    id: i64,
+    name: String,
+    domains: String,
+    challenge: String,
+    key_type: String,
+    email: Option<String>,
+    staging: i64,
+    created_at: i64,
+}
+
+fn challenge_from_str(s: &str) -> Challenge {
+    match s {
+        "dns" => Challenge::Dns,
+        "alpn" => Challenge::Alpn,
+        _ => Challenge::Http,
+    }
+}
+
+fn key_type_from_str(s: &str) -> KeyType {
+    match s {
+        "rsa" => KeyType::Rsa,
+        _ => KeyType::Ecdsa,
+    }
+}
+
+impl CertRow {
+    fn into_model(self) -> anyhow::Result<Certificate> {
+        Ok(Certificate {
+            id: self.id,
+            name: self.name,
+            domains: serde_json::from_str(&self.domains).context("cert domains json")?,
+            challenge: challenge_from_str(&self.challenge),
+            key_type: key_type_from_str(&self.key_type),
+            email: self.email,
+            staging: self.staging != 0,
+            created_at: self.created_at,
+        })
+    }
+}
+
+const CERT_COLUMNS: &str = "id, name, domains, challenge, key_type, email, staging, created_at";
+
+pub async fn list_certs(db: &SqlitePool) -> anyhow::Result<Vec<Certificate>> {
+    let rows: Vec<CertRow> = sqlx::query_as(&format!(
+        "SELECT {CERT_COLUMNS} FROM certificates ORDER BY id"
+    ))
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(CertRow::into_model).collect()
+}
+
+pub async fn get_cert(db: &SqlitePool, id: i64) -> anyhow::Result<Option<Certificate>> {
+    let row: Option<CertRow> = sqlx::query_as(&format!(
+        "SELECT {CERT_COLUMNS} FROM certificates WHERE id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    row.map(CertRow::into_model).transpose()
+}
+
+pub async fn cert_name_exists(db: &SqlitePool, name: &str) -> anyhow::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM certificates WHERE name = ?")
+        .bind(name)
+        .fetch_one(db)
+        .await?;
+    Ok(n > 0)
+}
+
+pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::Result<i64> {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO certificates (name, domains, challenge, key_type, email, staging, created_at) \
+         VALUES (?,?,?,?,?,?,?) RETURNING id",
+    )
+    .bind(&input.name)
+    .bind(domains_json(&input.domains))
+    .bind(input.challenge.as_str())
+    .bind(input.key_type.as_str())
+    .bind(input.email.as_deref())
+    .bind(input.staging as i64)
+    .bind(now_epoch())
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn delete_cert(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM certificates WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+/// Hosts (id + first domain for the message) that reference this certificate.
+pub async fn hosts_using_cert(db: &SqlitePool, cert_id: i64) -> anyhow::Result<Vec<(i64, String)>> {
+    let hosts = list_hosts(db).await?;
+    Ok(hosts
+        .into_iter()
+        .filter(|h| h.certificate_id == Some(cert_id))
+        .map(|h| (h.id, h.domains.first().cloned().unwrap_or_default()))
+        .collect())
 }
 
 // -------------------------------------------------------------- settings

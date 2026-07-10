@@ -341,6 +341,148 @@ pub fn validate_host_input(
     Ok(input)
 }
 
+// ============================================================ certificates
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Challenge {
+    /// http-01 — default; the ACME module serves the challenge on port 80.
+    Http,
+    /// dns-01 — the only challenge that can issue wildcards; Angie answers
+    /// the validation DNS query itself (needs NS delegation + UDP/53).
+    Dns,
+    /// tls-alpn-01 — issues entirely over 443 (no port 80 needed). Angie 1.11+.
+    Alpn,
+}
+
+impl Challenge {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Challenge::Http => "http",
+            Challenge::Dns => "dns",
+            Challenge::Alpn => "alpn",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyType {
+    Ecdsa,
+    Rsa,
+}
+
+impl KeyType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            KeyType::Ecdsa => "ecdsa",
+            KeyType::Rsa => "rsa",
+        }
+    }
+}
+
+/// A certificate row as returned to the UI (issuance status is layered on
+/// separately from the /status API — see the certs handler).
+#[derive(Debug, Clone, Serialize)]
+pub struct Certificate {
+    pub id: i64,
+    pub name: String,
+    pub domains: Vec<String>,
+    pub challenge: Challenge,
+    pub key_type: KeyType,
+    pub email: Option<String>,
+    pub staging: bool,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CertificateInput {
+    pub name: String,
+    pub domains: Vec<String>,
+    #[serde(default = "default_challenge")]
+    pub challenge: Challenge,
+    #[serde(default = "default_key_type")]
+    pub key_type: KeyType,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub staging: bool,
+}
+
+fn default_challenge() -> Challenge {
+    Challenge::Http
+}
+fn default_key_type() -> KeyType {
+    KeyType::Ecdsa
+}
+
+pub const MAX_CERT_NAME_LEN: usize = 32;
+
+/// The acme_client name is interpolated into directive names AND into the
+/// `$acme_cert_<name>` variable, so it must be a strict identifier.
+pub fn validate_cert_name(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim();
+    let ok = !s.is_empty()
+        && s.len() <= MAX_CERT_NAME_LEN
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if !ok {
+        return Err(bad(
+            "invalid_cert_name",
+            format!("'{raw}': name must match ^[a-z0-9_]{{1,{MAX_CERT_NAME_LEN}}}$"),
+        ));
+    }
+    Ok(s.to_string())
+}
+
+pub fn validate_cert_input(mut input: CertificateInput) -> Result<CertificateInput, ApiError> {
+    input.name = validate_cert_name(&input.name)?;
+
+    if input.domains.is_empty() {
+        return Err(bad(
+            "invalid_domain",
+            "a certificate needs at least one domain",
+        ));
+    }
+    if input.domains.len() > MAX_DOMAINS_PER_HOST {
+        return Err(bad("invalid_domain", "too many domains"));
+    }
+    let mut domains = Vec::with_capacity(input.domains.len());
+    let mut has_wildcard = false;
+    for d in &input.domains {
+        let norm = validate_domain(d)?;
+        if norm.starts_with("*.") {
+            has_wildcard = true;
+        }
+        if !domains.contains(&norm) {
+            domains.push(norm);
+        }
+    }
+    input.domains = domains;
+
+    // Wildcards require dns-01 (Angie/ACME constraint); http-01 and alpn cannot
+    // issue them.
+    if has_wildcard && input.challenge != Challenge::Dns {
+        return Err(bad(
+            "wildcard_needs_dns",
+            "wildcard domains (*.example.com) require the DNS-01 challenge",
+        ));
+    }
+
+    if let Some(email) = &input.email {
+        let e = email.trim();
+        if e.is_empty() {
+            input.email = None;
+        } else if !e.contains('@') || e.len() < 3 || e.len() > 254 {
+            return Err(bad("invalid_email", "invalid contact email"));
+        } else {
+            input.email = Some(e.to_lowercase());
+        }
+    }
+
+    Ok(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +606,48 @@ mod tests {
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
         assert_eq!(err.code, "snippets_disabled");
         assert!(validate_host_input(input, true, &policy()).is_ok());
+    }
+
+    fn cert_input(name: &str, domains: &[&str], challenge: Challenge) -> CertificateInput {
+        CertificateInput {
+            name: name.into(),
+            domains: domains.iter().map(|s| s.to_string()).collect(),
+            challenge,
+            key_type: KeyType::Ecdsa,
+            email: None,
+            staging: false,
+        }
+    }
+
+    #[test]
+    fn cert_name_is_identifier_safe() {
+        assert_eq!(validate_cert_name("my_cert_1").unwrap(), "my_cert_1");
+        for evil in [
+            "My-Cert",
+            "cert name",
+            "cert;",
+            "café",
+            "",
+            "a".repeat(33).as_str(),
+        ] {
+            assert!(validate_cert_name(evil).is_err(), "should reject {evil:?}");
+        }
+    }
+
+    #[test]
+    fn cert_validation_normalizes_and_gates_wildcard() {
+        // Normalizes domains, keeps http-01 for plain domains.
+        let c =
+            validate_cert_input(cert_input("web", &["App.Example.com"], Challenge::Http)).unwrap();
+        assert_eq!(c.domains, vec!["app.example.com"]);
+
+        // Wildcard with http-01 is rejected; with dns-01 it is allowed.
+        let err =
+            validate_cert_input(cert_input("w", &["*.example.com"], Challenge::Http)).unwrap_err();
+        assert_eq!(err.code, "wildcard_needs_dns");
+        assert!(validate_cert_input(cert_input("w", &["*.example.com"], Challenge::Dns)).is_ok());
+
+        // Injection in a domain still dies here.
+        assert!(validate_cert_input(cert_input("w", &["a.com; }"], Challenge::Http)).is_err());
     }
 }

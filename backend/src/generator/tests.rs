@@ -63,6 +63,22 @@ fn input(
         status_port: 8100,
         public_dir: public_dir(),
         certificates: certs,
+        acme_socket_dir: PathBuf::from("/run/angie-panel"),
+    }
+}
+
+/// A ready ECDSA http-01 certificate named `name` covering `domains`.
+fn ready_cert(id: i64, name: &str, domains: &[&str]) -> Certificate {
+    Certificate {
+        id,
+        name: name.into(),
+        domains: domains.iter().map(|s| s.to_string()).collect(),
+        challenge: "http".into(),
+        key_type: "ecdsa".into(),
+        email: None,
+        staging: false,
+        enabled: true,
+        ready: true,
     }
 }
 
@@ -113,7 +129,7 @@ fn golden_00_panel() {
 }
 
 #[test]
-fn golden_10_acme_placeholder() {
+fn golden_10_acme_empty() {
     let files = generate(&input(
         vec![],
         vec![],
@@ -121,6 +137,29 @@ fn golden_10_acme_placeholder() {
     ))
     .unwrap();
     assert_golden("10-acme.conf", &files["10-acme.conf"]);
+}
+
+#[test]
+fn golden_10_acme_clients() {
+    // http-01 (default), dns-01 wildcard (staging), and a paused rsa cert —
+    // exercises directory URL, challenge/key_type params, enabled=off,
+    // acme_dns_port, and the unix-socket collector blocks.
+    let http = ready_cert(1, "web", &["app.example.com", "www.example.com"]);
+    let mut wild = ready_cert(2, "wild", &["*.example.com", "example.com"]);
+    wild.challenge = "dns".into();
+    wild.staging = true;
+    wild.email = Some("admin@example.com".into());
+    let mut paused = ready_cert(3, "legacy", &["old.example.com"]);
+    paused.key_type = "rsa".into();
+    paused.enabled = false;
+
+    let files = generate(&input(
+        vec![],
+        vec![http, wild, paused],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert_golden("10-acme-clients.conf", &files["10-acme.conf"]);
 }
 
 #[test]
@@ -172,11 +211,7 @@ fn golden_https_host_with_cert() {
     host.certificate_id = Some(42);
     host.force_ssl = true;
     host.http2 = true;
-    let cert = Certificate {
-        id: 42,
-        name: "secure".into(),
-        ready: true,
-    };
+    let cert = ready_cert(42, "secure", &["secure.example.com"]);
     let files = generate(&input(
         vec![host],
         vec![cert],
@@ -198,11 +233,7 @@ fn golden_host_websockets_hsts_block_exploits() {
     host.block_exploits = true;
     host.cache_assets = true;
     host.trust_forwarded_proto = true;
-    let cert = Certificate {
-        id: 1,
-        name: "ws".into(),
-        ready: true,
-    };
+    let cert = ready_cert(1, "ws", &["ws.example.com"]);
     let files = generate(&input(
         vec![host],
         vec![cert],
@@ -297,11 +328,8 @@ fn cert_not_ready_falls_back_to_http_only() {
     let mut host = base_host(4, "pending.example.com");
     host.certificate_id = Some(11);
     host.force_ssl = true;
-    let cert = Certificate {
-        id: 11,
-        name: "pending".into(),
-        ready: false,
-    };
+    let mut cert = ready_cert(11, "pending", &["pending.example.com"]);
+    cert.ready = false;
     let files = generate(&input(
         vec![host],
         vec![cert],
@@ -465,11 +493,7 @@ fn full_fileset_is_lint_clean() {
         snippet: Some("client_max_body_size 50m;".into()),
     }];
     https.advanced_snippet = Some("proxy_buffering on;".into());
-    let cert = Certificate {
-        id: 42,
-        name: "secure".into(),
-        ready: true,
-    };
+    let cert = ready_cert(42, "secure", &["secure.example.com"]);
     let plain = base_host(8, "plain.example.com");
 
     for site in [

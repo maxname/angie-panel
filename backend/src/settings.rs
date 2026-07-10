@@ -106,18 +106,60 @@ fn status_port(state: &AppState) -> u16 {
         .unwrap_or(8100)
 }
 
+/// Query `/status/http/acme_clients/` and return name → issued?. On any error
+/// (status API down, off-device) every cert is treated as not-yet-issued, so
+/// hosts stay HTTP-only — the safe default that never serves broken TLS.
+pub async fn acme_ready_map(state: &AppState) -> std::collections::HashMap<String, bool> {
+    let url = format!(
+        "{}/http/acme_clients/",
+        state.cfg.angie.status_api_url.trim_end_matches('/')
+    );
+    let mut map = std::collections::HashMap::new();
+    if let Ok(resp) = state.http_client.get(&url).send().await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(obj) = json.as_object() {
+                for (name, v) in obj {
+                    // Ready when Angie reports the certificate as valid.
+                    let ready = v.get("certificate").and_then(|c| c.as_str()) == Some("valid");
+                    map.insert(name.clone(), ready);
+                }
+            }
+        }
+    }
+    map
+}
+
 /// Assemble the generator input from the current DB state.
 pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput> {
     let hosts = repo::list_hosts(&state.db).await?;
     let settings = effective_settings(state).await?;
-    // Certificates are M2; none exist yet, so hosts render HTTP-only.
+    let db_certs = repo::list_certs(&state.db).await?;
+    let ready = acme_ready_map(state).await;
+
+    let certificates = db_certs
+        .into_iter()
+        .map(|c| generator::Certificate {
+            id: c.id,
+            ready: ready.get(&c.name).copied().unwrap_or(false),
+            name: c.name,
+            domains: c.domains,
+            challenge: c.challenge.as_str().to_string(),
+            key_type: c.key_type.as_str().to_string(),
+            email: c.email,
+            staging: c.staging,
+            // Pause/enabled toggle is a follow-up UI action; default on.
+            enabled: true,
+        })
+        .collect();
+
     Ok(GeneratorInput {
         hosts,
         settings,
         snippets_dir: state.cfg.angie.snippets_dir.clone(),
         status_port: status_port(state),
         public_dir: state.cfg.public_dir(),
-        certificates: Vec::new(),
+        certificates,
+        acme_socket_dir: state.cfg.angie.acme_socket_dir.clone(),
     })
 }
 

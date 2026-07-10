@@ -51,6 +51,10 @@ pub struct AngieConfig {
     /// Read-only shared snippet files shipped by the package.
     #[serde(default = "default_snippets_dir")]
     pub snippets_dir: PathBuf,
+    /// Directory for the ACME collector unix sockets (created by the root
+    /// helper before reload). A runtime tmpfs path is ideal.
+    #[serde(default = "default_acme_socket_dir")]
+    pub acme_socket_dir: PathBuf,
 }
 
 impl Default for AngieConfig {
@@ -61,12 +65,16 @@ impl Default for AngieConfig {
             angie_conf: default_angie_conf(),
             status_api_url: default_status_api_url(),
             snippets_dir: default_snippets_dir(),
+            acme_socket_dir: default_acme_socket_dir(),
         }
     }
 }
 
 fn default_snippets_dir() -> PathBuf {
     "/usr/share/angie-panel/snippets".into()
+}
+fn default_acme_socket_dir() -> PathBuf {
+    "/run/angie-panel".into()
 }
 
 fn default_bind_addr() -> String {
