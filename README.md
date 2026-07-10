@@ -2,12 +2,14 @@
 
 > Рабочее название проекта. [English version below.](#english)
 
-![status: M0 skeleton](https://img.shields.io/badge/status-M0_skeleton-orange)
+![status: M4 feature-complete](https://img.shields.io/badge/status-M4_feature--complete-brightgreen)
 ![license: TBD](https://img.shields.io/badge/license-TBD-lightgrey)
 
 **Angie Panel** — веб-конфигуратор reverse-proxy на базе [Angie](https://angie.software/): аналог nginx-proxy-manager, но нативный systemd-сервис без Docker и с сертификатами через встроенный ACME-модуль Angie.
 
-**Статус:** ранняя разработка, этап **M0 («каркас»)**. Не используйте в продакшене.
+**Статус:** функционально готов (этапы M0–M4). Реальный выпуск сертификата проверяется на каждый push в CI (Angie + pebble). Осталась проверка на самом устройстве (systemd-reload на живом железе).
+
+**Документация:** [установка](docs/installation.md) · [сертификаты/ACME](docs/certificates.md) · [безопасность](docs/security.md) · [диагностика](docs/troubleshooting.md).
 
 ## Чем отличается
 
@@ -46,7 +48,7 @@ pnpm dev
 
 ## Установка на устройство
 
-Появится после первого релиза (M0). Планируемый вид — one-liner на основе [packaging/install.sh](packaging/install.sh):
+Подробности и первый вход — в [docs/installation.md](docs/installation.md). Кратко:
 
 ```bash
 curl -fsSL https://github.com/maxname/angie-panel/releases/latest/download/install.sh -o install.sh
@@ -54,16 +56,20 @@ less install.sh   # сначала прочитайте скрипт
 sudo bash install.sh
 ```
 
+Дефолтного пароля нет: при первом запуске возьмите одноразовый setup-токен
+(`sudo cat /var/lib/angie-panel/setup-token`) и создайте администратора на `/setup`.
+
 ## Дорожная карта
 
-| Этап | Кратко |
-|---|---|
-| **M0** | Каркас и фундамент привилегий: repo/CI/cross-сборка, auth + setup-токен, .deb + systemd-юниты + polkit, root-хелпер end-to-end |
-| **M1** | Хосты и apply: CRUD proxy-хостов, генератор + линтер, staging-валидация, снапшоты и rollback, детект дрейфа |
-| **M2** | Сертификаты: встроенный ACME (http-01 / tls-alpn-01 / dns-01 wildcard), state machine первого выпуска, статусы продления |
-| **M3** | Дашборд: /status-поллинг, сверка фактического конфига, история apply, алерты |
-| **M4** | Релиз v1.0: экспорт/импорт, документация RU/EN, подпись артефактов, e2e на устройстве |
+| Этап | Кратко | Статус |
+|---|---|---|
+| **M0** | Каркас и фундамент привилегий: repo/CI/cross-сборка, auth + setup-токен, .deb + systemd-юниты + polkit, root-хелпер | ✅ |
+| **M1** | Хосты и apply: CRUD proxy-хостов, генератор + линтер, staging-валидация, снапшоты и rollback, детект дрейфа | ✅ |
+| **M2** | Сертификаты: встроенный ACME (http-01 / tls-alpn-01 / dns-01 wildcard), state machine первого выпуска; проверено на Angie+pebble | ✅ |
+| **M3** | Дашборд: /status-поллинг, метрики по хостам, статусы сертификатов, детект дрейфа, авто-включение HTTPS после выпуска | ✅ |
+| **M4** | Экспорт/импорт конфигурации (JSON), документация RU/EN, GPG-подпись артефактов | ✅ |
 
+Осталось: e2e-прогон на реальном NanoPi R4S (systemd-reload и выпуск на живом железе).
 Полная дорожная карта — в [PLAN.md](PLAN.md), §10.
 
 ## Лицензия
@@ -76,7 +82,11 @@ TBD.
 
 **Angie Panel** (working title) is a web-based reverse-proxy configurator built on [Angie](https://en.angie.software/) — think nginx-proxy-manager, but a native systemd service (no Docker) with certificates handled by Angie's built-in ACME module.
 
-**Status:** early development, milestone **M0 (skeleton)**. Not production-ready.
+**Status:** feature-complete (milestones M0–M4). Real certificate issuance is exercised on
+every CI push (Angie + pebble); on-device verification (systemd reload on real hardware) is
+what remains. Docs: [installation](docs/installation.md) ·
+[certificates/ACME](docs/certificates.md) · [security](docs/security.md) ·
+[troubleshooting](docs/troubleshooting.md).
 
 Key differentiators:
 
@@ -99,7 +109,14 @@ cd frontend && pnpm install && pnpm dev
 
 Panel at <http://127.0.0.1:5173>; `/api` is proxied to the backend on port 8080.
 
-Install on a device: a one-liner based on [packaging/install.sh](packaging/install.sh), coming with the first release.
+Install on a device: see [docs/installation.md](docs/installation.md). There is no default
+password — read the one-time setup token (`sudo cat /var/lib/angie-panel/setup-token`) and
+create the admin at `/setup`.
+
+Roadmap: **M0** skeleton & privilege model → **M1** proxy hosts & apply pipeline → **M2**
+certificates via built-in ACME → **M3** live dashboard & auto-HTTPS → **M4** export/import,
+docs, signed artifacts — all ✅. On-device e2e on the NanoPi R4S is what remains.
+See [PLAN.md](PLAN.md) §10.
 
 Roadmap: **M0** skeleton & privilege model → **M1** proxy hosts & apply pipeline → **M2** certificates via built-in ACME → **M3** live dashboard & drift detection → **M4** v1.0 release (export/import, docs, signed artifacts). See [PLAN.md](PLAN.md) §10.
 
