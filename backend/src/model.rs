@@ -133,7 +133,10 @@ pub fn validate_domain(raw: &str) -> Result<String, ApiError> {
     }
     for label in &labels {
         if !valid_dns_label(label) {
-            return Err(bad("invalid_domain", format!("invalid label '{label}' in {raw}")));
+            return Err(bad(
+                "invalid_domain",
+                format!("invalid label '{label}' in {raw}"),
+            ));
         }
     }
     Ok(if wildcard {
@@ -192,9 +195,8 @@ impl UpstreamPolicy {
                 v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast()
             }
             IpAddr::V6(v6) => {
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local
+                v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
+                // link-local
             }
         };
         if blocked && !self.allow_loopback {
@@ -214,7 +216,10 @@ impl UpstreamPolicy {
 /// Location path: prefix match only in v1 (regex/named locations are an
 /// unbounded validation surface — deliberately not supported).
 pub fn validate_location_path(raw: &str) -> Result<String, ApiError> {
-    let s = raw.trim().to_string();
+    // Trim spaces/tabs only — NOT newlines/CR. `str::trim()` would strip a
+    // trailing control char and let it pass the charset check below; keeping
+    // it in makes the charset check reject it.
+    let s = raw.trim_matches([' ', '\t']).to_string();
     let ok = s.starts_with('/')
         && s.len() <= 200
         && !s.contains("..")
@@ -231,7 +236,9 @@ pub fn validate_location_path(raw: &str) -> Result<String, ApiError> {
 }
 
 pub fn validate_rewrite(raw: &str) -> Result<String, ApiError> {
-    let s = raw.trim().to_string();
+    // See validate_location_path: trim only spaces/tabs so control chars are
+    // caught by the charset check rather than silently stripped.
+    let s = raw.trim_matches([' ', '\t']).to_string();
     let ok = s.starts_with('/')
         && s.len() <= 200
         && !s.contains("..")
@@ -247,10 +254,7 @@ pub fn validate_rewrite(raw: &str) -> Result<String, ApiError> {
     Ok(s)
 }
 
-fn validate_snippet(
-    raw: &str,
-    allow_advanced_snippets: bool,
-) -> Result<String, ApiError> {
+fn validate_snippet(raw: &str, allow_advanced_snippets: bool) -> Result<String, ApiError> {
     if !allow_advanced_snippets {
         return Err(ApiError::forbidden(
             "snippets_disabled",
@@ -352,7 +356,10 @@ mod tests {
         assert_eq!(validate_domain("Example.COM.").unwrap(), "example.com");
         assert_eq!(validate_domain("*.example.com").unwrap(), "*.example.com");
         // IDN → punycode
-        assert_eq!(validate_domain("почта.рф").unwrap(), "xn--80a1acny.xn--p1ai");
+        assert_eq!(
+            validate_domain("почта.рф").unwrap(),
+            "xn--80a1acny.xn--p1ai"
+        );
         // Injection attempts must die, not escape.
         for evil in [
             "example.com;",
@@ -427,7 +434,10 @@ mod tests {
             "/a/../b",
             "/x\n",
         ] {
-            assert!(validate_location_path(evil).is_err(), "should reject {evil:?}");
+            assert!(
+                validate_location_path(evil).is_err(),
+                "should reject {evil:?}"
+            );
         }
     }
 

@@ -141,6 +141,17 @@ fn gen_panel(input: &GeneratorInput) -> String {
         out.push('\n');
     }
 
+    // WebSocket upgrade map: hosts with websocket support emit
+    // `proxy_set_header Connection $connection_upgrade;`. The base packaged
+    // angie.conf does not define this variable, so we declare the standard
+    // map here at http scope (the linter allows `map`).
+    let _ = writeln!(
+        out,
+        "map $http_upgrade $connection_upgrade {{\n    \
+         default upgrade;\n    '' close;\n}}"
+    );
+    out.push('\n');
+
     // Shared cache for hosts with cache_assets. The `assets` keys_zone is
     // referenced by the packaged cache-assets.conf snippet, which is included
     // inside each caching host's `location /`.

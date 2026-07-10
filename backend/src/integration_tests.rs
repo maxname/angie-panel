@@ -16,6 +16,36 @@ use crate::{api, auth, config, db};
 
 const HOST: &str = "127.0.0.1";
 
+/// Locks the cross-module contract between the generator (which writes the
+/// MANAGED-BY header) and the apply pipeline (which parses it for
+/// drift/managed detection). These were built in parallel against a written
+/// spec; this test fails loudly if either side's format drifts.
+#[test]
+fn generator_header_roundtrips_through_apply_parser() {
+    use crate::apply::header;
+    use crate::generator;
+
+    let body = "server {\n    listen 80;\n}\n";
+    let wrapped = generator::with_header(body);
+
+    // Apply's parser recognizes it as managed, with a matching hash.
+    let parsed = header::parse(&wrapped).expect("apply must recognize generator output");
+    assert!(parsed.hash_matches, "hash must validate across modules");
+
+    // Generator's own parser agrees.
+    let meta = generator::managed_meta(&wrapped).expect("generator parses its own header");
+    assert!(meta.hash_matches);
+    assert_eq!(meta.declared_hash, parsed.declared_hash);
+
+    // A hand-edited body (drift) is detected by the apply parser.
+    let tampered = wrapped.replace("listen 80;", "listen 8080;");
+    let drifted = header::parse(&tampered).expect("still has our header");
+    assert!(!drifted.hash_matches, "drift must be detected");
+
+    // A foreign file is not claimed as managed.
+    assert!(header::parse("server { listen 80; }\n").is_none());
+}
+
 async fn test_state(dir: &std::path::Path) -> Arc<AppState> {
     let cfg: config::PanelConfig = toml::from_str(&format!(
         "bind_addr = \"127.0.0.1\"\ndata_dir = \"{}\"",
