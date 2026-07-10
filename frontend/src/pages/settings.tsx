@@ -1,0 +1,242 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Loader2 } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import {
+  api,
+  ApiError,
+  type DefaultSite,
+  type SettingsResponse,
+} from '@/lib/api'
+import { toast } from '@/lib/toast'
+
+const DEFAULT_SITE_OPTIONS: DefaultSite[] = [
+  'notfound',
+  'drop444',
+  'redirect',
+  'html',
+]
+
+export function SettingsPage() {
+  const { t } = useTranslation()
+
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.getSettings(),
+  })
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-semibold tracking-tight">{t('settings.title')}</h1>
+      {settingsQuery.isPending ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          {t('common.loading')}
+        </div>
+      ) : settingsQuery.isError ? (
+        <Card>
+          <CardContent className="flex flex-col items-start gap-3">
+            <p className="text-sm text-destructive" role="alert">
+              {t('settings.loadFailed')}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void settingsQuery.refetch()}
+            >
+              {t('common.retry')}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <SettingsForm data={settingsQuery.data} />
+      )}
+    </div>
+  )
+}
+
+function SettingsForm({ data }: { data: SettingsResponse }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+
+  const [defaultSite, setDefaultSite] = useState<string>(
+    data.raw.default_site ?? 'notfound',
+  )
+  const [redirectUrl, setRedirectUrl] = useState<string>(
+    data.raw.default_site_redirect_url ?? '',
+  )
+  const [ipv6Enabled, setIpv6Enabled] = useState<boolean>(
+    data.raw.ipv6_enabled === '1',
+  )
+  const [resolverOverride, setResolverOverride] = useState<string>(
+    data.raw.resolver_override ?? '',
+  )
+  const [acmeEmail, setAcmeEmail] = useState<string>(data.raw.acme_email ?? '')
+
+  const mutation = useMutation({
+    mutationFn: (body: Record<string, string>) => api.updateSettings(body),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['settings'], result)
+      toast({ variant: 'success', title: t('settings.saved') })
+    },
+  })
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    mutation.mutate({
+      default_site: defaultSite,
+      default_site_redirect_url: redirectUrl,
+      ipv6_enabled: ipv6Enabled ? '1' : '0',
+      resolver_override: resolverOverride,
+      acme_email: acmeEmail,
+    })
+  }
+
+  const serverError =
+    mutation.isError && mutation.error instanceof ApiError
+      ? mutation.error.message
+      : mutation.isError
+        ? t('common.error')
+        : null
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('settings.defaultSite.title')}</CardTitle>
+          <CardDescription>{t('settings.defaultSite.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 sm:max-w-xs">
+            <Label htmlFor="default-site">{t('settings.defaultSite.label')}</Label>
+            <Select value={defaultSite} onValueChange={setDefaultSite}>
+              <SelectTrigger id="default-site">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DEFAULT_SITE_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {t(`settings.defaultSite.options.${option}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {defaultSite === 'redirect' && (
+            <div className="grid gap-2 sm:max-w-md">
+              <Label htmlFor="redirect-url">
+                {t('settings.defaultSite.redirectUrl')}
+              </Label>
+              <Input
+                id="redirect-url"
+                type="url"
+                inputMode="url"
+                placeholder="https://example.com"
+                value={redirectUrl}
+                onChange={(event) => setRedirectUrl(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t('settings.defaultSite.redirectHelp')}
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('settings.network.title')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="ipv6">{t('settings.network.ipv6')}</Label>
+              <p className="text-xs text-muted-foreground">
+                {t('settings.network.ipv6Effective', {
+                  value: data.effective.ipv6_enabled
+                    ? t('common.yes')
+                    : t('common.no'),
+                })}
+              </p>
+            </div>
+            <Switch id="ipv6" checked={ipv6Enabled} onCheckedChange={setIpv6Enabled} />
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="resolver">{t('settings.network.resolver')}</Label>
+            <Input
+              id="resolver"
+              placeholder="1.1.1.1 8.8.8.8"
+              value={resolverOverride}
+              onChange={(event) => setResolverOverride(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('settings.network.resolverEffective', {
+                value:
+                  data.effective.resolvers.length > 0
+                    ? data.effective.resolvers.join(', ')
+                    : t('settings.network.resolverNone'),
+              })}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('settings.acme.title')}</CardTitle>
+          <CardDescription>{t('settings.acme.description')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-2 sm:max-w-md">
+            <Label htmlFor="acme-email">{t('settings.acme.email')}</Label>
+            <Input
+              id="acme-email"
+              type="email"
+              inputMode="email"
+              placeholder="admin@example.com"
+              value={acmeEmail}
+              onChange={(event) => setAcmeEmail(event.target.value)}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {serverError !== null && (
+        <Alert variant="destructive">
+          <AlertTitle>{t('settings.saveFailed')}</AlertTitle>
+          <AlertDescription>{serverError}</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="flex justify-end">
+        <Button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending && (
+            <Loader2 className="animate-spin" aria-hidden="true" />
+          )}
+          {t('common.save')}
+        </Button>
+      </div>
+    </form>
+  )
+}

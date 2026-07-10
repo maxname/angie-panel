@@ -9,9 +9,12 @@ import {
 import { AppShell } from '@/components/layout/app-shell'
 import { RouterError, RouterPending } from '@/components/router-fallbacks'
 import { api } from '@/lib/api'
+import { ApplyPage } from '@/pages/apply'
 import { DashboardPage } from '@/pages/dashboard'
+import { HostsPage } from '@/pages/hosts'
 import { LoginPage } from '@/pages/login'
 import { PlaceholderPage } from '@/pages/placeholder'
+import { SettingsPage } from '@/pages/settings'
 import { SetupPage } from '@/pages/setup'
 
 const rootRoute = createRootRoute({
@@ -70,7 +73,7 @@ const dashboardRoute = createRoute({
 const hostsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/hosts',
-  component: () => <PlaceholderPage titleKey="nav.proxyHosts" milestone="M1" />,
+  component: HostsPage,
 })
 
 const certificatesRoute = createRoute({
@@ -82,13 +85,13 @@ const certificatesRoute = createRoute({
 const applyRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/apply',
-  component: () => <PlaceholderPage titleKey="nav.apply" milestone="M1" />,
+  component: ApplyPage,
 })
 
 const settingsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings',
-  component: () => <PlaceholderPage titleKey="nav.settings" milestone="M2" />,
+  component: SettingsPage,
 })
 
 const routeTree = rootRoute.addChildren([

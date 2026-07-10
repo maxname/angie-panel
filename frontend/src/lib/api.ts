@@ -52,6 +52,145 @@ export interface ConfigtestReport {
   ran_via: 'systemd' | 'direct'
 }
 
+export type ForwardScheme = 'http' | 'https'
+
+export interface Location {
+  path: string
+  forward_scheme: ForwardScheme
+  forward_host: string
+  forward_port: number
+  rewrite?: string | null
+  snippet?: string | null
+}
+
+export interface Host {
+  id: number
+  domains: string[]
+  forward_scheme: ForwardScheme
+  forward_host: string
+  forward_port: number
+  websockets_upgrade: boolean
+  block_exploits: boolean
+  cache_assets: boolean
+  http2: boolean
+  force_ssl: boolean
+  hsts: boolean
+  hsts_subdomains: boolean
+  trust_forwarded_proto: boolean
+  certificate_id: number | null
+  locations: Location[]
+  advanced_snippet: string | null
+  enabled: boolean
+  /** Unix timestamp, seconds. */
+  created_at: number
+  /** Unix timestamp, seconds. */
+  updated_at: number
+}
+
+/** Host without id/created_at/updated_at — the create/update payload. */
+export interface HostInput {
+  domains: string[]
+  forward_scheme: ForwardScheme
+  forward_host: string
+  forward_port: number
+  websockets_upgrade?: boolean
+  block_exploits?: boolean
+  cache_assets?: boolean
+  http2?: boolean
+  force_ssl?: boolean
+  hsts?: boolean
+  hsts_subdomains?: boolean
+  trust_forwarded_proto?: boolean
+  certificate_id?: number | null
+  locations?: Location[]
+  advanced_snippet?: string | null
+  enabled?: boolean
+}
+
+export type FileStatus = 'added' | 'modified' | 'removed' | 'unchanged'
+
+export interface FileDiff {
+  name: string
+  status: FileStatus
+  unified: string
+  drift: boolean
+}
+
+export interface DiffReport {
+  files: FileDiff[]
+  foreign: { name: string }[]
+  added: number
+  modified: number
+  removed: number
+  unchanged: number
+  has_drift: boolean
+}
+
+export type ApplyResult =
+  | 'ok'
+  | 'lint_failed'
+  | 'validation_failed'
+  | 'reload_failed'
+  | 'error'
+
+export interface LintViolation {
+  file: string
+  line: number | null
+  message: string
+}
+
+export interface FileErrorItem {
+  file: string | null
+  line: number | null
+  message: string
+}
+
+export interface RollbackInfo {
+  attempted: boolean
+  ok: boolean
+  detail: string
+}
+
+export interface ApplyReport {
+  /** Unix timestamp, seconds. */
+  timestamp: number
+  result: ApplyResult
+  diff?: DiffReport
+  lint_violations: LintViolation[]
+  stderr: string
+  file_errors: FileErrorItem[]
+  error_log_tail: string
+  rollback?: RollbackInfo
+  synthetic_base: boolean
+  summary: string
+}
+
+export interface ApplyPreview {
+  db_revision: number
+  diff: DiffReport
+}
+
+export interface ApplyHistoryEntry {
+  id: number
+  /** Unix timestamp, seconds. */
+  timestamp: number
+  result: string
+  report: ApplyReport
+}
+
+export type DefaultSite = 'notfound' | 'drop444' | 'redirect' | 'html'
+
+export interface EffectiveSettings {
+  default_site: string
+  ipv6_enabled: boolean
+  resolvers: string[]
+}
+
+export interface SettingsResponse {
+  raw: Record<string, string>
+  effective: EffectiveSettings
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -163,4 +302,33 @@ export const api = {
   runConfigtest: () => request<ConfigtestReport>('POST', '/api/system/configtest'),
 
   getLastConfigtest: () => request<ConfigtestReport>('GET', '/api/system/configtest'),
+
+  listHosts: () => request<{ hosts: Host[] }>('GET', '/api/hosts'),
+
+  createHost: (body: HostInput) => request<Host>('POST', '/api/hosts', body),
+
+  getHost: (id: number) => request<Host>('GET', `/api/hosts/${id}`),
+
+  updateHost: (id: number, body: HostInput) =>
+    request<Host>('PUT', `/api/hosts/${id}`, body),
+
+  deleteHost: (id: number) => request<OkResponse>('DELETE', `/api/hosts/${id}`),
+
+  enableHost: (id: number) =>
+    request<{ ok: true; enabled: true }>('POST', `/api/hosts/${id}/enable`),
+
+  disableHost: (id: number) =>
+    request<{ ok: true; enabled: false }>('POST', `/api/hosts/${id}/disable`),
+
+  getApplyPreview: () => request<ApplyPreview>('GET', '/api/apply/preview'),
+
+  apply: () => request<ApplyReport>('POST', '/api/apply'),
+
+  getApplyHistory: () =>
+    request<{ history: ApplyHistoryEntry[] }>('GET', '/api/apply/history'),
+
+  getSettings: () => request<SettingsResponse>('GET', '/api/settings'),
+
+  updateSettings: (body: Record<string, string>) =>
+    request<SettingsResponse>('PUT', '/api/settings', body),
 }

@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { Toaster } from '@/components/ui/toaster'
 import { api } from '@/lib/api'
 import { useTheme } from '@/theme/theme-context'
 
@@ -58,6 +59,7 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      <Toaster />
     </div>
   )
 }
