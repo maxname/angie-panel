@@ -81,6 +81,7 @@ const angieUp: Dashboard = {
       status: { state: 'pending', certificate: 'pending' },
     },
   ],
+  streams: { configured: 0, enabled: 0, context_active: true },
   drift: { detected: true, foreign_files: ['legacy.conf'] },
   pending_changes: false,
   alerts: [
@@ -102,6 +103,7 @@ const angieDown: Dashboard = {
   },
   hosts: [],
   certificates: [],
+  streams: { configured: 0, enabled: 0, context_active: true },
   drift: { detected: false, foreign_files: [] },
   pending_changes: false,
   alerts: [

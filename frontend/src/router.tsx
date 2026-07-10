@@ -19,6 +19,7 @@ import { LoginPage } from '@/pages/login'
 import { RedirectHostsPage } from '@/pages/redirect-hosts'
 import { SettingsPage } from '@/pages/settings'
 import { SetupPage } from '@/pages/setup'
+import { StreamsPage } from '@/pages/streams'
 
 const rootRoute = createRootRoute({
   component: Outlet,
@@ -91,6 +92,12 @@ const deadHostsRoute = createRoute({
   component: DeadHostsPage,
 })
 
+const streamsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/streams',
+  component: StreamsPage,
+})
+
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/certificates',
@@ -123,6 +130,7 @@ const routeTree = rootRoute.addChildren([
     hostsRoute,
     redirectHostsRoute,
     deadHostsRoute,
+    streamsRoute,
     certificatesRoute,
     accessListsRoute,
     applyRoute,

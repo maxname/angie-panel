@@ -133,6 +133,31 @@ export interface RedirectHost {
   updated_at: number
 }
 
+/** A TCP/UDP port forward (Angie stream {} context). */
+export interface Stream {
+  id: number
+  incoming_port: number
+  forward_host: string
+  forward_port: number
+  tcp: boolean
+  udp: boolean
+  enabled: boolean
+  /** Unix timestamp, seconds. */
+  created_at: number
+  /** Unix timestamp, seconds. */
+  updated_at: number
+}
+
+/** Stream without id/created_at/updated_at — the create/update payload. */
+export interface StreamInput {
+  incoming_port: number
+  forward_host: string
+  forward_port: number
+  tcp?: boolean
+  udp?: boolean
+  enabled?: boolean
+}
+
 /** RedirectHost without id/created_at/updated_at — the create/update payload. */
 export interface RedirectHostInput {
   domains: string[]
@@ -427,10 +452,18 @@ export interface DashboardAlert {
   message: string
 }
 
+export interface DashboardStreams {
+  configured: number
+  enabled: number
+  /** Whether the Angie stream {} context is active (loads stream.d). */
+  context_active: boolean
+}
+
 export interface Dashboard {
   angie: DashboardAngie
   hosts: DashboardHost[]
   certificates: DashboardCert[]
+  streams: DashboardStreams
   drift: DashboardDrift
   pending_changes: boolean
   alerts: DashboardAlert[]
@@ -607,6 +640,32 @@ export const api = {
 
   disableDeadHost: (id: number) =>
     request<{ ok: true; enabled: false }>('POST', `/api/dead-hosts/${id}/disable`),
+
+  listStreams: () => request<{ streams: Stream[] }>('GET', '/api/streams'),
+
+  createStream: (body: StreamInput) =>
+    request<Stream>('POST', '/api/streams', body),
+
+  getStream: (id: number) => request<Stream>('GET', `/api/streams/${id}`),
+
+  updateStream: (id: number, body: StreamInput) =>
+    request<Stream>('PUT', `/api/streams/${id}`, body),
+
+  deleteStream: (id: number) =>
+    request<OkResponse>('DELETE', `/api/streams/${id}`),
+
+  enableStream: (id: number) =>
+    request<{ ok: true; enabled: true }>('POST', `/api/streams/${id}/enable`),
+
+  disableStream: (id: number) =>
+    request<{ ok: true; enabled: false }>('POST', `/api/streams/${id}/disable`),
+
+  /** One-time activation of the Angie stream {} context (privileged). */
+  enableStreamContext: () =>
+    request<{ ok: boolean; already_active?: boolean; message?: string }>(
+      'POST',
+      '/api/streams/enable-context',
+    ),
 
   getApplyPreview: () => request<ApplyPreview>('GET', '/api/apply/preview'),
 
