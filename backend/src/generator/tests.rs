@@ -1,0 +1,498 @@
+//! Golden + property tests for the generator. The golden files live under
+//! `tests/golden/` and are asserted byte-for-byte; regenerate them with
+//! `UPDATE_GOLDEN=1 cargo test -p angie-panel generator::tests` after an
+//! intentional template change, then review the diff.
+
+use std::path::PathBuf;
+
+use super::*;
+use crate::model::{CustomLocation, ProxyHost, Scheme};
+
+// --------------------------------------------------------------- fixtures
+
+fn snippets_dir() -> PathBuf {
+    PathBuf::from("/usr/share/angie-panel/snippets")
+}
+
+fn public_dir() -> PathBuf {
+    PathBuf::from("/var/lib/angie-panel/public")
+}
+
+fn settings(default_site: DefaultSite, ipv6: bool) -> EffectiveSettings {
+    EffectiveSettings {
+        default_site,
+        ipv6_enabled: ipv6,
+        resolvers: vec!["127.0.0.53".into()],
+    }
+}
+
+/// A minimal, all-toggles-off host. Callers mutate fields they care about.
+fn base_host(id: i64, domain: &str) -> ProxyHost {
+    ProxyHost {
+        id,
+        domains: vec![domain.to_string()],
+        forward_scheme: Scheme::Http,
+        forward_host: "192.168.1.10".into(),
+        forward_port: 8080,
+        websockets_upgrade: false,
+        block_exploits: false,
+        cache_assets: false,
+        http2: true,
+        force_ssl: false,
+        hsts: false,
+        hsts_subdomains: false,
+        trust_forwarded_proto: false,
+        certificate_id: None,
+        locations: vec![],
+        advanced_snippet: None,
+        enabled: true,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn input(
+    hosts: Vec<ProxyHost>,
+    certs: Vec<Certificate>,
+    settings: EffectiveSettings,
+) -> GeneratorInput {
+    GeneratorInput {
+        hosts,
+        settings,
+        snippets_dir: snippets_dir(),
+        status_port: 8100,
+        public_dir: public_dir(),
+        certificates: certs,
+    }
+}
+
+/// Assert a single generated file matches its committed golden. Set
+/// UPDATE_GOLDEN=1 to (re)write the golden instead of asserting.
+#[track_caller]
+fn assert_golden(name: &str, actual: &str) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(name);
+    if std::env::var("UPDATE_GOLDEN").is_ok() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, actual).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "missing golden {}: {e} (run with UPDATE_GOLDEN=1)",
+            path.display()
+        )
+    });
+    assert_eq!(
+        actual,
+        expected,
+        "generated output for {name} does not match golden {}",
+        path.display()
+    );
+}
+
+fn only_host_file(files: &FileSet) -> (&String, &String) {
+    files
+        .iter()
+        .find(|(k, _)| k.starts_with("20-host-"))
+        .expect("expected exactly one host file")
+}
+
+// --------------------------------------------------------------- golden tests
+
+#[test]
+fn golden_00_panel() {
+    let files = generate(&input(
+        vec![],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert_golden("00-panel.conf", &files["00-panel.conf"]);
+}
+
+#[test]
+fn golden_10_acme_placeholder() {
+    let files = generate(&input(
+        vec![],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert_golden("10-acme.conf", &files["10-acme.conf"]);
+}
+
+#[test]
+fn golden_default_site_variants() {
+    let cases = [
+        (DefaultSite::NotFound, "05-default-notfound.conf"),
+        (DefaultSite::Drop444, "05-default-drop444.conf"),
+        (
+            DefaultSite::Redirect("https://example.com/".into()),
+            "05-default-redirect.conf",
+        ),
+        (DefaultSite::Html, "05-default-html.conf"),
+    ];
+    for (site, golden) in cases {
+        let files = generate(&input(vec![], vec![], settings(site, false))).unwrap();
+        assert_golden(golden, &files["05-default.conf"]);
+    }
+}
+
+#[test]
+fn golden_default_site_ipv6() {
+    // The ipv6 flag adds [::]:80 / [::]:443 listen lines.
+    let files = generate(&input(
+        vec![],
+        vec![],
+        settings(DefaultSite::NotFound, true),
+    ))
+    .unwrap();
+    assert_golden("05-default-ipv6.conf", &files["05-default.conf"]);
+}
+
+#[test]
+fn golden_plain_http_host() {
+    let host = base_host(1, "app.example.com");
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (name, body) = only_host_file(&files);
+    assert_eq!(name, "20-host-1-app-example-com.conf");
+    assert_golden("20-host-plain-http.conf", body);
+}
+
+#[test]
+fn golden_https_host_with_cert() {
+    let mut host = base_host(7, "secure.example.com");
+    host.certificate_id = Some(42);
+    host.force_ssl = true;
+    host.http2 = true;
+    let cert = Certificate {
+        id: 42,
+        name: "secure".into(),
+        ready: true,
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![cert],
+        settings(DefaultSite::NotFound, true),
+    ))
+    .unwrap();
+    let (name, body) = only_host_file(&files);
+    assert_eq!(name, "20-host-7-secure-example-com.conf");
+    assert_golden("20-host-https.conf", body);
+}
+
+#[test]
+fn golden_host_websockets_hsts_block_exploits() {
+    let mut host = base_host(3, "ws.example.com");
+    host.certificate_id = Some(1);
+    host.websockets_upgrade = true;
+    host.hsts = true;
+    host.hsts_subdomains = true;
+    host.block_exploits = true;
+    host.cache_assets = true;
+    host.trust_forwarded_proto = true;
+    let cert = Certificate {
+        id: 1,
+        name: "ws".into(),
+        ready: true,
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![cert],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-ws-hsts-exploits.conf", body);
+}
+
+#[test]
+fn golden_host_custom_locations() {
+    let mut host = base_host(5, "multi.example.com");
+    host.locations = vec![
+        CustomLocation {
+            path: "/api".into(),
+            forward_scheme: Scheme::Http,
+            forward_host: "10.0.0.2".into(),
+            forward_port: 9000,
+            rewrite: None,
+            snippet: None,
+        },
+        CustomLocation {
+            path: "/legacy".into(),
+            forward_scheme: Scheme::Https,
+            forward_host: "backend.lan".into(),
+            forward_port: 8443,
+            rewrite: Some("/v2".into()),
+            snippet: None,
+        },
+    ];
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-custom-locations.conf", body);
+}
+
+#[test]
+fn golden_host_advanced_snippet() {
+    let mut host = base_host(9, "snip.example.com");
+    host.advanced_snippet = Some("client_max_body_size 100m;\nproxy_read_timeout 300s;".into());
+    // Also exercise a per-location snippet.
+    host.locations = vec![CustomLocation {
+        path: "/upload".into(),
+        forward_scheme: Scheme::Http,
+        forward_host: "10.0.0.9".into(),
+        forward_port: 8000,
+        rewrite: None,
+        snippet: Some("client_max_body_size 1g;".into()),
+    }];
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-advanced-snippet.conf", body);
+}
+
+// --------------------------------------------------------------- behaviour
+
+#[test]
+fn disabled_host_produces_no_file() {
+    let mut host = base_host(2, "off.example.com");
+    host.enabled = false;
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert!(
+        !files.keys().any(|k| k.starts_with("20-host-")),
+        "disabled host must not emit a file, got {:?}",
+        files.keys().collect::<Vec<_>>()
+    );
+    // The three fixed files are always present.
+    assert!(files.contains_key("00-panel.conf"));
+    assert!(files.contains_key("05-default.conf"));
+    assert!(files.contains_key("10-acme.conf"));
+}
+
+#[test]
+fn cert_not_ready_falls_back_to_http_only() {
+    // A host with a cert that hasn't been issued yet (ready=false) must render
+    // HTTP-only: no 443 server, no force-ssl redirect (PLAN.md §4).
+    let mut host = base_host(4, "pending.example.com");
+    host.certificate_id = Some(11);
+    host.force_ssl = true;
+    let cert = Certificate {
+        id: 11,
+        name: "pending".into(),
+        ready: false,
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![cert],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(
+        !body.contains("listen 443"),
+        "should not emit 443 when cert not ready:\n{body}"
+    );
+    assert!(
+        !body.contains("return 301 https://"),
+        "should not force-ssl when cert not ready:\n{body}"
+    );
+    assert!(body.contains("listen 80;"));
+    assert!(body.contains("proxy_pass http://host_4;"));
+}
+
+#[test]
+fn missing_cert_row_renders_http_only() {
+    // certificate_id points at a cert that isn't in the input list at all.
+    let mut host = base_host(6, "orphan.example.com");
+    host.certificate_id = Some(999);
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(!body.contains("listen 443"));
+    assert!(body.contains("listen 80;"));
+}
+
+#[test]
+fn resolver_omitted_when_empty() {
+    let mut s = settings(DefaultSite::NotFound, false);
+    s.resolvers = vec![];
+    let files = generate(&input(vec![], vec![], s)).unwrap();
+    assert!(
+        !files["00-panel.conf"].contains("resolver"),
+        "empty resolver list must omit the directive"
+    );
+    // But the cache path and status server are still there.
+    assert!(files["00-panel.conf"].contains("proxy_cache_path"));
+    assert!(files["00-panel.conf"].contains("api /status/;"));
+}
+
+#[test]
+fn multiple_hosts_sorted_and_named() {
+    let files = generate(&input(
+        vec![
+            base_host(20, "b.example.com"),
+            base_host(3, "a.example.com"),
+        ],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let host_files: Vec<&String> = files.keys().filter(|k| k.starts_with("20-host-")).collect();
+    assert_eq!(
+        host_files,
+        vec![
+            "20-host-20-b-example-com.conf",
+            "20-host-3-a-example-com.conf"
+        ]
+    );
+}
+
+#[test]
+fn slugify_sanitizes_domains() {
+    assert_eq!(slugify("app.example.com"), "app-example-com");
+    assert_eq!(slugify("*.example.com"), "example-com");
+    assert_eq!(slugify("XN--80A1ACNY.XN--P1AI"), "xn--80a1acny-xn--p1ai");
+    assert_eq!(slugify("a__b"), "a-b");
+    assert_eq!(slugify("...---..."), "host");
+    assert_eq!(slugify(""), "host");
+}
+
+#[test]
+fn redirect_url_injection_rejected() {
+    // A hostile redirect target must fail generation rather than escape the
+    // `return` directive (defence in depth atop upstream validation).
+    for evil in [
+        "https://x.com/; return 200 \"pwned\"",
+        "https://x.com/\nserver_name evil;",
+        "javascript:alert(1)",
+        "https://x.com/{}",
+        "https://x.com/$host",
+    ] {
+        let s = settings(DefaultSite::Redirect(evil.into()), false);
+        assert!(
+            generate(&input(vec![], vec![], s)).is_err(),
+            "redirect url should be rejected: {evil:?}"
+        );
+    }
+    // A clean absolute URL is accepted.
+    let s = settings(
+        DefaultSite::Redirect("https://good.example.com/path".into()),
+        false,
+    );
+    assert!(generate(&input(vec![], vec![], s)).is_ok());
+}
+
+// --------------------------------------------------------------- header/meta
+
+#[test]
+fn header_roundtrips_and_detects_drift() {
+    let body = "server {\n    listen 80;\n}\n";
+    let wrapped = with_header(body);
+    assert!(wrapped.starts_with("# MANAGED BY angie-panel "));
+    // Body after the header is byte-identical to the input.
+    let after_header = wrapped.split_once('\n').unwrap().1;
+    assert_eq!(after_header, body);
+
+    let meta = managed_meta(&wrapped).expect("should parse our own header");
+    assert!(meta.hash_matches, "freshly wrapped file must verify");
+    assert_eq!(meta.generator_version, env!("CARGO_PKG_VERSION"));
+
+    // Tamper with the body → hash no longer matches.
+    let tampered = wrapped.replace("listen 80;", "listen 81;");
+    let meta2 = managed_meta(&tampered).unwrap();
+    assert!(!meta2.hash_matches, "edited body must be detected");
+}
+
+#[test]
+fn header_hash_is_stable() {
+    // Re-wrapping the same body yields an identical header (determinism is what
+    // keeps drift detection from crying wolf).
+    let body = "a\nb\nc\n";
+    assert_eq!(with_header(body), with_header(body));
+}
+
+#[test]
+fn managed_meta_ignores_foreign_files() {
+    assert!(managed_meta("# some hand-written file\nserver {}\n").is_none());
+    assert!(managed_meta("").is_none());
+    assert!(managed_meta("no newline at all").is_none());
+}
+
+#[test]
+fn full_fileset_is_lint_clean() {
+    // Everything the generator emits for a rich host set must pass its own
+    // level-2 linter — the generator is never allowed to produce a config the
+    // trust boundary would reject.
+    let mut https = base_host(7, "secure.example.com");
+    https.certificate_id = Some(42);
+    https.force_ssl = true;
+    https.hsts = true;
+    https.hsts_subdomains = true;
+    https.block_exploits = true;
+    https.cache_assets = true;
+    https.websockets_upgrade = true;
+    https.locations = vec![CustomLocation {
+        path: "/api".into(),
+        forward_scheme: Scheme::Http,
+        forward_host: "10.0.0.2".into(),
+        forward_port: 9000,
+        rewrite: Some("/v2".into()),
+        snippet: Some("client_max_body_size 50m;".into()),
+    }];
+    https.advanced_snippet = Some("proxy_buffering on;".into());
+    let cert = Certificate {
+        id: 42,
+        name: "secure".into(),
+        ready: true,
+    };
+    let plain = base_host(8, "plain.example.com");
+
+    for site in [
+        DefaultSite::NotFound,
+        DefaultSite::Drop444,
+        DefaultSite::Redirect("https://example.com/".into()),
+        DefaultSite::Html,
+    ] {
+        let files = generate(&input(
+            vec![https.clone(), plain.clone()],
+            vec![cert.clone()],
+            settings(site, true),
+        ))
+        .unwrap();
+        let policy = lint::LintPolicy {
+            snippets_dir: snippets_dir(),
+            public_dir: public_dir(),
+            allow_advanced_snippets: true,
+        };
+        let violations = lint::check_fileset(&files, &policy);
+        assert!(
+            violations.is_empty(),
+            "generator output must be lint-clean, got: {violations:#?}"
+        );
+    }
+}
