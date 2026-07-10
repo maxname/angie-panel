@@ -34,6 +34,26 @@ pub async fn preview(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiRes
 // -------------------------------------------------------------------- apply
 
 pub async fn apply_now(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let report = perform_apply(&state, ApplyTrigger::Manual).await?;
+    Ok(Json(serde_json::to_value(&report).unwrap_or(Value::Null)))
+}
+
+/// Who initiated an apply — recorded in history so the UI can distinguish a
+/// user click from the reconciler auto-activating HTTPS after issuance.
+#[derive(Clone, Copy)]
+pub enum ApplyTrigger {
+    Manual,
+    /// Auto-apply after a certificate became ready (M3 reconciler).
+    AutoCertReady,
+}
+
+/// The full apply path shared by the HTTP handler and the background
+/// reconciler: acquire the lock, stage, run the helper, record history, and
+/// (on success) remember the DB revision that is now live.
+pub async fn perform_apply(
+    state: &Arc<AppState>,
+    trigger: ApplyTrigger,
+) -> ApiResult<apply::ApplyReport> {
     // Serialize applies (PLAN.md §2.2): a second concurrent apply is rejected.
     let _guard = state.apply_lock.try_lock().map_err(|_| {
         ApiError::new(
@@ -44,20 +64,33 @@ pub async fn apply_now(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiR
     })?;
 
     let revision = repo::hosts_revision(&state.db).await?;
-    let fileset = settings::build_fileset(&state).await?;
+    let fileset = settings::build_fileset(state).await?;
 
-    // Stage to disk so the root helper can read it.
     apply::write_staging(&fileset, &state.cfg.data_dir, &state.cfg.angie)
         .map_err(ApiError::internal)?;
 
     let started = now_epoch();
-    let report = trigger_helper(&state, started).await?;
+    let report = trigger_helper(state, started).await?;
 
-    let result_str = format!("{:?}", report.result);
+    let result_label = match trigger {
+        ApplyTrigger::Manual => format!("{:?}", report.result),
+        ApplyTrigger::AutoCertReady => format!("{:?} (auto: cert ready)", report.result),
+    };
     let report_json = serde_json::to_string(&report).unwrap_or_default();
-    repo::record_apply(&state.db, revision, &result_str, &report_json).await?;
+    repo::record_apply(&state.db, revision, &result_label, &report_json).await?;
 
-    Ok(Json(serde_json::to_value(&report).unwrap_or(Value::Null)))
+    // Remember the revision that is now live so the reconciler can tell
+    // "cert became ready" (external) from "user has pending edits" (internal).
+    if report.result.is_ok() {
+        let _ = repo::set_setting(
+            &state.db,
+            settings::KEY_LAST_APPLIED_REVISION,
+            &revision.to_string(),
+        )
+        .await;
+    }
+
+    Ok(report)
 }
 
 /// Start the apply unit via D-Bus (polkit-gated); fall back to a direct helper

@@ -15,6 +15,10 @@ pub const KEY_DEFAULT_SITE_REDIRECT: &str = "default_site_redirect_url";
 pub const KEY_IPV6_ENABLED: &str = "ipv6_enabled"; // "1"/"0"
 pub const KEY_RESOLVER_OVERRIDE: &str = "resolver_override"; // space/comma list
 pub const KEY_ACME_EMAIL: &str = "acme_email";
+/// hosts_revision that is currently live (set after each successful apply).
+/// Lets the reconciler distinguish external cert-readiness changes from
+/// pending user edits. Not user-editable.
+pub const KEY_LAST_APPLIED_REVISION: &str = "last_applied_revision";
 
 /// Parse nameserver lines out of resolv.conf. systemd-resolved's stub
 /// (127.0.0.53) is a valid resolver and kept as-is.

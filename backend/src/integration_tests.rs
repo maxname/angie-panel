@@ -89,8 +89,11 @@ async fn body_json(res: axum::response::Response) -> Value {
 async fn authed_app(dir: &std::path::Path) -> (axum::Router, String) {
     let http_d = dir.join("http.d");
     std::fs::create_dir_all(&http_d).unwrap();
+    // status_api_url points at a dead port so tests never depend on a real
+    // Angie that happens to be listening on the default 8100.
     let cfg: config::PanelConfig = toml::from_str(&format!(
-        "bind_addr = \"127.0.0.1\"\ndata_dir = \"{}\"\n[angie]\nhttp_d_dir = \"{}\"",
+        "bind_addr = \"127.0.0.1\"\ndata_dir = \"{}\"\n[angie]\nhttp_d_dir = \"{}\"\n\
+         status_api_url = \"http://127.0.0.1:9/status\"",
         dir.display(),
         http_d.display()
     ))
@@ -241,6 +244,35 @@ async fn hosts_crud_and_preview() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dashboard_degrades_without_angie() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // No Angie status API reachable in tests → dashboard must still return 200
+    // with angie.up=false and an angie_down alert, never error.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/dashboard", None, Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["angie"]["up"], json!(false));
+    assert!(v["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["code"] == json!("angie_down")));
+    // Unauthenticated access is rejected.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/dashboard", None, None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

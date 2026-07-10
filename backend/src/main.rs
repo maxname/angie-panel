@@ -5,12 +5,14 @@ mod assets;
 mod auth;
 mod certs;
 mod config;
+mod dashboard;
 mod db;
 mod error;
 mod generator;
 mod helper;
 mod hosts;
 mod model;
+mod reconcile;
 mod repo;
 mod security;
 mod settings;
@@ -120,6 +122,9 @@ async fn serve(cfg: config::PanelConfig, cfg_path: PathBuf) -> anyhow::Result<()
         Ok(outcome) => tracing::debug!(?outcome, "apply crash-recovery check"),
         Err(e) => tracing::warn!(error = %e, "apply crash-recovery check failed"),
     }
+
+    // Background reconciler: auto-activate HTTPS once certificates are issued.
+    reconcile::spawn(state.clone());
 
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind)
