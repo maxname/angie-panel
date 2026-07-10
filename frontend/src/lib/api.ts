@@ -109,6 +109,75 @@ export interface HostInput {
   enabled?: boolean
 }
 
+/** Redirection hosts may keep the incoming scheme ("auto") or force one. */
+export type RedirectForwardScheme = 'auto' | 'http' | 'https'
+
+export interface RedirectHost {
+  id: number
+  domains: string[]
+  forward_scheme: RedirectForwardScheme
+  forward_domain: string
+  forward_http_code: number
+  preserve_path: boolean
+  certificate_id: number | null
+  force_ssl: boolean
+  hsts: boolean
+  hsts_subdomains: boolean
+  http2: boolean
+  block_exploits: boolean
+  advanced_snippet: string | null
+  enabled: boolean
+  /** Unix timestamp, seconds. */
+  created_at: number
+  /** Unix timestamp, seconds. */
+  updated_at: number
+}
+
+/** RedirectHost without id/created_at/updated_at — the create/update payload. */
+export interface RedirectHostInput {
+  domains: string[]
+  forward_scheme?: RedirectForwardScheme
+  forward_domain: string
+  forward_http_code?: number
+  preserve_path?: boolean
+  certificate_id?: number | null
+  force_ssl?: boolean
+  hsts?: boolean
+  hsts_subdomains?: boolean
+  http2?: boolean
+  block_exploits?: boolean
+  advanced_snippet?: string | null
+  enabled?: boolean
+}
+
+export interface DeadHost {
+  id: number
+  domains: string[]
+  certificate_id: number | null
+  force_ssl: boolean
+  hsts: boolean
+  hsts_subdomains: boolean
+  http2: boolean
+  advanced_snippet: string | null
+  enabled: boolean
+  /** Unix timestamp, seconds. */
+  created_at: number
+  /** Unix timestamp, seconds. */
+  updated_at: number
+}
+
+/** DeadHost without id/created_at/updated_at — the create/update payload. */
+export interface DeadHostInput {
+  domains: string[]
+  certificate_id?: number | null
+  force_ssl?: boolean
+  hsts?: boolean
+  hsts_subdomains?: boolean
+  http2?: boolean
+  advanced_snippet?: string | null
+  enabled?: boolean
+}
+
 export type FileStatus = 'added' | 'modified' | 'removed' | 'unchanged'
 
 export interface FileDiff {
@@ -497,6 +566,47 @@ export const api = {
 
   disableHost: (id: number) =>
     request<{ ok: true; enabled: false }>('POST', `/api/hosts/${id}/disable`),
+
+  listRedirectHosts: () =>
+    request<{ redirect_hosts: RedirectHost[] }>('GET', '/api/redirect-hosts'),
+
+  createRedirectHost: (body: RedirectHostInput) =>
+    request<RedirectHost>('POST', '/api/redirect-hosts', body),
+
+  getRedirectHost: (id: number) =>
+    request<RedirectHost>('GET', `/api/redirect-hosts/${id}`),
+
+  updateRedirectHost: (id: number, body: RedirectHostInput) =>
+    request<RedirectHost>('PUT', `/api/redirect-hosts/${id}`, body),
+
+  deleteRedirectHost: (id: number) =>
+    request<OkResponse>('DELETE', `/api/redirect-hosts/${id}`),
+
+  enableRedirectHost: (id: number) =>
+    request<{ ok: true; enabled: true }>('POST', `/api/redirect-hosts/${id}/enable`),
+
+  disableRedirectHost: (id: number) =>
+    request<{ ok: true; enabled: false }>('POST', `/api/redirect-hosts/${id}/disable`),
+
+  listDeadHosts: () =>
+    request<{ dead_hosts: DeadHost[] }>('GET', '/api/dead-hosts'),
+
+  createDeadHost: (body: DeadHostInput) =>
+    request<DeadHost>('POST', '/api/dead-hosts', body),
+
+  getDeadHost: (id: number) => request<DeadHost>('GET', `/api/dead-hosts/${id}`),
+
+  updateDeadHost: (id: number, body: DeadHostInput) =>
+    request<DeadHost>('PUT', `/api/dead-hosts/${id}`, body),
+
+  deleteDeadHost: (id: number) =>
+    request<OkResponse>('DELETE', `/api/dead-hosts/${id}`),
+
+  enableDeadHost: (id: number) =>
+    request<{ ok: true; enabled: true }>('POST', `/api/dead-hosts/${id}/enable`),
+
+  disableDeadHost: (id: number) =>
+    request<{ ok: true; enabled: false }>('POST', `/api/dead-hosts/${id}/disable`),
 
   getApplyPreview: () => request<ApplyPreview>('GET', '/api/apply/preview'),
 

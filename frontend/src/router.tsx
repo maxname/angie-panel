@@ -13,8 +13,10 @@ import { AccessListsPage } from '@/pages/access-lists'
 import { ApplyPage } from '@/pages/apply'
 import { CertificatesPage } from '@/pages/certificates'
 import { DashboardPage } from '@/pages/dashboard'
+import { DeadHostsPage } from '@/pages/dead-hosts'
 import { HostsPage } from '@/pages/hosts'
 import { LoginPage } from '@/pages/login'
+import { RedirectHostsPage } from '@/pages/redirect-hosts'
 import { SettingsPage } from '@/pages/settings'
 import { SetupPage } from '@/pages/setup'
 
@@ -77,6 +79,18 @@ const hostsRoute = createRoute({
   component: HostsPage,
 })
 
+const redirectHostsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/redirect-hosts',
+  component: RedirectHostsPage,
+})
+
+const deadHostsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/dead-hosts',
+  component: DeadHostsPage,
+})
+
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/certificates',
@@ -107,6 +121,8 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     dashboardRoute,
     hostsRoute,
+    redirectHostsRoute,
+    deadHostsRoute,
     certificatesRoute,
     accessListsRoute,
     applyRoute,
