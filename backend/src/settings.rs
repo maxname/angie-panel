@@ -187,6 +187,8 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         acme_socket_dir: state.cfg.angie.acme_socket_dir.clone(),
         access_lists,
         http_d_dir: state.cfg.angie.http_d_dir.clone(),
+        redirect_hosts: repo::list_redirects(&state.db).await?,
+        dead_hosts: repo::list_dead(&state.db).await?,
     })
 }
 

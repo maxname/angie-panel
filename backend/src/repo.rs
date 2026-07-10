@@ -189,13 +189,346 @@ pub async fn set_enabled(db: &SqlitePool, id: i64, enabled: bool) -> anyhow::Res
     Ok(rows.rows_affected() > 0)
 }
 
-/// DB revision = max(updated_at) across hosts (used to reject a stale apply
-/// against a preview computed from an older state — PLAN.md §2.2).
+/// DB revision = max(updated_at) across ALL host types (used to reject a stale
+/// apply against a preview computed from an older state — PLAN.md §2.2).
 pub async fn hosts_revision(db: &SqlitePool) -> anyhow::Result<i64> {
-    let rev: Option<i64> = sqlx::query_scalar("SELECT MAX(updated_at) FROM proxy_hosts")
-        .fetch_one(db)
-        .await?;
+    let rev: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(m) FROM (SELECT MAX(updated_at) m FROM proxy_hosts \
+         UNION ALL SELECT MAX(updated_at) FROM redirect_hosts \
+         UNION ALL SELECT MAX(updated_at) FROM dead_hosts)",
+    )
+    .fetch_one(db)
+    .await?;
     Ok(rev.unwrap_or(0))
+}
+
+// ------------------------------------------------- redirect / dead hosts
+
+use crate::model::{DeadHost, DeadHostInput, RedirectHost, RedirectHostInput, RedirectScheme};
+
+fn redirect_scheme_from_str(s: &str) -> RedirectScheme {
+    match s {
+        "http" => RedirectScheme::Http,
+        "https" => RedirectScheme::Https,
+        _ => RedirectScheme::Auto,
+    }
+}
+
+fn redirect_scheme_str(s: RedirectScheme) -> &'static str {
+    match s {
+        RedirectScheme::Auto => "auto",
+        RedirectScheme::Http => "http",
+        RedirectScheme::Https => "https",
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct RedirectRow {
+    id: i64,
+    domains: String,
+    forward_scheme: String,
+    forward_domain: String,
+    forward_http_code: i64,
+    preserve_path: i64,
+    certificate_id: Option<i64>,
+    force_ssl: i64,
+    hsts: i64,
+    hsts_subdomains: i64,
+    http2: i64,
+    block_exploits: i64,
+    advanced_snippet: Option<String>,
+    enabled: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl RedirectRow {
+    fn into_model(self) -> anyhow::Result<RedirectHost> {
+        Ok(RedirectHost {
+            id: self.id,
+            domains: serde_json::from_str(&self.domains).context("domains json")?,
+            forward_scheme: redirect_scheme_from_str(&self.forward_scheme),
+            forward_domain: self.forward_domain,
+            forward_http_code: self.forward_http_code as u16,
+            preserve_path: self.preserve_path != 0,
+            certificate_id: self.certificate_id,
+            force_ssl: self.force_ssl != 0,
+            hsts: self.hsts != 0,
+            hsts_subdomains: self.hsts_subdomains != 0,
+            http2: self.http2 != 0,
+            block_exploits: self.block_exploits != 0,
+            advanced_snippet: self.advanced_snippet,
+            enabled: self.enabled != 0,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+const REDIRECT_COLUMNS: &str = "id, domains, forward_scheme, forward_domain, forward_http_code, \
+     preserve_path, certificate_id, force_ssl, hsts, hsts_subdomains, http2, block_exploits, \
+     advanced_snippet, enabled, created_at, updated_at";
+
+pub async fn list_redirects(db: &SqlitePool) -> anyhow::Result<Vec<RedirectHost>> {
+    let rows: Vec<RedirectRow> = sqlx::query_as(&format!(
+        "SELECT {REDIRECT_COLUMNS} FROM redirect_hosts ORDER BY id"
+    ))
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(RedirectRow::into_model).collect()
+}
+
+pub async fn get_redirect(db: &SqlitePool, id: i64) -> anyhow::Result<Option<RedirectHost>> {
+    let row: Option<RedirectRow> = sqlx::query_as(&format!(
+        "SELECT {REDIRECT_COLUMNS} FROM redirect_hosts WHERE id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    row.map(RedirectRow::into_model).transpose()
+}
+
+pub async fn insert_redirect(db: &SqlitePool, i: &RedirectHostInput) -> anyhow::Result<i64> {
+    let now = now_epoch();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO redirect_hosts (domains, forward_scheme, forward_domain, forward_http_code, \
+         preserve_path, certificate_id, force_ssl, hsts, hsts_subdomains, http2, block_exploits, \
+         advanced_snippet, enabled, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+    )
+    .bind(domains_json(&i.domains))
+    .bind(redirect_scheme_str(i.forward_scheme))
+    .bind(&i.forward_domain)
+    .bind(i.forward_http_code as i64)
+    .bind(i.preserve_path as i64)
+    .bind(i.certificate_id)
+    .bind(i.force_ssl as i64)
+    .bind(i.hsts as i64)
+    .bind(i.hsts_subdomains as i64)
+    .bind(i.http2 as i64)
+    .bind(i.block_exploits as i64)
+    .bind(i.advanced_snippet.as_deref())
+    .bind(i.enabled as i64)
+    .bind(now)
+    .bind(now)
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn update_redirect(
+    db: &SqlitePool,
+    id: i64,
+    i: &RedirectHostInput,
+) -> anyhow::Result<bool> {
+    let rows = sqlx::query(
+        "UPDATE redirect_hosts SET domains=?, forward_scheme=?, forward_domain=?, \
+         forward_http_code=?, preserve_path=?, certificate_id=?, force_ssl=?, hsts=?, \
+         hsts_subdomains=?, http2=?, block_exploits=?, advanced_snippet=?, enabled=?, \
+         updated_at=? WHERE id=?",
+    )
+    .bind(domains_json(&i.domains))
+    .bind(redirect_scheme_str(i.forward_scheme))
+    .bind(&i.forward_domain)
+    .bind(i.forward_http_code as i64)
+    .bind(i.preserve_path as i64)
+    .bind(i.certificate_id)
+    .bind(i.force_ssl as i64)
+    .bind(i.hsts as i64)
+    .bind(i.hsts_subdomains as i64)
+    .bind(i.http2 as i64)
+    .bind(i.block_exploits as i64)
+    .bind(i.advanced_snippet.as_deref())
+    .bind(i.enabled as i64)
+    .bind(now_epoch())
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn delete_redirect(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM redirect_hosts WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn set_redirect_enabled(db: &SqlitePool, id: i64, enabled: bool) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE redirect_hosts SET enabled=?, updated_at=? WHERE id=?")
+        .bind(enabled as i64)
+        .bind(now_epoch())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+#[derive(sqlx::FromRow)]
+struct DeadRow {
+    id: i64,
+    domains: String,
+    certificate_id: Option<i64>,
+    force_ssl: i64,
+    hsts: i64,
+    hsts_subdomains: i64,
+    http2: i64,
+    advanced_snippet: Option<String>,
+    enabled: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl DeadRow {
+    fn into_model(self) -> anyhow::Result<DeadHost> {
+        Ok(DeadHost {
+            id: self.id,
+            domains: serde_json::from_str(&self.domains).context("domains json")?,
+            certificate_id: self.certificate_id,
+            force_ssl: self.force_ssl != 0,
+            hsts: self.hsts != 0,
+            hsts_subdomains: self.hsts_subdomains != 0,
+            http2: self.http2 != 0,
+            advanced_snippet: self.advanced_snippet,
+            enabled: self.enabled != 0,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+const DEAD_COLUMNS: &str = "id, domains, certificate_id, force_ssl, hsts, hsts_subdomains, http2, \
+     advanced_snippet, enabled, created_at, updated_at";
+
+pub async fn list_dead(db: &SqlitePool) -> anyhow::Result<Vec<DeadHost>> {
+    let rows: Vec<DeadRow> = sqlx::query_as(&format!(
+        "SELECT {DEAD_COLUMNS} FROM dead_hosts ORDER BY id"
+    ))
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(DeadRow::into_model).collect()
+}
+
+pub async fn get_dead(db: &SqlitePool, id: i64) -> anyhow::Result<Option<DeadHost>> {
+    let row: Option<DeadRow> = sqlx::query_as(&format!(
+        "SELECT {DEAD_COLUMNS} FROM dead_hosts WHERE id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    row.map(DeadRow::into_model).transpose()
+}
+
+pub async fn insert_dead(db: &SqlitePool, i: &DeadHostInput) -> anyhow::Result<i64> {
+    let now = now_epoch();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO dead_hosts (domains, certificate_id, force_ssl, hsts, hsts_subdomains, \
+         http2, advanced_snippet, enabled, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
+    )
+    .bind(domains_json(&i.domains))
+    .bind(i.certificate_id)
+    .bind(i.force_ssl as i64)
+    .bind(i.hsts as i64)
+    .bind(i.hsts_subdomains as i64)
+    .bind(i.http2 as i64)
+    .bind(i.advanced_snippet.as_deref())
+    .bind(i.enabled as i64)
+    .bind(now)
+    .bind(now)
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn update_dead(db: &SqlitePool, id: i64, i: &DeadHostInput) -> anyhow::Result<bool> {
+    let rows = sqlx::query(
+        "UPDATE dead_hosts SET domains=?, certificate_id=?, force_ssl=?, hsts=?, \
+         hsts_subdomains=?, http2=?, advanced_snippet=?, enabled=?, updated_at=? WHERE id=?",
+    )
+    .bind(domains_json(&i.domains))
+    .bind(i.certificate_id)
+    .bind(i.force_ssl as i64)
+    .bind(i.hsts as i64)
+    .bind(i.hsts_subdomains as i64)
+    .bind(i.http2 as i64)
+    .bind(i.advanced_snippet.as_deref())
+    .bind(i.enabled as i64)
+    .bind(now_epoch())
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn delete_dead(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM dead_hosts WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn set_dead_enabled(db: &SqlitePool, id: i64, enabled: bool) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE dead_hosts SET enabled=?, updated_at=? WHERE id=?")
+        .bind(enabled as i64)
+        .bind(now_epoch())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+/// Which host type owns a domain (for cross-type uniqueness messages).
+#[derive(Debug, Clone, Copy)]
+pub enum HostKind {
+    Proxy,
+    Redirect,
+    Dead,
+}
+
+impl HostKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            HostKind::Proxy => "proxy host",
+            HostKind::Redirect => "redirect host",
+            HostKind::Dead => "404 host",
+        }
+    }
+}
+
+/// Every domain claimed by an ENABLED host of any type, with its owner. Used
+/// to enforce domain uniqueness ACROSS proxy/redirect/dead hosts. `exclude`
+/// skips the host being edited (its own kind + id).
+pub async fn all_enabled_domains(
+    db: &SqlitePool,
+    exclude: Option<(HostKind, i64)>,
+) -> anyhow::Result<std::collections::HashMap<String, (HostKind, i64)>> {
+    let mut map = std::collections::HashMap::new();
+    let skip = |k: HostKind, id: i64| matches!(exclude, Some((ek, eid)) if std::mem::discriminant(&ek) == std::mem::discriminant(&k) && eid == id);
+    for h in list_hosts(db).await? {
+        if h.enabled && !skip(HostKind::Proxy, h.id) {
+            for d in h.domains {
+                map.insert(d, (HostKind::Proxy, h.id));
+            }
+        }
+    }
+    for h in list_redirects(db).await? {
+        if h.enabled && !skip(HostKind::Redirect, h.id) {
+            for d in h.domains {
+                map.insert(d, (HostKind::Redirect, h.id));
+            }
+        }
+    }
+    for h in list_dead(db).await? {
+        if h.enabled && !skip(HostKind::Dead, h.id) {
+            for d in h.domains {
+                map.insert(d, (HostKind::Dead, h.id));
+            }
+        }
+    }
+    Ok(map)
 }
 
 // ----------------------------------------------------------- certificates
@@ -380,14 +713,26 @@ pub async fn import_replace(
     Ok(())
 }
 
-/// Hosts (id + first domain for the message) that reference this certificate.
-pub async fn hosts_using_cert(db: &SqlitePool, cert_id: i64) -> anyhow::Result<Vec<(i64, String)>> {
-    let hosts = list_hosts(db).await?;
-    Ok(hosts
-        .into_iter()
-        .filter(|h| h.certificate_id == Some(cert_id))
-        .map(|h| (h.id, h.domains.first().cloned().unwrap_or_default()))
-        .collect())
+/// Hosts of any type (label + first domain) that reference this certificate.
+pub async fn hosts_using_cert(db: &SqlitePool, cert_id: i64) -> anyhow::Result<Vec<String>> {
+    let mut out = Vec::new();
+    let first = |d: &[String]| d.first().cloned().unwrap_or_default();
+    for h in list_hosts(db).await? {
+        if h.certificate_id == Some(cert_id) {
+            out.push(format!("proxy #{} ({})", h.id, first(&h.domains)));
+        }
+    }
+    for h in list_redirects(db).await? {
+        if h.certificate_id == Some(cert_id) {
+            out.push(format!("redirect #{} ({})", h.id, first(&h.domains)));
+        }
+    }
+    for h in list_dead(db).await? {
+        if h.certificate_id == Some(cert_id) {
+            out.push(format!("404 #{} ({})", h.id, first(&h.domains)));
+        }
+    }
+    Ok(out)
 }
 
 // ----------------------------------------------------------- access lists

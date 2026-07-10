@@ -359,6 +359,124 @@ async fn export_import_roundtrip_and_rejects_injection() {
 }
 
 #[tokio::test]
+async fn redirect_host_and_cross_type_domain_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Create a proxy host on app.example.com.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(
+                json!({"domains":["app.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.1","forward_port":80}),
+            ),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // A redirect host claiming the SAME domain → cross-type 409.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/redirect-hosts",
+            Some(json!({"domains":["app.example.com"],"forward_domain":"new.example.com"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(res).await["error"]["code"],
+        json!("domain_conflict")
+    );
+
+    // A redirect host on a fresh domain works; injection in forward_domain is
+    // rejected.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/redirect-hosts",
+            Some(
+                json!({"domains":["old.example.com"],"forward_domain":"new.example.com",
+                "forward_http_code":302,"preserve_path":false}),
+            ),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let rid = body_json(res).await["id"].as_i64().unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/redirect-hosts",
+            Some(json!({"domains":["evil.example.com"],
+                "forward_domain":"x.com; return 200 \"pwned\""})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // A 404 host works and shows up in the apply preview as a 40-* file.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/dead-hosts",
+            Some(json!({"domains":["parked.example.com"]})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/apply/preview",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let files = body_json(res).await["diff"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        files.iter().any(|n| n.starts_with("30-redirect-")),
+        "{files:?}"
+    );
+    assert!(files.iter().any(|n| n.starts_with("40-dead-")), "{files:?}");
+
+    // Delete the redirect host.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/redirect-hosts/{rid}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn dashboard_degrades_without_angie() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::model::{CustomLocation, ProxyHost, Scheme};
+use crate::model::{CustomLocation, DeadHost, ProxyHost, RedirectHost, RedirectScheme, Scheme};
 
 // --------------------------------------------------------------- fixtures
 
@@ -76,6 +76,8 @@ fn input_acl(
         acme_socket_dir: PathBuf::from("/run/angie-panel"),
         access_lists,
         http_d_dir: PathBuf::from("/etc/angie/http.d"),
+        redirect_hosts: vec![],
+        dead_hosts: vec![],
     }
 }
 
@@ -308,6 +310,133 @@ fn golden_host_advanced_snippet() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-advanced-snippet.conf", body);
+}
+
+fn base_redirect(id: i64, domain: &str, target: &str) -> RedirectHost {
+    RedirectHost {
+        id,
+        domains: vec![domain.into()],
+        forward_scheme: RedirectScheme::Https,
+        forward_domain: target.into(),
+        forward_http_code: 301,
+        preserve_path: true,
+        certificate_id: None,
+        force_ssl: false,
+        hsts: false,
+        hsts_subdomains: false,
+        http2: true,
+        block_exploits: false,
+        advanced_snippet: None,
+        enabled: true,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn input_redirect(redirects: Vec<RedirectHost>, certs: Vec<Certificate>) -> GeneratorInput {
+    let mut gi = input(vec![], certs, settings(DefaultSite::NotFound, false));
+    gi.redirect_hosts = redirects;
+    gi
+}
+
+fn input_dead(deads: Vec<DeadHost>, certs: Vec<Certificate>) -> GeneratorInput {
+    let mut gi = input(vec![], certs, settings(DefaultSite::NotFound, false));
+    gi.dead_hosts = deads;
+    gi
+}
+
+#[test]
+fn golden_redirect_http_only() {
+    // No cert → HTTP-only redirect preserving the path.
+    let files = generate(&input_redirect(
+        vec![base_redirect(1, "old.example.com", "new.example.com")],
+        vec![],
+    ))
+    .unwrap();
+    let body = files
+        .iter()
+        .find(|(k, _)| k.starts_with("30-redirect-"))
+        .unwrap();
+    assert_eq!(body.0, "30-redirect-1-old-example-com.conf");
+    assert_golden("30-redirect-http.conf", body.1);
+}
+
+#[test]
+fn golden_redirect_https_force_ssl_no_preserve() {
+    // Cert ready + force_ssl + no path preservation + custom 302 code.
+    let mut rh = base_redirect(2, "go.example.com", "dest.example.com");
+    rh.certificate_id = Some(1);
+    rh.force_ssl = true;
+    rh.hsts = true;
+    rh.preserve_path = false;
+    rh.forward_http_code = 302;
+    rh.forward_scheme = RedirectScheme::Http;
+    let files = generate(&input_redirect(
+        vec![rh],
+        vec![ready_cert(1, "go", &["go.example.com"])],
+    ))
+    .unwrap();
+    let body = files
+        .iter()
+        .find(|(k, _)| k.starts_with("30-redirect-"))
+        .unwrap()
+        .1;
+    assert_golden("30-redirect-https.conf", body);
+}
+
+#[test]
+fn golden_dead_host_https() {
+    let dh = DeadHost {
+        id: 3,
+        domains: vec!["parked.example.com".into()],
+        certificate_id: Some(1),
+        force_ssl: true,
+        hsts: false,
+        hsts_subdomains: false,
+        http2: true,
+        advanced_snippet: None,
+        enabled: true,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let files = generate(&input_dead(
+        vec![dh],
+        vec![ready_cert(1, "parked", &["parked.example.com"])],
+    ))
+    .unwrap();
+    let body = files
+        .iter()
+        .find(|(k, _)| k.starts_with("40-dead-"))
+        .unwrap();
+    assert_eq!(body.0, "40-dead-3-parked-example-com.conf");
+    assert_golden("40-dead-https.conf", body.1);
+}
+
+#[test]
+fn redirect_and_dead_disabled_emit_no_file() {
+    let mut rh = base_redirect(1, "a.example.com", "b.example.com");
+    rh.enabled = false;
+    let mut dh = DeadHost {
+        id: 2,
+        domains: vec!["c.example.com".into()],
+        certificate_id: None,
+        force_ssl: false,
+        hsts: false,
+        hsts_subdomains: false,
+        http2: true,
+        advanced_snippet: None,
+        enabled: false,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let _ = &mut dh;
+    let mut gi = input(vec![], vec![], settings(DefaultSite::NotFound, false));
+    gi.redirect_hosts = vec![rh];
+    gi.dead_hosts = vec![dh];
+    let files = generate(&gi).unwrap();
+    assert!(!files
+        .keys()
+        .any(|k| k.starts_with("30-redirect-") || k.starts_with("40-dead-")));
 }
 
 #[test]

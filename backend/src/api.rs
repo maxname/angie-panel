@@ -6,7 +6,8 @@ use axum::Router;
 
 use crate::state::AppState;
 use crate::{
-    access_lists, apply_api, assets, auth, certs, dashboard, export_import, hosts, security, system,
+    access_lists, apply_api, assets, auth, certs, dashboard, export_import, hosts, other_hosts,
+    security, system,
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -44,6 +45,36 @@ pub fn router(state: Arc<AppState>) -> Router {
                 .put(access_lists::update)
                 .delete(access_lists::delete),
         )
+        .route(
+            "/redirect-hosts",
+            get(other_hosts::list_redirects).post(other_hosts::create_redirect),
+        )
+        .route(
+            "/redirect-hosts/{id}",
+            get(other_hosts::get_redirect)
+                .put(other_hosts::update_redirect)
+                .delete(other_hosts::delete_redirect),
+        )
+        .route(
+            "/redirect-hosts/{id}/enable",
+            post(other_hosts::enable_redirect),
+        )
+        .route(
+            "/redirect-hosts/{id}/disable",
+            post(other_hosts::disable_redirect),
+        )
+        .route(
+            "/dead-hosts",
+            get(other_hosts::list_dead).post(other_hosts::create_dead),
+        )
+        .route(
+            "/dead-hosts/{id}",
+            get(other_hosts::get_dead)
+                .put(other_hosts::update_dead)
+                .delete(other_hosts::delete_dead),
+        )
+        .route("/dead-hosts/{id}/enable", post(other_hosts::enable_dead))
+        .route("/dead-hosts/{id}/disable", post(other_hosts::disable_dead))
         .route("/apply/preview", get(apply_api::preview))
         .route("/apply", post(apply_api::apply_now))
         .route("/apply/history", get(apply_api::history))

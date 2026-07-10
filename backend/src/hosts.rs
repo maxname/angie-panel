@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{self, ProxyHost, ProxyHostInput, UpstreamPolicy};
-use crate::repo;
+use crate::repo::{self, HostKind};
 use crate::state::AppState;
 
 fn upstream_policy(state: &AppState) -> UpstreamPolicy {
@@ -22,8 +22,8 @@ fn upstream_policy(state: &AppState) -> UpstreamPolicy {
 }
 
 /// Enforce: a domain (after normalization) may belong to at most one ENABLED
-/// host. Disabled hosts don't generate config, so they can't collide.
-/// `exclude_id` skips the host being updated.
+/// host of ANY type (proxy / redirect / 404). `exclude_id` skips the proxy
+/// host being updated.
 async fn check_domain_uniqueness(
     state: &AppState,
     input: &ProxyHostInput,
@@ -32,19 +32,15 @@ async fn check_domain_uniqueness(
     if !input.enabled {
         return Ok(());
     }
-    let existing = repo::list_hosts(&state.db).await?;
-    for host in &existing {
-        if Some(host.id) == exclude_id || !host.enabled {
-            continue;
-        }
-        for d in &input.domains {
-            if host.domains.contains(d) {
-                return Err(ApiError::new(
-                    axum::http::StatusCode::CONFLICT,
-                    "domain_conflict",
-                    format!("domain {d} already belongs to host #{}", host.id),
-                ));
-            }
+    let skip = exclude_id.map(|id| (HostKind::Proxy, id));
+    let taken = repo::all_enabled_domains(&state.db, skip).await?;
+    for d in &input.domains {
+        if let Some((kind, id)) = taken.get(d) {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "domain_conflict",
+                format!("domain {d} already belongs to {} #{id}", kind.label()),
+            ));
         }
     }
     Ok(())

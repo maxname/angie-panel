@@ -87,15 +87,13 @@ pub async fn delete(
     // host would silently drop to plain HTTP on the next apply (a downgrade).
     let referencing = repo::hosts_using_cert(&state.db, id).await?;
     if !referencing.is_empty() {
-        let list = referencing
-            .iter()
-            .map(|(hid, dom)| format!("#{hid} ({dom})"))
-            .collect::<Vec<_>>()
-            .join(", ");
         return Err(ApiError::new(
             axum::http::StatusCode::CONFLICT,
             "cert_in_use",
-            format!("certificate is used by host(s) {list}; detach them first"),
+            format!(
+                "certificate is used by host(s) {}; detach them first",
+                referencing.join(", ")
+            ),
         ));
     }
     if !repo::delete_cert(&state.db, id).await? {

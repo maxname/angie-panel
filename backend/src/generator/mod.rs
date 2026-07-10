@@ -29,7 +29,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::model::{CustomLocation, ProxyHost, Scheme};
+use crate::model::{CustomLocation, DeadHost, ProxyHost, RedirectHost, Scheme};
 
 /// Everything the generator needs; assembled by the API layer from DB rows
 /// and settings. Filenames map 1:1 to /etc/angie/http.d entries.
@@ -57,6 +57,10 @@ pub struct GeneratorInput {
     /// Managed config dir — where generated files (incl. htpasswd) live; used
     /// to build the absolute `auth_basic_user_file` path.
     pub http_d_dir: std::path::PathBuf,
+    /// Redirection hosts (301/302/… to another domain).
+    pub redirect_hosts: Vec<RedirectHost>,
+    /// 404 (dead) hosts.
+    pub dead_hosts: Vec<DeadHost>,
 }
 
 /// An access list reduced to what the generator needs. Usernames carry their
@@ -157,6 +161,29 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
         }
         let cert = host.certificate_id.and_then(|cid| certs.get(&cid).copied());
         let (filename, body) = gen_host(host, cert, input)?;
+        files.insert(filename, body);
+    }
+
+    // Redirection hosts (30-*) and 404 hosts (40-*). Disabled ones emit no
+    // file, matching proxy hosts.
+    let mut redirects: Vec<&RedirectHost> = input.redirect_hosts.iter().collect();
+    redirects.sort_by_key(|r| r.id);
+    for rh in redirects {
+        if !rh.enabled {
+            continue;
+        }
+        let cert = rh.certificate_id.and_then(|cid| certs.get(&cid).copied());
+        let (filename, body) = gen_redirect(rh, cert, input);
+        files.insert(filename, body);
+    }
+    let mut deads: Vec<&DeadHost> = input.dead_hosts.iter().collect();
+    deads.sort_by_key(|d| d.id);
+    for dh in deads {
+        if !dh.enabled {
+            continue;
+        }
+        let cert = dh.certificate_id.and_then(|cid| certs.get(&cid).copied());
+        let (filename, body) = gen_dead(dh, cert, input);
         files.insert(filename, body);
     }
 
@@ -587,6 +614,163 @@ fn host_features(
     }
 
     Ok(())
+}
+
+// ----------------------------------------------------- redirect / 404 hosts
+
+/// Emit the HSTS header if enabled (TLS only). Shared by all host types.
+fn emit_hsts(out: &mut String, hsts: bool, subdomains: bool) {
+    if hsts {
+        let mut value = String::from("max-age=63072000");
+        if subdomains {
+            value.push_str("; includeSubDomains");
+        }
+        let _ = writeln!(
+            out,
+            "    add_header Strict-Transport-Security \"{value}\" always;"
+        );
+    }
+}
+
+/// Render one redirection host. Returns (filename, body).
+fn gen_redirect(
+    rh: &RedirectHost,
+    cert: Option<&Certificate>,
+    input: &GeneratorInput,
+) -> (String, String) {
+    let slug = slugify(rh.domains.first().map(String::as_str).unwrap_or(""));
+    let filename = format!("30-redirect-{}-{}.conf", rh.id, slug);
+    let https = matches!(cert, Some(c) if c.ready);
+    let server_names = rh.domains.join(" ");
+    let ipv6 = input.settings.ipv6_enabled;
+
+    // The redirect statement: `return <code> <scheme>://<domain>[<path>];`.
+    // scheme/domain/code were all validated; path is $request_uri or nothing.
+    let path = if rh.preserve_path { "$request_uri" } else { "" };
+    let redirect_stmt = format!(
+        "    return {} {}://{}{};",
+        rh.forward_http_code,
+        rh.forward_scheme.as_target(),
+        rh.forward_domain,
+        path
+    );
+    let block_exploits = |out: &mut String| {
+        if rh.block_exploits {
+            if let Ok(p) = snippet_path(&input.snippets_dir, "block-exploits.conf") {
+                let _ = writeln!(out, "    include {p};");
+            }
+        }
+    };
+
+    let mut out = String::new();
+    if https {
+        let cert = cert.expect("https implies a ready cert");
+        // :80 — force-ssl sends the client to https first; otherwise redirect.
+        let _ = writeln!(out, "server {{");
+        let _ = writeln!(out, "    listen 80;");
+        if ipv6 {
+            let _ = writeln!(out, "    listen [::]:80;");
+        }
+        let _ = writeln!(out, "    server_name {server_names};");
+        block_exploits(&mut out);
+        if rh.force_ssl {
+            let _ = writeln!(out, "    return 301 https://$host$request_uri;");
+        } else {
+            let _ = writeln!(out, "{redirect_stmt}");
+        }
+        let _ = writeln!(out, "}}");
+        out.push('\n');
+        // :443 — the real redirect.
+        let _ = writeln!(out, "server {{");
+        let _ = writeln!(out, "    listen 443 ssl;");
+        if ipv6 {
+            let _ = writeln!(out, "    listen [::]:443 ssl;");
+        }
+        if rh.http2 {
+            let _ = writeln!(out, "    http2 on;");
+        }
+        let _ = writeln!(out, "    server_name {server_names};");
+        let _ = writeln!(out, "    ssl_certificate     $acme_cert_{};", cert.name);
+        let _ = writeln!(out, "    ssl_certificate_key $acme_cert_key_{};", cert.name);
+        emit_hsts(&mut out, rh.hsts, rh.hsts_subdomains);
+        block_exploits(&mut out);
+        let _ = writeln!(out, "{redirect_stmt}");
+        if let Some(snip) = &rh.advanced_snippet {
+            emit_snippet(&mut out, snip, "    ");
+        }
+        let _ = writeln!(out, "}}");
+    } else {
+        let _ = writeln!(out, "server {{");
+        let _ = writeln!(out, "    listen 80;");
+        if ipv6 {
+            let _ = writeln!(out, "    listen [::]:80;");
+        }
+        let _ = writeln!(out, "    server_name {server_names};");
+        block_exploits(&mut out);
+        let _ = writeln!(out, "{redirect_stmt}");
+        if let Some(snip) = &rh.advanced_snippet {
+            emit_snippet(&mut out, snip, "    ");
+        }
+        let _ = writeln!(out, "}}");
+    }
+    (filename, out)
+}
+
+/// Render one 404 (dead) host. Returns (filename, body).
+fn gen_dead(dh: &DeadHost, cert: Option<&Certificate>, input: &GeneratorInput) -> (String, String) {
+    let slug = slugify(dh.domains.first().map(String::as_str).unwrap_or(""));
+    let filename = format!("40-dead-{}-{}.conf", dh.id, slug);
+    let https = matches!(cert, Some(c) if c.ready);
+    let server_names = dh.domains.join(" ");
+    let ipv6 = input.settings.ipv6_enabled;
+
+    let mut out = String::new();
+    if https {
+        let cert = cert.expect("https implies a ready cert");
+        let _ = writeln!(out, "server {{");
+        let _ = writeln!(out, "    listen 80;");
+        if ipv6 {
+            let _ = writeln!(out, "    listen [::]:80;");
+        }
+        let _ = writeln!(out, "    server_name {server_names};");
+        if dh.force_ssl {
+            let _ = writeln!(out, "    return 301 https://$host$request_uri;");
+        } else {
+            let _ = writeln!(out, "    return 404;");
+        }
+        let _ = writeln!(out, "}}");
+        out.push('\n');
+        let _ = writeln!(out, "server {{");
+        let _ = writeln!(out, "    listen 443 ssl;");
+        if ipv6 {
+            let _ = writeln!(out, "    listen [::]:443 ssl;");
+        }
+        if dh.http2 {
+            let _ = writeln!(out, "    http2 on;");
+        }
+        let _ = writeln!(out, "    server_name {server_names};");
+        let _ = writeln!(out, "    ssl_certificate     $acme_cert_{};", cert.name);
+        let _ = writeln!(out, "    ssl_certificate_key $acme_cert_key_{};", cert.name);
+        emit_hsts(&mut out, dh.hsts, dh.hsts_subdomains);
+        let _ = writeln!(out, "    return 404;");
+        if let Some(snip) = &dh.advanced_snippet {
+            emit_snippet(&mut out, snip, "    ");
+        }
+        let _ = writeln!(out, "}}");
+    } else {
+        let _ = writeln!(out, "server {{");
+        let _ = writeln!(out, "    listen 80;");
+        if ipv6 {
+            let _ = writeln!(out, "    listen [::]:80;");
+        }
+        let _ = writeln!(out, "    server_name {server_names};");
+        let _ = writeln!(out, "    return 404;");
+        if let Some(snip) = &dh.advanced_snippet {
+            emit_snippet(&mut out, snip, "    ");
+        }
+        let _ = writeln!(out, "}}");
+    }
+    (filename, out)
 }
 
 /// The upstream reference used by the main `location /` proxy_pass.

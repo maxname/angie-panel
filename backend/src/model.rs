@@ -684,6 +684,185 @@ pub fn validate_acl_input(mut input: AccessListInput) -> Result<AccessListInput,
     Ok(input)
 }
 
+// ====================================================== redirect / 404 hosts
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedirectScheme {
+    /// Preserve the incoming scheme ($scheme).
+    Auto,
+    Http,
+    Https,
+}
+
+impl RedirectScheme {
+    /// The scheme literal used in the generated `return` (or `$scheme`).
+    pub fn as_target(self) -> &'static str {
+        match self {
+            RedirectScheme::Auto => "$scheme",
+            RedirectScheme::Http => "http",
+            RedirectScheme::Https => "https",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedirectHost {
+    pub id: i64,
+    pub domains: Vec<String>,
+    pub forward_scheme: RedirectScheme,
+    pub forward_domain: String,
+    pub forward_http_code: u16,
+    pub preserve_path: bool,
+    pub certificate_id: Option<i64>,
+    pub force_ssl: bool,
+    pub hsts: bool,
+    pub hsts_subdomains: bool,
+    pub http2: bool,
+    pub block_exploits: bool,
+    pub advanced_snippet: Option<String>,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RedirectHostInput {
+    pub domains: Vec<String>,
+    #[serde(default = "default_redirect_scheme")]
+    pub forward_scheme: RedirectScheme,
+    pub forward_domain: String,
+    #[serde(default = "default_redirect_code")]
+    pub forward_http_code: u16,
+    #[serde(default = "default_true")]
+    pub preserve_path: bool,
+    #[serde(default)]
+    pub certificate_id: Option<i64>,
+    #[serde(default)]
+    pub force_ssl: bool,
+    #[serde(default)]
+    pub hsts: bool,
+    #[serde(default)]
+    pub hsts_subdomains: bool,
+    #[serde(default = "default_true")]
+    pub http2: bool,
+    #[serde(default)]
+    pub block_exploits: bool,
+    #[serde(default)]
+    pub advanced_snippet: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_redirect_scheme() -> RedirectScheme {
+    RedirectScheme::Auto
+}
+fn default_redirect_code() -> u16 {
+    301
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeadHost {
+    pub id: i64,
+    pub domains: Vec<String>,
+    pub certificate_id: Option<i64>,
+    pub force_ssl: bool,
+    pub hsts: bool,
+    pub hsts_subdomains: bool,
+    pub http2: bool,
+    pub advanced_snippet: Option<String>,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeadHostInput {
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub certificate_id: Option<i64>,
+    #[serde(default)]
+    pub force_ssl: bool,
+    #[serde(default)]
+    pub hsts: bool,
+    #[serde(default)]
+    pub hsts_subdomains: bool,
+    #[serde(default = "default_true")]
+    pub http2: bool,
+    #[serde(default)]
+    pub advanced_snippet: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Validate the domains list shared by every host type.
+fn validate_domains(raw: &[String]) -> Result<Vec<String>, ApiError> {
+    if raw.is_empty() {
+        return Err(bad("invalid_domain", "at least one domain is required"));
+    }
+    if raw.len() > MAX_DOMAINS_PER_HOST {
+        return Err(bad("invalid_domain", "too many domains"));
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    for d in raw {
+        let norm = validate_domain(d)?;
+        if !out.contains(&norm) {
+            out.push(norm);
+        }
+    }
+    Ok(out)
+}
+
+pub fn validate_redirect_input(
+    mut input: RedirectHostInput,
+    allow_advanced_snippets: bool,
+) -> Result<RedirectHostInput, ApiError> {
+    input.domains = validate_domains(&input.domains)?;
+
+    // forward_domain is interpolated into a `return` directive — validate it as
+    // a strict domain (no scheme/path/injection). Wildcards make no sense here.
+    let fd = validate_domain(&input.forward_domain)?;
+    if fd.starts_with("*.") {
+        return Err(bad(
+            "invalid_forward_domain",
+            "the redirect target cannot be a wildcard domain",
+        ));
+    }
+    input.forward_domain = fd;
+
+    if !(300..=308).contains(&input.forward_http_code) {
+        return Err(bad(
+            "invalid_redirect_code",
+            "HTTP redirect code must be 300-308",
+        ));
+    }
+
+    if let Some(s) = &input.advanced_snippet {
+        input.advanced_snippet = normalize_snippet(s, allow_advanced_snippets)?;
+    }
+    Ok(input)
+}
+
+pub fn validate_dead_input(
+    mut input: DeadHostInput,
+    allow_advanced_snippets: bool,
+) -> Result<DeadHostInput, ApiError> {
+    input.domains = validate_domains(&input.domains)?;
+    if let Some(s) = &input.advanced_snippet {
+        input.advanced_snippet = normalize_snippet(s, allow_advanced_snippets)?;
+    }
+    Ok(input)
+}
+
+/// Trim + gate a snippet (shared by redirect/dead hosts). Empty → None.
+fn normalize_snippet(s: &str, allow_advanced_snippets: bool) -> Result<Option<String>, ApiError> {
+    if s.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(validate_snippet(s, allow_advanced_snippets)?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,6 +1066,48 @@ mod tests {
                 "should reject {evil:?}"
             );
         }
+    }
+
+    #[test]
+    fn redirect_validation() {
+        let base = || RedirectHostInput {
+            domains: vec!["old.example.com".into()],
+            forward_scheme: RedirectScheme::Https,
+            forward_domain: "New.Example.com".into(),
+            forward_http_code: 301,
+            preserve_path: true,
+            certificate_id: None,
+            force_ssl: false,
+            hsts: false,
+            hsts_subdomains: false,
+            http2: true,
+            block_exploits: false,
+            advanced_snippet: None,
+            enabled: true,
+        };
+        let ok = validate_redirect_input(base(), false).unwrap();
+        assert_eq!(ok.forward_domain, "new.example.com"); // normalized
+
+        // Bad redirect code.
+        let mut bad_code = base();
+        bad_code.forward_http_code = 200;
+        assert_eq!(
+            validate_redirect_input(bad_code, false).unwrap_err().code,
+            "invalid_redirect_code"
+        );
+
+        // Injection in the forward domain is rejected.
+        let mut evil = base();
+        evil.forward_domain = "x.com; return 200 \"pwned\"".into();
+        assert!(validate_redirect_input(evil, false).is_err());
+
+        // Wildcard target rejected.
+        let mut wild = base();
+        wild.forward_domain = "*.example.com".into();
+        assert_eq!(
+            validate_redirect_input(wild, false).unwrap_err().code,
+            "invalid_forward_domain"
+        );
     }
 
     #[test]

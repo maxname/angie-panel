@@ -14,6 +14,7 @@ mod generator;
 mod helper;
 mod hosts;
 mod model;
+mod other_hosts;
 mod reconcile;
 mod repo;
 mod security;
