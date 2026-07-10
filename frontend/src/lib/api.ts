@@ -244,6 +244,86 @@ export interface CertPrecheck {
   delegation_hints: DelegationHint[]
 }
 
+// --- Live dashboard (M3) ---------------------------------------------------
+
+export interface DashboardConnections {
+  accepted: number
+  active: number
+  idle: number
+  dropped: number
+}
+
+export interface DashboardAngie {
+  up: boolean
+  version: string | null
+  generation: number | null
+  load_time: string | null
+  connections: DashboardConnections | null
+}
+
+export interface DashboardRequests {
+  total: number
+  processing: number
+  discarded: number
+}
+
+export interface DashboardZone {
+  requests: DashboardRequests
+  /** Keyed by HTTP status code (or "Nxx" bucket); any non-status key is ignored. */
+  responses: Record<string, number>
+  data: { received: number; sent: number }
+}
+
+export interface DashboardUpstream {
+  peers_up: number
+  peers_down: number
+  fails: number
+}
+
+export interface DashboardHost {
+  id: number
+  domains: string[]
+  enabled: boolean
+  forward: string
+  certificate_id: number | null
+  https_active: boolean
+  /** null when the host has no traffic yet or Angie's status API is down. */
+  zone: DashboardZone | null
+  upstream: DashboardUpstream | null
+}
+
+export interface DashboardCert {
+  id: number
+  name: string
+  domains: string[]
+  challenge: AcmeChallenge
+  staging: boolean
+  status: AcmeStatus | null
+}
+
+export interface DashboardDrift {
+  detected: boolean
+  foreign_files: string[]
+}
+
+export type AlertSeverity = 'error' | 'warning' | 'info'
+
+export interface DashboardAlert {
+  severity: AlertSeverity
+  /** Stable machine code, e.g. "angie_down" | "cert_failed" | "drift" | "pending". */
+  code: string
+  message: string
+}
+
+export interface Dashboard {
+  angie: DashboardAngie
+  hosts: DashboardHost[]
+  certificates: DashboardCert[]
+  drift: DashboardDrift
+  pending_changes: boolean
+  alerts: DashboardAlert[]
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -349,6 +429,8 @@ export const api = {
   logout: () => request<OkResponse>('POST', '/api/auth/logout', undefined, { redirectOn401: false }),
 
   me: () => request<Me>('GET', '/api/auth/me'),
+
+  getDashboard: () => request<Dashboard>('GET', '/api/dashboard'),
 
   getSystemStatus: () => request<SystemStatus>('GET', '/api/system/status'),
 

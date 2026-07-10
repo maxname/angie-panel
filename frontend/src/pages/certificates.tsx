@@ -250,7 +250,7 @@ function deriveStatus(status: AcmeStatus | null, t: TFunction): DerivedStatus {
   return { kind: 'pending', label: t('certificates.status.pending'), hint: status.details }
 }
 
-function StatusPill({ status }: { status: AcmeStatus | null }) {
+export function StatusPill({ status }: { status: AcmeStatus | null }) {
   const { t } = useTranslation()
   const derived = deriveStatus(status, t)
 
