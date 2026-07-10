@@ -29,7 +29,11 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::model::{CustomLocation, DeadHost, ProxyHost, RedirectHost, Scheme};
+use crate::model::{CustomLocation, DeadHost, ProxyHost, RedirectHost, Scheme, Stream};
+
+/// FileSet keys with this prefix are stream configs destined for `stream.d/`
+/// (Angie's separate `stream {}` context), not `http.d/`.
+pub const STREAM_PREFIX: &str = "stream.d/";
 
 /// Everything the generator needs; assembled by the API layer from DB rows
 /// and settings. Filenames map 1:1 to /etc/angie/http.d entries.
@@ -61,6 +65,9 @@ pub struct GeneratorInput {
     pub redirect_hosts: Vec<RedirectHost>,
     /// 404 (dead) hosts.
     pub dead_hosts: Vec<DeadHost>,
+    /// TCP/UDP port forwards (stream context). Emitted with the STREAM_PREFIX
+    /// so the apply pipeline routes them to stream.d.
+    pub streams: Vec<Stream>,
 }
 
 /// An access list reduced to what the generator needs. Usernames carry their
@@ -185,6 +192,32 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
         let cert = dh.certificate_id.and_then(|cid| certs.get(&cid).copied());
         let (filename, body) = gen_dead(dh, cert, input);
         files.insert(filename, body);
+    }
+
+    // Streams (stream.d/stream-<id>.conf). Keyed with STREAM_PREFIX so the
+    // apply pipeline syncs them to stream.d, not http.d.
+    let mut streams: Vec<&Stream> = input.streams.iter().collect();
+    streams.sort_by_key(|s| s.id);
+    for s in streams {
+        if !s.enabled {
+            continue;
+        }
+        let mut body = String::new();
+        let _ = writeln!(body, "server {{");
+        if s.tcp {
+            let _ = writeln!(body, "    listen {};", s.incoming_port);
+        }
+        if s.udp {
+            let _ = writeln!(body, "    listen {} udp;", s.incoming_port);
+        }
+        // forward_host/port were validated (bare IP/hostname + u16).
+        let _ = writeln!(
+            body,
+            "    proxy_pass {}:{};",
+            s.forward_host, s.forward_port
+        );
+        let _ = writeln!(body, "}}");
+        files.insert(format!("{STREAM_PREFIX}stream-{}.conf", s.id), body);
     }
 
     // htpasswd files for access lists that have basic-auth users. These are

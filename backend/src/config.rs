@@ -42,6 +42,10 @@ pub struct AngieConfig {
     #[serde(default = "default_http_d_dir")]
     #[allow(dead_code)]
     pub http_d_dir: PathBuf,
+    /// Managed stream (TCP/UDP) config directory. Loaded by Angie only when the
+    /// `stream {}` block is active in angie.conf (see the enable-streams flow).
+    #[serde(default = "default_stream_d_dir")]
+    pub stream_d_dir: PathBuf,
     /// Base config used to build the staging validation conf from M1.
     #[serde(default = "default_angie_conf")]
     #[allow(dead_code)]
@@ -62,6 +66,7 @@ impl Default for AngieConfig {
         Self {
             bin: default_angie_bin(),
             http_d_dir: default_http_d_dir(),
+            stream_d_dir: default_stream_d_dir(),
             angie_conf: default_angie_conf(),
             status_api_url: default_status_api_url(),
             snippets_dir: default_snippets_dir(),
@@ -91,6 +96,9 @@ fn default_angie_bin() -> PathBuf {
 }
 fn default_http_d_dir() -> PathBuf {
     "/etc/angie/http.d".into()
+}
+fn default_stream_d_dir() -> PathBuf {
+    "/etc/angie/stream.d".into()
 }
 fn default_angie_conf() -> PathBuf {
     "/etc/angie/angie.conf".into()

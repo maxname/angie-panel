@@ -1,0 +1,27 @@
+# angie-panel-enable-streams.service
+#
+# ============================ PRIVILEGED TRUST BOUNDARY =====================
+# A third root helper unit, on the same boundary as -configtest / -apply. The
+# panel starts it via D-Bus StartUnit; 10-angie-panel.rules authorizes exactly
+# this unit name with verb "start" and nothing else.
+#
+# ExecStart is intentionally FIXED and takes NO panel-influenced arguments.
+# NEVER add arguments, templating ("@" instances), EnvironmentFile, or anything
+# the panel process could influence — that would become code execution as root.
+# ============================================================================
+#
+# enable-streams = one-time activation of Angie's `stream {}` context: it
+# idempotently edits /etc/angie/angie.conf to `include /etc/angie/stream.d/*.conf`,
+# validates with `angie -t`, reloads, and RESTORES the original angie.conf if the
+# edit fails to validate. Result report: /var/lib/angie-panel/enable-streams-result.json.
+
+[Unit]
+Description=Angie Panel root helper — enable the Angie stream {} context (one-time)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/angie-panel helper enable-streams
+
+# No [Install] section on purpose: started on demand only — by the panel over
+# D-Bus, or manually by root (systemctl start angie-panel-enable-streams.service).

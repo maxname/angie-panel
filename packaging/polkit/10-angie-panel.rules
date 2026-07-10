@@ -5,7 +5,7 @@
  * Requires polkit >= 0.106 (JS rules) => Debian 12+.
  *
  * Grants the system user "angie-panel" exactly ONE capability: starting the
- * two fixed root helper units over D-Bus (org.freedesktop.systemd1
+ * three fixed root helper units over D-Bus (org.freedesktop.systemd1
  * StartUnit). The units have hardcoded ExecStart lines, so the panel cannot
  * influence what runs as root — only *whether* it runs.
  *
@@ -23,7 +23,8 @@ polkit.addRule(function(action, subject) {
         action.lookup("verb") === "start") {
         var unit = action.lookup("unit");
         if (unit === "angie-panel-configtest.service" ||
-            unit === "angie-panel-apply.service") {
+            unit === "angie-panel-apply.service" ||
+            unit === "angie-panel-enable-streams.service") {
             return polkit.Result.YES;
         }
     }

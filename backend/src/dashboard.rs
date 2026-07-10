@@ -58,7 +58,7 @@ pub async fn get_dashboard(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<Value>> {
     // Fetch every /status subtree + the local view concurrently.
-    let (angie, connections, server_zones, upstreams, acme_clients, hosts, certs, preview) = tokio::join!(
+    let (angie, connections, server_zones, upstreams, acme_clients, hosts, certs, streams, preview) = tokio::join!(
         fetch_status(&state, "angie"),
         fetch_status(&state, "connections"),
         fetch_status(&state, "http/server_zones/"),
@@ -66,11 +66,13 @@ pub async fn get_dashboard(
         fetch_status(&state, "http/acme_clients/"),
         repo::list_hosts(&state.db),
         repo::list_certs(&state.db),
+        repo::list_streams(&state.db),
         settings::build_fileset(&state),
     );
 
     let hosts = hosts?;
     let certs = certs?;
+    let streams = streams?;
     let up = angie.is_some();
 
     // --- angie summary ---
@@ -171,10 +173,19 @@ pub async fn get_dashboard(
             "message":"There are unapplied changes"}));
     }
 
+    // --- streams (TCP/UDP forwarding) ---
+    let stream_ctx_active = crate::streams::context_active(&state);
+    let enabled_streams = streams.iter().filter(|s| s.enabled).count();
+    if enabled_streams > 0 && !stream_ctx_active {
+        alerts.push(json!({"severity":"warning","code":"stream_context_off",
+            "message":"TCP/UDP streams are configured but the Angie stream context is off; enable it before applying"}));
+    }
+
     Ok(Json(json!({
         "angie": angie_summary,
         "hosts": host_rows,
         "certificates": cert_rows,
+        "streams": { "configured": streams.len(), "enabled": enabled_streams, "context_active": stream_ctx_active },
         "drift": { "detected": has_drift, "foreign_files": foreign },
         "pending_changes": pending,
         "alerts": alerts,

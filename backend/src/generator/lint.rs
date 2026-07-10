@@ -50,10 +50,12 @@ struct Statement {
 pub fn check_fileset(files: &crate::generator::FileSet, policy: &LintPolicy) -> Vec<LintViolation> {
     let mut violations = Vec::new();
     for (name, body) in files {
-        // Only *.conf files are loaded by Angie (`include *.conf`); other
-        // managed files (e.g. `access-<id>.htpasswd`) are data, not directives,
-        // and must not be parsed as config.
-        if !name.ends_with(".conf") {
+        // Only http.d *.conf files are checked here. Skip: non-.conf managed
+        // data (e.g. `access-<id>.htpasswd`), and stream.d configs (a separate
+        // context whose directives the http-oriented deny-list would
+        // mis-analyze — stream values are strictly model-validated with no user
+        // free-text, so there is nothing to allow-list at the output stage).
+        if !name.ends_with(".conf") || name.starts_with(crate::generator::STREAM_PREFIX) {
             continue;
         }
         check_file(name, body, policy, &mut violations);

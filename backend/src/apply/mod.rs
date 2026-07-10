@@ -58,11 +58,19 @@ use crate::generator::FileSet;
 // ----------------------------------------------------------- panel-side API
 // (unprivileged; writes only under data_dir)
 
-/// Preview what applying `staged` would do to the live `http_d_dir`: per-file
+/// Preview what applying `staged` would do to the live dirs: per-file
 /// Added/Modified/Removed/Unchanged, unified diffs, foreign-file report, and
-/// drift flags. Pure read of the live directory — safe for the panel user.
+/// drift flags. Splits `staged` into http.d and stream.d and diffs both. Pure
+/// read of the live directories — safe for the panel user.
 pub fn preview(cfg: &PanelConfig, staged: &FileSet) -> anyhow::Result<DiffReport> {
-    diff::diff(&cfg.angie.http_d_dir, staged)
+    let (http, stream) = stage::split_fileset(staged);
+    let mut report = diff::diff(&cfg.angie.http_d_dir, &http)?;
+    if !stream.is_empty() {
+        if let Ok(sd) = diff::diff(&cfg.angie.stream_d_dir, &stream) {
+            pipeline::merge_stream_diff(&mut report, sd);
+        }
+    }
+    Ok(report)
 }
 
 /// Build the [`LintPolicy`] from panel config (shared by the panel pre-check and

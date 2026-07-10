@@ -71,18 +71,45 @@ pub struct ApplyCtx<'a> {
 pub async fn run_apply(ctx: &ApplyCtx<'_>) -> anyhow::Result<ApplyReport> {
     let data_dir = &ctx.cfg.data_dir;
     let http_d = ctx.cfg.angie.http_d_dir.clone();
+    let stream_d = ctx.cfg.angie.stream_d_dir.clone();
     let staging = StagingPaths::new(data_dir);
 
-    // Load the staged, header-wrapped fileset the panel produced.
+    // Load the staged, header-wrapped filesets the panel produced (http.d and,
+    // if streams are managed, stream.d).
     let staged = load_staged_fileset(&staging.http_d)?;
+    let staged_stream = load_staged_fileset(&staging.stream_d).unwrap_or_default();
+    let has_streams = !staged_stream.is_empty();
+    // Touch stream.d when the user has streams OR the dir already exists (so a
+    // previously-managed stream file gets cleaned up when the last stream is
+    // removed). When neither holds, stream.d is left completely alone.
+    let manage_stream = has_streams || stream_d.is_dir();
     let synthetic_base = !ctx.cfg.angie.angie_conf.exists();
 
-    // Preview diff (drives the report + apply_history).
-    let diff_report = diff(&http_d, &staged).unwrap_or_else(|_| empty_diff());
+    // Preview diff (drives the report + apply_history). Combine both dirs;
+    // stream files are re-prefixed so the UI can tell them apart.
+    let mut diff_report = diff(&http_d, &staged).unwrap_or_else(|_| empty_diff());
+    if manage_stream {
+        if let Ok(sd) = diff(&stream_d, &staged_stream) {
+            merge_stream_diff(&mut diff_report, sd);
+        }
+    }
 
     let mut report = base_report(synthetic_base).with_diff(&diff_report);
 
-    // (a) Re-lint the staged fileset — abort on any violation.
+    // If the user has streams but the LIVE angie.conf hasn't activated the
+    // stream context, applying would silently do nothing (Angie ignores
+    // stream.d). Fail early with a clear pointer to the enable-streams step.
+    if has_streams && !stream_context_active(&ctx.cfg.angie.angie_conf) {
+        report.result = ApplyResult::Error;
+        report.summary = "streams are configured but the Angie stream context is not enabled; \
+             run the 'Enable streams' action first"
+            .into();
+        write_report(data_dir, &report)?;
+        return Ok(report);
+    }
+
+    // (a) Re-lint the staged fileset — abort on any violation. (Stream files
+    // are model-validated and skipped by the linter — see lint::check_fileset.)
     let violations = (ctx.lint)(&staged, &ctx.lint_policy);
     if !violations.is_empty() {
         report.result = ApplyResult::LintFailed;
@@ -106,10 +133,19 @@ pub async fn run_apply(ctx: &ApplyCtx<'_>) -> anyhow::Result<ApplyReport> {
     // From here on we mutate /etc — mark in-progress for crash recovery, and
     // snapshot first so any later failure can roll back.
     set_in_progress(data_dir, true)?;
-    let snapshot = snapshot_now(data_dir, &http_d)?;
+    let snapshot = snapshot_now(data_dir, &http_d, &stream_d, manage_stream)?;
 
     // Run the swap+reload, rolling back on any failure after the swap.
-    let outcome = swap_and_reload(ctx, &staged, &http_d, &snapshot).await;
+    let outcome = swap_and_reload(
+        ctx,
+        &staged,
+        &staged_stream,
+        &http_d,
+        &stream_d,
+        manage_stream,
+        &snapshot,
+    )
+    .await;
     match outcome {
         Ok(()) => {
             report.result = ApplyResult::Ok;
@@ -135,17 +171,27 @@ pub async fn run_apply(ctx: &ApplyCtx<'_>) -> anyhow::Result<ApplyReport> {
 
 /// Steps d-g. On any failure after the swap starts, rolls back from `snapshot`,
 /// reloads, and returns a populated `Failure`.
+#[allow(clippy::too_many_arguments)]
 async fn swap_and_reload(
     ctx: &ApplyCtx<'_>,
-    staged: &FileSet,
+    staged_http: &FileSet,
+    staged_stream: &FileSet,
     http_d: &Path,
-    snapshot: &Manifest,
+    stream_d: &Path,
+    manage_stream: bool,
+    snapshot: &Snapshot,
 ) -> Result<(), Failure> {
-    // (d) Atomic sync into the live http.d.
-    if let Err(e) = sync_into_live(staged, http_d) {
+    // (d) Atomic sync into the live http.d (+ stream.d when managed).
+    let synced = sync_into_live(staged_http, http_d).and_then(|_| {
+        if manage_stream {
+            sync_into_live(staged_stream, stream_d)
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(e) = synced {
         return Err(rollback(
             ctx,
-            http_d,
             snapshot,
             ApplyResult::Error,
             format!("sync failed: {e:#}"),
@@ -161,7 +207,6 @@ async fn swap_and_reload(
         let fe = map_stderr_to_files(&stderr, http_d, http_d);
         return Err(rollback(
             ctx,
-            http_d,
             snapshot,
             ApplyResult::ValidationFailed,
             "post-swap angie -t failed; rolled back".into(),
@@ -178,7 +223,6 @@ async fn swap_and_reload(
         let tail = ctx.runner.error_log_tail().await;
         return Err(rollback_with_log(
             ctx,
-            http_d,
             snapshot,
             ApplyResult::ReloadFailed,
             format!("reload failed: {msg}; rolled back"),
@@ -190,7 +234,6 @@ async fn swap_and_reload(
         let tail = ctx.runner.error_log_tail().await;
         return Err(rollback_with_log(
             ctx,
-            http_d,
             snapshot,
             ApplyResult::ReloadFailed,
             "reload did not take effect within timeout (generation did not \
@@ -240,14 +283,13 @@ struct Failure {
 #[allow(clippy::too_many_arguments)]
 async fn rollback(
     ctx: &ApplyCtx<'_>,
-    http_d: &Path,
-    snapshot: &Manifest,
+    snapshot: &Snapshot,
     result: ApplyResult,
     summary: String,
     stderr: String,
     file_errors: Vec<FileError>,
 ) -> Failure {
-    let rb = do_rollback(ctx, http_d, snapshot).await;
+    let rb = do_rollback(ctx, snapshot).await;
     Failure {
         result,
         summary,
@@ -260,13 +302,12 @@ async fn rollback(
 
 async fn rollback_with_log(
     ctx: &ApplyCtx<'_>,
-    http_d: &Path,
-    snapshot: &Manifest,
+    snapshot: &Snapshot,
     result: ApplyResult,
     summary: String,
     error_log_tail: String,
 ) -> Failure {
-    let rb = do_rollback(ctx, http_d, snapshot).await;
+    let rb = do_rollback(ctx, snapshot).await;
     Failure {
         result,
         summary,
@@ -279,15 +320,15 @@ async fn rollback_with_log(
 
 /// Restore the live http.d to `snapshot`, then reload so Angie serves the known
 /// good config again.
-async fn do_rollback(ctx: &ApplyCtx<'_>, http_d: &Path, snapshot: &Manifest) -> RollbackOutcome {
-    match snapshot.restore_into(http_d) {
-        Ok(actions) => {
+async fn do_rollback(ctx: &ApplyCtx<'_>, snapshot: &Snapshot) -> RollbackOutcome {
+    match snapshot.restore() {
+        Ok(count) => {
             let (reloaded, msg) = ctx.runner.reload().await;
             RollbackOutcome {
                 attempted: true,
                 ok: reloaded,
                 detail: if reloaded {
-                    format!("restored {} file action(s), reloaded", actions.len())
+                    format!("restored {count} file action(s), reloaded")
                 } else {
                     format!("restored files but reload failed: {msg}")
                 },
@@ -329,23 +370,59 @@ fn sync_into_live(staged: &FileSet, http_d: &Path) -> anyhow::Result<()> {
 
 // --------------------------------------------------------------- snapshotting
 
-/// Capture the live http.d into `<data_dir>/backups/<ts>/manifest.json`,
-/// rotating to keep the newest [`BACKUP_KEEP`].
-fn snapshot_now(data_dir: &Path, http_d: &Path) -> anyhow::Result<Manifest> {
+/// A rollback snapshot covering both managed directories (http.d always;
+/// stream.d only when streams are managed). Restoring reverts both.
+pub struct Snapshot {
+    http: Manifest,
+    http_dir: PathBuf,
+    stream: Option<Manifest>,
+    stream_dir: PathBuf,
+}
+
+impl Snapshot {
+    fn restore(&self) -> anyhow::Result<usize> {
+        let mut n = self.http.restore_into(&self.http_dir)?.len();
+        if let Some(s) = &self.stream {
+            n += s.restore_into(&self.stream_dir)?.len();
+        }
+        Ok(n)
+    }
+}
+
+/// Capture the live http.d (+ stream.d when relevant) into
+/// `<data_dir>/backups/<ts>/`, rotating to keep the newest [`BACKUP_KEEP`].
+fn snapshot_now(
+    data_dir: &Path,
+    http_d: &Path,
+    stream_d: &Path,
+    include_stream: bool,
+) -> anyhow::Result<Snapshot> {
     let ts = now_epoch();
     let backups = data_dir.join("backups");
     let dir = backups.join(ts.to_string());
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("creating backup dir {}", dir.display()))?;
-    let manifest = Manifest::capture(http_d, ts)?;
-    atomic::write_in_dir(
-        &dir,
-        "manifest.json",
-        manifest.to_json()?.as_bytes(),
-        CONF_MODE,
-    )?;
+    let http = Manifest::capture(http_d, ts)?;
+    atomic::write_in_dir(&dir, "manifest.json", http.to_json()?.as_bytes(), CONF_MODE)?;
+    let stream = if include_stream {
+        let m = Manifest::capture(stream_d, ts)?;
+        atomic::write_in_dir(
+            &dir,
+            "manifest-stream.json",
+            m.to_json()?.as_bytes(),
+            CONF_MODE,
+        )?;
+        Some(m)
+    } else {
+        None
+    };
     rotate_backups(&backups, BACKUP_KEEP);
-    Ok(manifest)
+    Ok(Snapshot {
+        http,
+        http_dir: http_d.to_path_buf(),
+        stream,
+        stream_dir: stream_d.to_path_buf(),
+    })
 }
 
 /// Keep the newest `keep` backup dirs (by name — timestamps sort lexically for
@@ -370,21 +447,29 @@ fn rotate_backups(backups: &Path, keep: usize) {
     }
 }
 
-/// Latest snapshot manifest, if any (newest by timestamp dir name).
-pub fn latest_snapshot(data_dir: &Path) -> Option<Manifest> {
+/// Latest snapshot (newest backup dir), covering http.d and — if the backup
+/// captured it — stream.d, bound to the given live dirs for restoration.
+pub fn latest_snapshot(data_dir: &Path, http_d: &Path, stream_d: &Path) -> Option<Snapshot> {
     let backups = data_dir.join("backups");
     let mut dirs: Vec<(i64, PathBuf)> = std::fs::read_dir(&backups)
         .ok()?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let ts: i64 = e.file_name().to_string_lossy().parse().ok()?;
-            Some((ts, e.path().join("manifest.json")))
+            Some((ts, e.path()))
         })
-        .filter(|(_, p)| p.exists())
+        .filter(|(_, p)| p.join("manifest.json").exists())
         .collect();
     dirs.sort_by_key(|(ts, _)| *ts);
-    let (_, path) = dirs.pop()?;
-    Manifest::from_json_file(&path).ok()
+    let (_, dir) = dirs.pop()?;
+    let http = Manifest::from_json_file(&dir.join("manifest.json")).ok()?;
+    let stream = Manifest::from_json_file(&dir.join("manifest-stream.json")).ok();
+    Some(Snapshot {
+        http,
+        http_dir: http_d.to_path_buf(),
+        stream,
+        stream_dir: stream_d.to_path_buf(),
+    })
 }
 
 // ----------------------------------------------------- stderr → file mapping
@@ -445,6 +530,90 @@ fn extract_location(
 
 // --------------------------------------------------------------- misc helpers
 
+/// Whether the LIVE angie.conf has an ACTIVE (uncommented) include of stream.d,
+/// i.e. Angie will actually load our stream configs. Missing/unreadable
+/// angie.conf (dev) counts as active so off-device staging isn't blocked.
+pub fn stream_context_active(angie_conf: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(angie_conf) else {
+        return true;
+    };
+    stream_include_active(&text)
+}
+
+fn stream_include_active(text: &str) -> bool {
+    text.lines().any(|l| {
+        let t = l.trim_start();
+        !t.starts_with('#') && t.starts_with("include") && l.contains("stream.d")
+    })
+}
+
+/// How the stream context was turned on, for a human-readable result message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEnable {
+    /// Already loading stream.d — nothing changed.
+    AlreadyActive,
+    /// Added our `include` into an existing active top-level `stream {` block.
+    Injected,
+    /// Appended a fresh managed `stream {}` block at top level.
+    Appended,
+}
+
+/// Idempotently rewrite `angie.conf` text so the `stream {}` context loads
+/// `<stream_d>/*.conf`. Three cases, in order:
+///
+/// 1. stream.d already actively included -> unchanged (`AlreadyActive`).
+/// 2. an active top-level `stream {` block exists -> inject the include just
+///    after its opening brace (`Injected`), so we don't create a duplicate
+///    `stream` directive (which Angie rejects).
+/// 3. otherwise -> append a fresh managed block (`Appended`).
+///
+/// The helper validates the result with `angie -t` and rolls back on failure,
+/// so this stays a pure, testable transform.
+pub fn enable_stream_context_text(text: &str, stream_d: &Path) -> (String, StreamEnable) {
+    use std::fmt::Write as _;
+    if stream_include_active(text) {
+        return (text.to_string(), StreamEnable::AlreadyActive);
+    }
+    let include = format!("    include {}/*.conf;", stream_d.display());
+
+    // Case 2: find an active (uncommented) top-level `stream {` opener.
+    let opener = text.lines().enumerate().find(|(_, l)| {
+        let t = l.trim_start();
+        !t.starts_with('#')
+            && (t == "stream" || t.starts_with("stream ") || t.starts_with("stream{"))
+    });
+    if let Some((idx, _)) = opener {
+        // Inject right after the line carrying the `{`. If the opener line has
+        // no brace (`stream` then `{` on the next line), inject after that.
+        let mut out = String::with_capacity(text.len() + include.len() + 2);
+        let mut inserted = false;
+        for (i, line) in text.lines().enumerate() {
+            out.push_str(line);
+            out.push('\n');
+            if !inserted && i >= idx && line.contains('{') {
+                out.push_str(&include);
+                out.push('\n');
+                inserted = true;
+            }
+        }
+        if inserted {
+            return (out, StreamEnable::Injected);
+        }
+        // No brace found after the opener (malformed) — fall through to append.
+    }
+
+    // Case 3: append a fresh managed block at top level.
+    let mut out = text.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    let _ = writeln!(
+        out,
+        "\n# angie-panel: TCP/UDP stream forwarding (managed)\nstream {{\n{include}\n}}"
+    );
+    (out, StreamEnable::Appended)
+}
+
 fn load_staged_fileset(staging_http_d: &Path) -> anyhow::Result<FileSet> {
     let mut set: FileSet = BTreeMap::new();
     for f in scan_dir(staging_http_d)? {
@@ -480,6 +649,24 @@ fn empty_diff() -> DiffReport {
         unchanged: 0,
         has_drift: false,
     }
+}
+
+/// Fold a stream.d diff into the main report, re-prefixing filenames with
+/// `stream.d/` so the UI can distinguish the two directories.
+pub(super) fn merge_stream_diff(into: &mut DiffReport, mut stream: DiffReport) {
+    for f in &mut stream.files {
+        f.name = format!("{}{}", crate::generator::STREAM_PREFIX, f.name);
+    }
+    for f in &mut stream.foreign {
+        f.name = format!("{}{}", crate::generator::STREAM_PREFIX, f.name);
+    }
+    into.files.append(&mut stream.files);
+    into.foreign.append(&mut stream.foreign);
+    into.added += stream.added;
+    into.modified += stream.modified;
+    into.removed += stream.removed;
+    into.unchanged += stream.unchanged;
+    into.has_drift = into.has_drift || stream.has_drift;
 }
 
 /// Write `apply-result.json` atomically (mode 0644 so the panel can read it).
@@ -542,13 +729,14 @@ pub async fn recover_if_interrupted(
         return Ok(RecoveryOutcome::RecoveredValid);
     }
 
-    // Invalid: restore the newest snapshot and reload.
-    let Some(snapshot) = latest_snapshot(data_dir) else {
+    // Invalid: restore the newest snapshot (http.d + stream.d) and reload.
+    let Some(snapshot) = latest_snapshot(data_dir, &cfg.angie.http_d_dir, &cfg.angie.stream_d_dir)
+    else {
         set_in_progress(data_dir, false)?;
         return Ok(RecoveryOutcome::NoSnapshot);
     };
     snapshot
-        .restore_into(&cfg.angie.http_d_dir)
+        .restore()
         .context("restoring latest snapshot during recovery")?;
     let (reloaded, msg) = runner.reload().await;
     set_in_progress(data_dir, false)?;
@@ -743,7 +931,12 @@ mod tests {
         assert_eq!(calls.iter().filter(|c| c.starts_with("test:")).count(), 2);
         assert!(calls.contains(&"reload".to_string()));
         // A snapshot was captured.
-        assert!(latest_snapshot(&fx.cfg.data_dir).is_some());
+        assert!(latest_snapshot(
+            &fx.cfg.data_dir,
+            &fx.cfg.angie.http_d_dir,
+            &fx.cfg.angie.stream_d_dir
+        )
+        .is_some());
         // Marker cleared.
         assert!(!apply_in_progress(&fx.cfg.data_dir));
     }
@@ -946,7 +1139,13 @@ mod tests {
             managed_body("good"),
         )
         .unwrap();
-        snapshot_now(&fx.cfg.data_dir, &fx.cfg.angie.http_d_dir).unwrap();
+        snapshot_now(
+            &fx.cfg.data_dir,
+            &fx.cfg.angie.http_d_dir,
+            &fx.cfg.angie.stream_d_dir,
+            false,
+        )
+        .unwrap();
         // ...then an interrupted apply left a broken live tree + marker.
         std::fs::write(
             fx.cfg.angie.http_d_dir.join("20-a.conf"),
@@ -1032,5 +1231,56 @@ mod tests {
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].file.as_deref(), Some("20-h.conf"));
         assert_eq!(mapped[0].line, Some(5));
+    }
+
+    // -------------------------------------------------- enable_stream_context
+
+    #[test]
+    fn enable_stream_appends_when_no_block() {
+        let base = "events {}\nhttp {\n    include http.d/*.conf;\n}\n";
+        let (out, how) = enable_stream_context_text(base, Path::new("/etc/angie/stream.d"));
+        assert_eq!(how, StreamEnable::Appended);
+        assert!(stream_include_active(&out), "result must be active");
+        assert!(out.contains("stream {"));
+        assert!(out.contains("include /etc/angie/stream.d/*.conf;"));
+        // The original http block is preserved.
+        assert!(out.contains("include http.d/*.conf;"));
+    }
+
+    #[test]
+    fn enable_stream_injects_into_existing_active_block() {
+        // An admin already has an active stream block (for something else).
+        // We must inject our include, NOT append a second `stream` directive.
+        let base = "events {}\nstream {\n    server { listen 12345; proxy_pass 10.0.0.9:80; }\n}\n";
+        let (out, how) = enable_stream_context_text(base, Path::new("/etc/angie/stream.d"));
+        assert_eq!(how, StreamEnable::Injected);
+        assert_eq!(
+            out.matches("stream {").count(),
+            1,
+            "no duplicate stream block"
+        );
+        assert!(stream_include_active(&out));
+        // Include lands right after the opening brace.
+        let inc = out.find("include /etc/angie/stream.d/*.conf;").unwrap();
+        let open = out.find("stream {").unwrap();
+        assert!(inc > open);
+    }
+
+    #[test]
+    fn enable_stream_is_idempotent_when_already_active() {
+        let base = "events {}\nstream {\n    include /etc/angie/stream.d/*.conf;\n}\n";
+        let (out, how) = enable_stream_context_text(base, Path::new("/etc/angie/stream.d"));
+        assert_eq!(how, StreamEnable::AlreadyActive);
+        assert_eq!(out, base, "unchanged when already active");
+    }
+
+    #[test]
+    fn enable_stream_ignores_commented_scaffold() {
+        // Angie ships the stream context COMMENTED OUT — that must not count as
+        // active, and we append a real one.
+        let base = "events {}\n#stream {\n#    include /etc/angie/stream.d/*.conf;\n#}\n";
+        let (out, how) = enable_stream_context_text(base, Path::new("/etc/angie/stream.d"));
+        assert_eq!(how, StreamEnable::Appended);
+        assert!(stream_include_active(&out));
     }
 }

@@ -477,6 +477,131 @@ async fn redirect_host_and_cross_type_domain_conflict() {
 }
 
 #[tokio::test]
+async fn stream_crud_port_conflict_and_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Create a TCP forward on :5432.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":5432,"forward_host":"192.168.1.20",
+                "forward_port":5432,"tcp":true,"udp":false})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let sid = body_json(res).await["id"].as_i64().unwrap();
+
+    // Another TCP stream on the SAME port → 409 port_conflict.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":5432,"forward_host":"10.0.0.9","forward_port":80})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(res).await["error"]["code"], json!("port_conflict"));
+
+    // Same port but UDP-only does NOT clash with the TCP stream → 200.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":5432,"forward_host":"10.0.0.53",
+                "forward_port":53,"tcp":false,"udp":true})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // A stream with neither protocol → 400 no_protocol.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":6000,"forward_host":"10.0.0.9",
+                "forward_port":80,"tcp":false,"udp":false})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(res).await["error"]["code"], json!("no_protocol"));
+
+    // Injection in forward_host is rejected up front.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":7000,
+                "forward_host":"1.2.3.4:80; } server { listen 25; ","forward_port":80})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Apply preview shows the enabled streams as stream.d/ files.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/apply/preview",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let files = body_json(res).await["diff"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        files.iter().any(|n| n.starts_with("stream.d/stream-")),
+        "expected a stream.d file in the preview, got {files:?}"
+    );
+
+    // Disable then delete the first stream.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/api/streams/{sid}/disable"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/streams/{sid}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn dashboard_degrades_without_angie() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

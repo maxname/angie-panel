@@ -195,7 +195,8 @@ pub async fn hosts_revision(db: &SqlitePool) -> anyhow::Result<i64> {
     let rev: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(m) FROM (SELECT MAX(updated_at) m FROM proxy_hosts \
          UNION ALL SELECT MAX(updated_at) FROM redirect_hosts \
-         UNION ALL SELECT MAX(updated_at) FROM dead_hosts)",
+         UNION ALL SELECT MAX(updated_at) FROM dead_hosts \
+         UNION ALL SELECT MAX(updated_at) FROM streams)",
     )
     .fetch_one(db)
     .await?;
@@ -472,6 +473,115 @@ pub async fn delete_dead(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
 
 pub async fn set_dead_enabled(db: &SqlitePool, id: i64, enabled: bool) -> anyhow::Result<bool> {
     let rows = sqlx::query("UPDATE dead_hosts SET enabled=?, updated_at=? WHERE id=?")
+        .bind(enabled as i64)
+        .bind(now_epoch())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+// ---------------------------------------------------------------- streams
+
+use crate::model::{Stream, StreamInput};
+
+#[derive(sqlx::FromRow)]
+struct StreamRow {
+    id: i64,
+    incoming_port: i64,
+    forward_host: String,
+    forward_port: i64,
+    tcp: i64,
+    udp: i64,
+    enabled: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl From<StreamRow> for Stream {
+    fn from(r: StreamRow) -> Self {
+        Stream {
+            id: r.id,
+            incoming_port: r.incoming_port as u16,
+            forward_host: r.forward_host,
+            forward_port: r.forward_port as u16,
+            tcp: r.tcp != 0,
+            udp: r.udp != 0,
+            enabled: r.enabled != 0,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+const STREAM_COLUMNS: &str =
+    "id, incoming_port, forward_host, forward_port, tcp, udp, enabled, created_at, updated_at";
+
+pub async fn list_streams(db: &SqlitePool) -> anyhow::Result<Vec<Stream>> {
+    let rows: Vec<StreamRow> =
+        sqlx::query_as(&format!("SELECT {STREAM_COLUMNS} FROM streams ORDER BY id"))
+            .fetch_all(db)
+            .await?;
+    Ok(rows.into_iter().map(Stream::from).collect())
+}
+
+pub async fn get_stream(db: &SqlitePool, id: i64) -> anyhow::Result<Option<Stream>> {
+    let row: Option<StreamRow> = sqlx::query_as(&format!(
+        "SELECT {STREAM_COLUMNS} FROM streams WHERE id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(Stream::from))
+}
+
+pub async fn insert_stream(db: &SqlitePool, i: &StreamInput) -> anyhow::Result<i64> {
+    let now = now_epoch();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO streams (incoming_port, forward_host, forward_port, tcp, udp, enabled, \
+         created_at, updated_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+    )
+    .bind(i.incoming_port as i64)
+    .bind(&i.forward_host)
+    .bind(i.forward_port as i64)
+    .bind(i.tcp as i64)
+    .bind(i.udp as i64)
+    .bind(i.enabled as i64)
+    .bind(now)
+    .bind(now)
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn update_stream(db: &SqlitePool, id: i64, i: &StreamInput) -> anyhow::Result<bool> {
+    let rows = sqlx::query(
+        "UPDATE streams SET incoming_port=?, forward_host=?, forward_port=?, tcp=?, udp=?, \
+         enabled=?, updated_at=? WHERE id=?",
+    )
+    .bind(i.incoming_port as i64)
+    .bind(&i.forward_host)
+    .bind(i.forward_port as i64)
+    .bind(i.tcp as i64)
+    .bind(i.udp as i64)
+    .bind(i.enabled as i64)
+    .bind(now_epoch())
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn delete_stream(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM streams WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn set_stream_enabled(db: &SqlitePool, id: i64, enabled: bool) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE streams SET enabled=?, updated_at=? WHERE id=?")
         .bind(enabled as i64)
         .bind(now_epoch())
         .bind(id)

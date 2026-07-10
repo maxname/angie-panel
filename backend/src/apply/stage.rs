@@ -6,6 +6,7 @@
 //! `angie -t` **before** touching `/etc` (the critical validate-before-swap fix
 //! from the review). See PLAN.md §2.2 step 1.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -18,6 +19,7 @@ use crate::generator::FileSet;
 
 pub const STAGING_DIR: &str = "staging";
 pub const STAGING_HTTP_D: &str = "http.d";
+pub const STAGING_STREAM_D: &str = "stream.d";
 pub const STAGING_TEST_CONF: &str = "angie-test.conf";
 
 /// Result of staging, returned to the caller and folded into the report.
@@ -41,6 +43,7 @@ pub struct StageResult {
 pub struct StagingPaths {
     pub root: PathBuf,
     pub http_d: PathBuf,
+    pub stream_d: PathBuf,
     pub test_conf: PathBuf,
 }
 
@@ -49,10 +52,26 @@ impl StagingPaths {
         let root = data_dir.join(STAGING_DIR);
         Self {
             http_d: root.join(STAGING_HTTP_D),
+            stream_d: root.join(STAGING_STREAM_D),
             test_conf: root.join(STAGING_TEST_CONF),
             root,
         }
     }
+}
+
+/// Split a FileSet into (http.d files, stream.d files). Stream keys carry the
+/// `stream.d/` prefix, which is stripped so the value is the bare filename.
+pub fn split_fileset(files: &FileSet) -> (FileSet, FileSet) {
+    let mut http = FileSet::new();
+    let mut stream = FileSet::new();
+    for (name, body) in files {
+        if let Some(bare) = name.strip_prefix(crate::generator::STREAM_PREFIX) {
+            stream.insert(bare.to_string(), body.clone());
+        } else {
+            http.insert(name.clone(), body.clone());
+        }
+    }
+    (http, stream)
 }
 
 /// Write `files` (already header-wrapped and linted) into the staging http.d
@@ -60,26 +79,25 @@ impl StagingPaths {
 /// staging run are removed so the staged set is exactly `files`.
 pub fn stage(files: &FileSet, data_dir: &Path, angie: &AngieConfig) -> anyhow::Result<StageResult> {
     let paths = StagingPaths::new(data_dir);
-    std::fs::create_dir_all(&paths.http_d)
-        .with_context(|| format!("creating staging dir {}", paths.http_d.display()))?;
+    let (http_files, stream_files) = split_fileset(files);
 
-    // Clear out any *.conf left from a previous staging run (managed or not —
-    // this is our own scratch dir, not /etc), then write the current set.
-    for entry in std::fs::read_dir(&paths.http_d)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".conf") || name.starts_with(atomic::TMP_PREFIX) {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
     let mut written = Vec::new();
-    for (name, body) in files {
-        atomic::write_in_dir(&paths.http_d, name, body.as_bytes(), CONF_MODE)
-            .with_context(|| format!("staging {name}"))?;
-        written.push(name.clone());
-    }
+    stage_dir(&paths.http_d, &http_files, &mut written)?;
+    // Prefix stream filenames in the report so the two dirs stay distinguishable.
+    let mut stream_written = Vec::new();
+    stage_dir(&paths.stream_d, &stream_files, &mut stream_written)?;
+    written.extend(
+        stream_written
+            .into_iter()
+            .map(|n| format!("{}{n}", crate::generator::STREAM_PREFIX)),
+    );
 
-    let (test_conf_body, synthetic_base) = build_test_conf(angie, &paths.http_d);
+    let (test_conf_body, synthetic_base) = build_test_conf(
+        angie,
+        &paths.http_d,
+        &paths.stream_d,
+        !stream_files.is_empty(),
+    );
     atomic::write_in_dir(
         &paths.root,
         STAGING_TEST_CONF,
@@ -97,22 +115,93 @@ pub fn stage(files: &FileSet, data_dir: &Path, angie: &AngieConfig) -> anyhow::R
     })
 }
 
+/// Write `files` into `dir` atomically, clearing stale *.conf from a previous
+/// staging run first (this is our own scratch dir, not /etc). Appends written
+/// names to `written`.
+fn stage_dir(dir: &Path, files: &FileSet, written: &mut Vec<String>) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("creating staging dir {}", dir.display()))?;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".conf") || name.starts_with(atomic::TMP_PREFIX) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    for (name, body) in files {
+        atomic::write_in_dir(dir, name, body.as_bytes(), CONF_MODE)
+            .with_context(|| format!("staging {name}"))?;
+        written.push(name.clone());
+    }
+    Ok(())
+}
+
 /// Build the `angie-test.conf` body. Prefer rewriting the real packaged
 /// `angie.conf`'s http.d include to point at the staging dir (validates against
-/// the true base); on failure to read it, fall back to a minimal synthetic base
-/// that just includes the staging http.d. Returns `(body, synthetic_base)`.
-fn build_test_conf(angie: &AngieConfig, staging_http_d: &Path) -> (String, bool) {
+/// the true base); on failure to read it, fall back to a minimal synthetic base.
+/// When `has_streams`, also point the stream include at the staging stream.d and
+/// ensure a `stream {}` block is active. Returns `(body, synthetic_base)`.
+fn build_test_conf(
+    angie: &AngieConfig,
+    staging_http_d: &Path,
+    staging_stream_d: &Path,
+    has_streams: bool,
+) -> (String, bool) {
     match std::fs::read_to_string(&angie.angie_conf) {
-        Ok(base) => (rewrite_http_d_include(&base, staging_http_d), false),
+        Ok(base) => {
+            let mut out = rewrite_http_d_include(&base, staging_http_d);
+            if has_streams {
+                out = ensure_stream_include(&out, staging_stream_d);
+            }
+            (out, false)
+        }
         Err(e) => {
             tracing::warn!(
                 path = %angie.angie_conf.display(),
                 error = %e,
                 "angie.conf unreadable; validating against a synthetic base"
             );
-            (synthetic_base(staging_http_d), true)
+            let mut out = synthetic_base(staging_http_d);
+            if has_streams {
+                let _ = writeln!(
+                    out,
+                    "stream {{\n    include {}/*.conf;\n}}",
+                    staging_stream_d.display()
+                );
+            }
+            (out, true)
         }
     }
+}
+
+/// Ensure the staging test-conf has an active `stream { include <staging>/*.conf; }`.
+/// The packaged angie.conf ships the stream block COMMENTED OUT, so we either
+/// uncomment+retarget it or append a fresh one. This only affects the throwaway
+/// staging conf; activating streams in the LIVE angie.conf is a separate,
+/// explicit step (the enable-streams helper).
+fn ensure_stream_include(base: &str, staging_stream_d: &Path) -> String {
+    let staged = staging_stream_d.display();
+    let mut out = String::with_capacity(base.len() + 128);
+    for line in base.lines() {
+        // Drop the packaged COMMENTED stream scaffolding (`#stream {`,
+        // `#    include .../stream.d/*.conf;`, `#}`) so we can append a clean
+        // active block. Only commented lines are dropped — never live config.
+        let commented = line.trim_start().starts_with('#');
+        let inner = line.trim_start().trim_start_matches('#').trim_start();
+        let is_scaffold = inner.starts_with("stream")
+            || inner == "}"
+            || (inner.starts_with("include") && line.contains("stream.d"));
+        if commented && is_scaffold {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    let _ = writeln!(
+        out,
+        "\n# angie-panel: staging stream context\nstream {{\n    include {staged}/*.conf;\n}}"
+    );
+    out
 }
 
 /// Rewrite every `include <...>/http.d/*.conf;` line in `base` so it points at

@@ -863,6 +863,57 @@ fn normalize_snippet(s: &str, allow_advanced_snippets: bool) -> Result<Option<St
     }
 }
 
+// ============================================================ streams (v2)
+
+/// A TCP/UDP port forward (v1: plain forwarding, no TLS termination — that
+/// would need stream-context ACME, a follow-up).
+#[derive(Debug, Clone, Serialize)]
+pub struct Stream {
+    pub id: i64,
+    pub incoming_port: u16,
+    pub forward_host: String,
+    pub forward_port: u16,
+    pub tcp: bool,
+    pub udp: bool,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StreamInput {
+    pub incoming_port: u16,
+    pub forward_host: String,
+    pub forward_port: u16,
+    #[serde(default = "default_true")]
+    pub tcp: bool,
+    #[serde(default)]
+    pub udp: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+pub fn validate_stream_input(
+    mut input: StreamInput,
+    upstream_policy: &UpstreamPolicy,
+) -> Result<StreamInput, ApiError> {
+    if input.incoming_port == 0 {
+        return Err(bad("invalid_port", "incoming port must be 1-65535"));
+    }
+    if input.forward_port == 0 {
+        return Err(bad("invalid_port", "forward port must be 1-65535"));
+    }
+    if !input.tcp && !input.udp {
+        return Err(bad(
+            "no_protocol",
+            "a stream must forward at least one of TCP or UDP",
+        ));
+    }
+    // Reuse the strict upstream validation (bare IP or hostname, SSRF guard).
+    input.forward_host = validate_forward_host(&input.forward_host, upstream_policy)?;
+    Ok(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

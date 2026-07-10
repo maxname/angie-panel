@@ -6,7 +6,9 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::model::{CustomLocation, DeadHost, ProxyHost, RedirectHost, RedirectScheme, Scheme};
+use crate::model::{
+    CustomLocation, DeadHost, ProxyHost, RedirectHost, RedirectScheme, Scheme, Stream,
+};
 
 // --------------------------------------------------------------- fixtures
 
@@ -78,6 +80,22 @@ fn input_acl(
         http_d_dir: PathBuf::from("/etc/angie/http.d"),
         redirect_hosts: vec![],
         dead_hosts: vec![],
+        streams: vec![],
+    }
+}
+
+/// A TCP-only stream forward. Callers flip tcp/udp/enabled as needed.
+fn base_stream(id: i64, incoming_port: u16, forward_host: &str, forward_port: u16) -> Stream {
+    Stream {
+        id,
+        incoming_port,
+        forward_host: forward_host.into(),
+        forward_port,
+        tcp: true,
+        udp: false,
+        enabled: true,
+        created_at: 0,
+        updated_at: 0,
     }
 }
 
@@ -217,6 +235,42 @@ fn golden_plain_http_host() {
     let (name, body) = only_host_file(&files);
     assert_eq!(name, "20-host-1-app-example-com.conf");
     assert_golden("20-host-plain-http.conf", body);
+}
+
+#[test]
+fn golden_streams_tcp_udp() {
+    let mut inp = input(vec![], vec![], settings(DefaultSite::NotFound, false));
+    inp.streams = vec![
+        // TCP-only forward (e.g. Postgres).
+        base_stream(1, 5432, "192.168.1.20", 5432),
+        // UDP-only forward (e.g. DNS).
+        {
+            let mut s = base_stream(2, 5353, "10.0.0.53", 53);
+            s.tcp = false;
+            s.udp = true;
+            s
+        },
+        // Both protocols on one port to a hostname upstream.
+        {
+            let mut s = base_stream(3, 8443, "nas.lan", 443);
+            s.udp = true;
+            s
+        },
+        // Disabled — must NOT be emitted.
+        {
+            let mut s = base_stream(4, 9999, "192.168.1.99", 9999);
+            s.enabled = false;
+            s
+        },
+    ];
+    let files = generate(&inp).unwrap();
+    assert!(
+        !files.contains_key("stream.d/stream-4.conf"),
+        "disabled stream must not be emitted"
+    );
+    assert_golden("stream-1-tcp.conf", &files["stream.d/stream-1.conf"]);
+    assert_golden("stream-2-udp.conf", &files["stream.d/stream-2.conf"]);
+    assert_golden("stream-3-tcp-udp.conf", &files["stream.d/stream-3.conf"]);
 }
 
 #[test]

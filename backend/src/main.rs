@@ -20,6 +20,7 @@ mod repo;
 mod security;
 mod settings;
 mod state;
+mod streams;
 mod system;
 mod systemd;
 
@@ -68,6 +69,8 @@ enum HelperMode {
     Configtest,
     /// Apply staged configuration (M1, not implemented yet)
     Apply,
+    /// Activate the Angie stream {} context in the live angie.conf (one-time)
+    EnableStreams,
 }
 
 #[tokio::main]
@@ -88,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Helper { mode } => match mode {
             HelperMode::Configtest => helper::configtest(&cfg).await,
             HelperMode::Apply => helper::apply(&cfg).await,
+            HelperMode::EnableStreams => helper::enable_streams(&cfg).await,
         },
         Command::ResetPassword => reset_password(cfg),
     }
