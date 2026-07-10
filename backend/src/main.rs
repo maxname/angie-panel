@@ -1,5 +1,6 @@
 mod api;
 mod apply;
+mod apply_api;
 mod assets;
 mod auth;
 mod config;
@@ -7,8 +8,11 @@ mod db;
 mod error;
 mod generator;
 mod helper;
+mod hosts;
 mod model;
+mod repo;
 mod security;
+mod settings;
 mod state;
 mod system;
 mod systemd;
@@ -108,6 +112,13 @@ async fn serve(cfg: config::PanelConfig, cfg_path: PathBuf) -> anyhow::Result<()
     let state = Arc::new(AppState::new(cfg, cfg_path, pool));
 
     auth::bootstrap_setup_token(&state).await?;
+
+    // Crash recovery (PLAN.md §2.2): if a prior apply was interrupted, restore
+    // the live config from the last snapshot when it no longer validates.
+    match apply::recover(&state.cfg).await {
+        Ok(outcome) => tracing::debug!(?outcome, "apply crash-recovery check"),
+        Err(e) => tracing::warn!(error = %e, "apply crash-recovery check failed"),
+    }
 
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind)

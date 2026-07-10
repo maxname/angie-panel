@@ -85,6 +85,164 @@ async fn body_json(res: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Build state with an already-created admin and return (app, session cookie).
+async fn authed_app(dir: &std::path::Path) -> (axum::Router, String) {
+    let http_d = dir.join("http.d");
+    std::fs::create_dir_all(&http_d).unwrap();
+    let cfg: config::PanelConfig = toml::from_str(&format!(
+        "bind_addr = \"127.0.0.1\"\ndata_dir = \"{}\"\n[angie]\nhttp_d_dir = \"{}\"",
+        dir.display(),
+        http_d.display()
+    ))
+    .unwrap();
+    let pool = db::connect(dir).await.unwrap();
+    let state = Arc::new(AppState::new(cfg, dir.join("test.toml"), pool));
+    let token = auth::write_setup_token(dir).unwrap();
+    let app = api::router(state);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/auth/setup",
+            Some(json!({"token": token, "email": "a@b.c", "password": "secret123"})),
+            None,
+        ))
+        .await
+        .unwrap();
+    let cookie = res
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    (app, cookie)
+}
+
+#[tokio::test]
+async fn hosts_crud_and_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Reject an injection attempt in forward_host (validation, not escaping).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains": ["app.example.com"],
+                "forward_scheme": "http",
+                "forward_host": "1.2.3.4; } location /x { root /; ",
+                "forward_port": 8080
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Create a valid host.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains": ["App.Example.com"],
+                "forward_scheme": "http",
+                "forward_host": "192.168.1.10",
+                "forward_port": 8123,
+                "websockets_upgrade": true
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let host = body_json(res).await;
+    let id = host["id"].as_i64().unwrap();
+    assert_eq!(host["domains"][0], json!("app.example.com")); // normalized
+
+    // Duplicate domain on another enabled host → 409.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains": ["app.example.com"],
+                "forward_scheme": "http",
+                "forward_host": "10.0.0.2",
+                "forward_port": 80
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Preview shows the new host file as Added.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/apply/preview",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let preview = body_json(res).await;
+    let files = preview["diff"]["files"]
+        .as_array()
+        .expect("diff.files array");
+    let host_file = format!("20-host-{id}-app-example-com.conf");
+    assert!(
+        files.iter().any(|f| f["name"] == json!(host_file)),
+        "preview should list {host_file}, got {files:?}"
+    );
+
+    // Disable → delete.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/api/hosts/{id}/disable"),
+            Some(json!({})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/hosts/{id}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/hosts/{id}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn full_auth_flow() {
     let dir = tempfile::tempdir().unwrap();

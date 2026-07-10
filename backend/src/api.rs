@@ -5,7 +5,7 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::state::AppState;
-use crate::{assets, auth, security, system};
+use crate::{apply_api, assets, auth, hosts, security, system};
 
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
@@ -18,6 +18,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/system/configtest",
             get(system::last_configtest).post(system::run_configtest),
+        )
+        .route("/hosts", get(hosts::list).post(hosts::create))
+        .route(
+            "/hosts/{id}",
+            get(hosts::get_one).put(hosts::update).delete(hosts::delete),
+        )
+        .route("/hosts/{id}/enable", post(hosts::enable))
+        .route("/hosts/{id}/disable", post(hosts::disable))
+        .route("/apply/preview", get(apply_api::preview))
+        .route("/apply", post(apply_api::apply_now))
+        .route("/apply/history", get(apply_api::history))
+        .route(
+            "/settings",
+            get(apply_api::get_settings).put(apply_api::put_settings),
         )
         .fallback(security::api_not_found);
 

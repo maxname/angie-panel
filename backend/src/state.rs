@@ -65,6 +65,9 @@ pub struct AppState {
     /// Set after the first configtest attempt through systemd (true = polkit
     /// authorized the unit start); None until then.
     pub polkit_ok: Mutex<Option<bool>>,
+    /// Serializes the apply pipeline (PLAN.md §2.2): a second apply while one
+    /// is running gets 409 "apply_in_progress" via try_lock.
+    pub apply_lock: tokio::sync::Mutex<()>,
     pub http_client: reqwest::Client,
 }
 
@@ -95,6 +98,7 @@ impl AppState {
             setup_limiter: RateLimiter::new(10, Duration::from_secs(15 * 60)),
             allowed_hostnames: allowed,
             polkit_ok: Mutex::new(None),
+            apply_lock: tokio::sync::Mutex::new(()),
             http_client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .build()
