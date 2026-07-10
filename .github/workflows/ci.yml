@@ -104,7 +104,7 @@ jobs:
           done
 
   shellcheck:
-    name: ShellCheck (packaging)
+    name: ShellCheck (packaging + e2e)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -112,12 +112,24 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      - name: shellcheck packaging scripts
+      - name: shellcheck shell scripts
         run: |
           shopt -s nullglob globstar
-          files=(packaging/**/*.sh)
+          files=(packaging/**/*.sh e2e/*.sh)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "No shell scripts under packaging/ yet — nothing to check."
+            echo "No shell scripts yet — nothing to check."
             exit 0
           fi
           shellcheck "${files[@]}"
+
+  acme-e2e:
+    name: ACME e2e (real Angie + pebble)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # ubuntu-latest ships Docker + the compose plugin. This proves the
+      # config structure the generator emits actually issues + serves a real
+      # certificate (PLAN.md §5) — the one M2 claim that needs a live Angie.
+      - name: Run the ACME end-to-end harness
+        run: ./e2e/run.sh

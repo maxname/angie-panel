@@ -1,0 +1,63 @@
+# ACME end-to-end harness: real Angie 1.11 issues a certificate from pebble
+# (Let's Encrypt's test ACME server) using the EXACT config structure the
+# angie-panel generator emits (acme_client + unix-socket collector block).
+#
+# Topology (static IPs so challtestsrv can resolve the test domain → angie):
+#   angie        10.30.0.10  — the reverse proxy under test
+#   pebble       10.30.0.20  — ACME server (directory at https://pebble:14000/dir)
+#   challtestsrv 10.30.0.30  — mock DNS: every A query → angie (10.30.0.10)
+#
+# pebble's validation authority (VA) connects to test.example.com:80, which
+# challtestsrv points at angie; angie's ACME module answers the http-01
+# challenge. This proves real issuance through our config.
+
+services:
+  challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:latest
+    # Serve DNS on the default :8053; every A query resolves to angie
+    # (10.30.0.10). `-defaultIPv6 ""` disables AAAA answers so pebble's VA does
+    # NOT prefer ::1 (the network is IPv4-only). Disable challtestsrv's own
+    # challenge responders — Angie answers http-01 itself (what we test).
+    command: -defaultIPv4 10.30.0.10 -defaultIPv6 "" -http01 "" -https01 "" -tlsalpn01 "" -management :8055
+    networks:
+      acme-net:
+        ipv4_address: 10.30.0.30
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: -config /test/config/pebble-config.json -dnsserver 10.30.0.30:8053
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"
+    volumes:
+      - ./pebble-config.json:/test/config/pebble-config.json:ro
+    networks:
+      acme-net:
+        ipv4_address: 10.30.0.20
+    depends_on:
+      - challtestsrv
+
+  angie:
+    build:
+      context: .
+      dockerfile: angie/Dockerfile
+    command: ["angie", "-g", "daemon off;"]
+    volumes:
+      - ./angie/angie.conf:/etc/angie/angie.conf:ro
+      - ./angie/http.d:/etc/angie/http.d:ro
+      - ./angie/host-https.conf:/tmp/host-https.conf:ro
+    tmpfs:
+      - /etc/angie/extra.d   # writable spot for the phase-2 serving block
+    ports:
+      - "8100:8100"   # status API, for the harness to observe issuance
+    networks:
+      acme-net:
+        ipv4_address: 10.30.0.10
+    depends_on:
+      - pebble
+
+networks:
+  acme-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.30.0.0/24
