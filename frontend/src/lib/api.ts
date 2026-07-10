@@ -78,6 +78,7 @@ export interface Host {
   hsts_subdomains: boolean
   trust_forwarded_proto: boolean
   certificate_id: number | null
+  access_list_id: number | null
   locations: Location[]
   advanced_snippet: string | null
   enabled: boolean
@@ -102,6 +103,7 @@ export interface HostInput {
   hsts_subdomains?: boolean
   trust_forwarded_proto?: boolean
   certificate_id?: number | null
+  access_list_id?: number | null
   locations?: Location[]
   advanced_snippet?: string | null
   enabled?: boolean
@@ -242,6 +244,47 @@ export interface CertPrecheck {
   challenge: string
   resolvers: string[]
   delegation_hints: DelegationHint[]
+}
+
+export type AccessListSatisfy = 'any' | 'all'
+
+export type AccessListDirective = 'allow' | 'deny'
+
+export interface AccessListUser {
+  username: string
+  /** The password hash is never exposed by the API. */
+  has_password: boolean
+}
+
+export interface AccessListClient {
+  directive: AccessListDirective
+  address: string
+}
+
+export interface AccessList {
+  id: number
+  name: string
+  satisfy: AccessListSatisfy
+  pass_auth: boolean
+  users: AccessListUser[]
+  clients: AccessListClient[]
+  /** Unix timestamp, seconds. */
+  created_at: number
+}
+
+export interface AccessListUserInput {
+  username: string
+  /** Omitted on update to keep the existing password unchanged. */
+  password?: string
+}
+
+/** AccessList without id/created_at — the create/update payload. */
+export interface AccessListInput {
+  name: string
+  satisfy?: AccessListSatisfy
+  pass_auth?: boolean
+  users: AccessListUserInput[]
+  clients: AccessListClient[]
 }
 
 // --- Live dashboard (M3) ---------------------------------------------------
@@ -481,6 +524,21 @@ export const api = {
 
   precheckCertificate: (id: number) =>
     request<CertPrecheck>('POST', `/api/certificates/${id}/precheck`),
+
+  listAccessLists: () =>
+    request<{ access_lists: AccessList[] }>('GET', '/api/access-lists'),
+
+  getAccessList: (id: number) =>
+    request<AccessList>('GET', `/api/access-lists/${id}`),
+
+  createAccessList: (body: AccessListInput) =>
+    request<AccessList>('POST', '/api/access-lists', body),
+
+  updateAccessList: (id: number, body: AccessListInput) =>
+    request<AccessList>('PUT', `/api/access-lists/${id}`, body),
+
+  deleteAccessList: (id: number) =>
+    request<OkResponse>('DELETE', `/api/access-lists/${id}`),
 
   exportConfig: () => request<unknown>('GET', '/api/export'),
 

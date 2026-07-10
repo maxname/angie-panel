@@ -15,12 +15,15 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-// The SSL tab loads the certificate picker on mount; answer that call so the
-// form can render without hitting the network.
+// The form loads the certificate and access-list pickers on mount; answer those
+// calls so it can render without hitting the network.
 function stubFetch(): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn((input: string) => {
     if (input === '/api/certificates') {
       return Promise.resolve(jsonResponse({ certificates: [] }))
+    }
+    if (input === '/api/access-lists') {
+      return Promise.resolve(jsonResponse({ access_lists: [] }))
     }
     return Promise.reject(new Error(`unexpected fetch ${input}`))
   })

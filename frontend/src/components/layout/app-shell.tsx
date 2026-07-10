@@ -4,6 +4,7 @@ import {
   Globe,
   Languages,
   LayoutDashboard,
+  ListChecks,
   LogOut,
   Moon,
   Rocket,
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { to: '/', labelKey: 'nav.dashboard', icon: LayoutDashboard, exact: true },
   { to: '/hosts', labelKey: 'nav.proxyHosts', icon: Globe, exact: false },
   { to: '/certificates', labelKey: 'nav.certificates', icon: ShieldCheck, exact: false },
+  { to: '/access-lists', labelKey: 'nav.accessLists', icon: ListChecks, exact: false },
   { to: '/apply', labelKey: 'nav.apply', icon: Rocket, exact: false },
   { to: '/settings', labelKey: 'nav.settings', icon: Settings, exact: false },
 ] as const

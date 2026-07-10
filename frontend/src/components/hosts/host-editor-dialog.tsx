@@ -57,6 +57,7 @@ interface FormState {
   hsts_subdomains: boolean
   trust_forwarded_proto: boolean
   certificate_id: number | null
+  access_list_id: number | null
   locations: LocationDraft[]
   advanced_snippet: string
 }
@@ -77,6 +78,7 @@ function initialState(host: Host | null): FormState {
       hsts_subdomains: false,
       trust_forwarded_proto: false,
       certificate_id: null,
+      access_list_id: null,
       locations: [],
       advanced_snippet: '',
     }
@@ -95,6 +97,7 @@ function initialState(host: Host | null): FormState {
     hsts_subdomains: host.hsts_subdomains,
     trust_forwarded_proto: host.trust_forwarded_proto,
     certificate_id: host.certificate_id,
+    access_list_id: host.access_list_id,
     locations: host.locations.map((location) => ({
       path: location.path,
       forward_scheme: location.forward_scheme,
@@ -155,6 +158,13 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
     queryFn: () => api.listCertificates(),
   })
   const certificates = certsQuery.data?.certificates ?? []
+
+  // Shares the ['access-lists'] key so lists created on that page appear here.
+  const accessListsQuery = useQuery({
+    queryKey: ['access-lists'],
+    queryFn: () => api.listAccessLists(),
+  })
+  const accessLists = accessListsQuery.data?.access_lists ?? []
 
   const [form, setForm] = useState<FormState>(() => initialState(host))
   const [domainDraft, setDomainDraft] = useState('')
@@ -252,6 +262,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       hsts_subdomains: form.hsts_subdomains,
       trust_forwarded_proto: form.trust_forwarded_proto,
       certificate_id: form.certificate_id,
+      access_list_id: form.access_list_id,
       locations,
       advanced_snippet:
         form.advanced_snippet.trim() === '' ? null : form.advanced_snippet,
@@ -383,6 +394,45 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
               checked={form.cache_assets}
               onChange={(checked) => patch({ cache_assets: checked })}
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="host-access-list">
+              {t('hosts.editor.accessList')}
+            </Label>
+            <Select
+              value={
+                form.access_list_id === null ? 'none' : String(form.access_list_id)
+              }
+              onValueChange={(value) =>
+                patch({
+                  access_list_id:
+                    value === 'none' ? null : Number.parseInt(value, 10),
+                })
+              }
+            >
+              <SelectTrigger id="host-access-list">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">
+                  {t('hosts.editor.accessListNone')}
+                </SelectItem>
+                {accessLists.map((list) => (
+                  <SelectItem key={list.id} value={String(list.id)}>
+                    {list.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {accessListsQuery.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                {t('hosts.editor.accessListLoadFailed')}
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {t('hosts.editor.accessListHelp')}
+            </p>
           </div>
         </TabsContent>
 

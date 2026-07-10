@@ -9,6 +9,7 @@ import {
 import { AppShell } from '@/components/layout/app-shell'
 import { RouterError, RouterPending } from '@/components/router-fallbacks'
 import { api } from '@/lib/api'
+import { AccessListsPage } from '@/pages/access-lists'
 import { ApplyPage } from '@/pages/apply'
 import { CertificatesPage } from '@/pages/certificates'
 import { DashboardPage } from '@/pages/dashboard'
@@ -82,6 +83,12 @@ const certificatesRoute = createRoute({
   component: CertificatesPage,
 })
 
+const accessListsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/access-lists',
+  component: AccessListsPage,
+})
+
 const applyRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/apply',
@@ -101,6 +108,7 @@ const routeTree = rootRoute.addChildren([
     dashboardRoute,
     hostsRoute,
     certificatesRoute,
+    accessListsRoute,
     applyRoute,
     settingsRoute,
   ]),

@@ -29,6 +29,7 @@ const sampleHost: Host = {
   hsts_subdomains: false,
   trust_forwarded_proto: false,
   certificate_id: null,
+  access_list_id: null,
   locations: [],
   advanced_snippet: null,
   enabled: true,
