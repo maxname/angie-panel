@@ -508,7 +508,10 @@ async fn stream_crud_port_conflict_and_preview() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(res).await["error"]["code"], json!("port_conflict"));
+    assert_eq!(
+        body_json(res).await["error"]["code"],
+        json!("port_conflict")
+    );
 
     // Same port but UDP-only does NOT clash with the TCP stream → 200.
     let res = app
