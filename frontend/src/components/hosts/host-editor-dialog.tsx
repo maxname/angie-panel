@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -56,6 +56,7 @@ interface FormState {
   hsts: boolean
   hsts_subdomains: boolean
   trust_forwarded_proto: boolean
+  certificate_id: number | null
   locations: LocationDraft[]
   advanced_snippet: string
 }
@@ -75,6 +76,7 @@ function initialState(host: Host | null): FormState {
       hsts: false,
       hsts_subdomains: false,
       trust_forwarded_proto: false,
+      certificate_id: null,
       locations: [],
       advanced_snippet: '',
     }
@@ -92,6 +94,7 @@ function initialState(host: Host | null): FormState {
     hsts: host.hsts,
     hsts_subdomains: host.hsts_subdomains,
     trust_forwarded_proto: host.trust_forwarded_proto,
+    certificate_id: host.certificate_id,
     locations: host.locations.map((location) => ({
       path: location.path,
       forward_scheme: location.forward_scheme,
@@ -145,6 +148,13 @@ interface HostEditorFormProps {
 export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+
+  // Kept fresh via the shared ['certificates'] key so newly created certs appear.
+  const certsQuery = useQuery({
+    queryKey: ['certificates'],
+    queryFn: () => api.listCertificates(),
+  })
+  const certificates = certsQuery.data?.certificates ?? []
 
   const [form, setForm] = useState<FormState>(() => initialState(host))
   const [domainDraft, setDomainDraft] = useState('')
@@ -241,7 +251,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       hsts: form.hsts,
       hsts_subdomains: form.hsts_subdomains,
       trust_forwarded_proto: form.trust_forwarded_proto,
-      certificate_id: null,
+      certificate_id: form.certificate_id,
       locations,
       advanced_snippet:
         form.advanced_snippet.trim() === '' ? null : form.advanced_snippet,
@@ -377,13 +387,45 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
         </TabsContent>
 
         <TabsContent value="ssl" className="space-y-4">
-          <Alert variant="info">
-            <AlertTitle>{t('hosts.editor.ssl.title')}</AlertTitle>
-            <AlertDescription>{t('hosts.editor.ssl.note')}</AlertDescription>
-          </Alert>
-          <p className="text-sm text-muted-foreground">
-            {t('hosts.editor.ssl.toggleNote')}
-          </p>
+          <div className="space-y-2">
+            <Label htmlFor="host-certificate">
+              {t('hosts.editor.ssl.certificate')}
+            </Label>
+            <Select
+              value={
+                form.certificate_id === null ? 'none' : String(form.certificate_id)
+              }
+              onValueChange={(value) =>
+                patch({
+                  certificate_id: value === 'none' ? null : Number.parseInt(value, 10),
+                })
+              }
+            >
+              <SelectTrigger id="host-certificate">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">
+                  {t('hosts.editor.ssl.certificateNone')}
+                </SelectItem>
+                {certificates.map((cert) => (
+                  <SelectItem key={cert.id} value={String(cert.id)}>
+                    {cert.name} — {cert.domains.join(', ')}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {certsQuery.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                {t('hosts.editor.ssl.loadFailed')}
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {form.certificate_id === null
+                ? t('hosts.editor.ssl.selectNote')
+                : t('hosts.editor.ssl.activeNote')}
+            </p>
+          </div>
           <div className="space-y-3 rounded-lg border p-3">
             <ToggleRow
               id="host-force-ssl"

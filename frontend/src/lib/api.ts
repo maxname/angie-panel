@@ -191,6 +191,59 @@ export interface SettingsResponse {
   effective: EffectiveSettings
 }
 
+export type AcmeChallenge = 'http' | 'dns' | 'alpn'
+
+export type AcmeKeyType = 'ecdsa' | 'rsa'
+
+/**
+ * A snapshot of Angie's ACME client status
+ * (/status/http/acme_clients/<name>). Every field is optional: the status API
+ * may be unreachable (the whole object is null) or report only part of this
+ * shape, so consumers must treat missing fields as unknown.
+ */
+export interface AcmeStatus {
+  state?: string
+  /** e.g. "valid" | "expired" | "missing" | … */
+  certificate?: string
+  details?: string
+  next_run?: string | number
+}
+
+export interface Cert {
+  id: number
+  name: string
+  domains: string[]
+  challenge: AcmeChallenge
+  key_type: AcmeKeyType
+  email: string | null
+  staging: boolean
+  /** Unix timestamp, seconds. */
+  created_at: number
+  status: AcmeStatus | null
+}
+
+/** Cert without id/created_at/status — the create payload. */
+export interface CertInput {
+  name: string
+  domains: string[]
+  challenge?: AcmeChallenge
+  key_type?: AcmeKeyType
+  email?: string | null
+  staging?: boolean
+}
+
+export interface DelegationHint {
+  domain: string
+  requires: string
+  records: string[]
+}
+
+export interface CertPrecheck {
+  challenge: string
+  resolvers: string[]
+  delegation_hints: DelegationHint[]
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -331,4 +384,19 @@ export const api = {
 
   updateSettings: (body: Record<string, string>) =>
     request<SettingsResponse>('PUT', '/api/settings', body),
+
+  listCertificates: () =>
+    request<{ certificates: Cert[] }>('GET', '/api/certificates'),
+
+  getCertificate: (id: number) =>
+    request<Cert>('GET', `/api/certificates/${id}`),
+
+  createCertificate: (body: CertInput) =>
+    request<Cert>('POST', '/api/certificates', body),
+
+  deleteCertificate: (id: number) =>
+    request<OkResponse>('DELETE', `/api/certificates/${id}`),
+
+  precheckCertificate: (id: number) =>
+    request<CertPrecheck>('POST', `/api/certificates/${id}/precheck`),
 }

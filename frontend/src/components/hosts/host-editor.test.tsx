@@ -1,20 +1,47 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import i18n from '@/i18n'
 import { isValidDomain } from '@/lib/domain'
 
 import { HostEditorForm } from './host-editor-dialog'
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+// The SSL tab loads the certificate picker on mount; answer that call so the
+// form can render without hitting the network.
+function stubFetch(): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn((input: string) => {
+    if (input === '/api/certificates') {
+      return Promise.resolve(jsonResponse({ certificates: [] }))
+    }
+    return Promise.reject(new Error(`unexpected fetch ${input}`))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 beforeAll(async () => {
   await i18n.changeLanguage('en')
 })
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 function renderForm() {
   const queryClient = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
   })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -33,8 +60,7 @@ describe('host editor validation', () => {
 
   it('blocks submit and shows an error when no domains are entered', async () => {
     const user = userEvent.setup()
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubFetch()
 
     renderForm()
 
@@ -43,14 +69,13 @@ describe('host editor validation', () => {
     expect(
       await screen.findByText('Add at least one domain name.'),
     ).toBeInTheDocument()
-    // Nothing was submitted to the server.
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    vi.unstubAllGlobals()
+    // Nothing was submitted to the server (only the certificate picker loaded).
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/hosts', expect.anything())
   })
 
   it('rejects an invalid domain when adding a chip', async () => {
     const user = userEvent.setup()
+    stubFetch()
     renderForm()
 
     await user.type(screen.getByLabelText('Domain names'), 'not valid')

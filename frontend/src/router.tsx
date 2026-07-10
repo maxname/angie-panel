@@ -10,10 +10,10 @@ import { AppShell } from '@/components/layout/app-shell'
 import { RouterError, RouterPending } from '@/components/router-fallbacks'
 import { api } from '@/lib/api'
 import { ApplyPage } from '@/pages/apply'
+import { CertificatesPage } from '@/pages/certificates'
 import { DashboardPage } from '@/pages/dashboard'
 import { HostsPage } from '@/pages/hosts'
 import { LoginPage } from '@/pages/login'
-import { PlaceholderPage } from '@/pages/placeholder'
 import { SettingsPage } from '@/pages/settings'
 import { SetupPage } from '@/pages/setup'
 
@@ -79,7 +79,7 @@ const hostsRoute = createRoute({
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/certificates',
-  component: () => <PlaceholderPage titleKey="nav.certificates" milestone="M2" />,
+  component: CertificatesPage,
 })
 
 const applyRoute = createRoute({

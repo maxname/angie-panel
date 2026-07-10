@@ -160,10 +160,12 @@ export const en = {
       trustForwardedProto: 'Trust X-Forwarded-Proto',
       saveFailed: 'Could not save proxy host',
       ssl: {
-        title: 'TLS certificates arrive in M2',
-        note: 'Hosts serve plain HTTP for now — no certificate picker yet.',
-        toggleNote:
-          'These options are saved now but only take effect once a certificate is attached (M2).',
+        certificate: 'Certificate',
+        certificateNone: 'None (HTTP only)',
+        loadFailed: 'Failed to load certificates',
+        selectNote: 'Select a certificate to enable HTTPS.',
+        activeNote:
+          'HTTPS activates once the certificate is issued; until then this host serves HTTP.',
       },
       locations: {
         empty: 'No custom locations. The whole host forwards to the target above.',
@@ -267,8 +269,100 @@ export const en = {
     },
     acme: {
       title: 'ACME',
-      description: 'Used for M2 certificates.',
+      description: 'Default contact email for ACME certificate accounts.',
       email: 'ACME account email',
+    },
+  },
+  certificates: {
+    title: 'Certificates',
+    add: 'Add certificate',
+    loadFailed: 'Failed to load certificates',
+    empty:
+      'No certificates yet. Add one, attach it to a proxy host, and Apply to start issuance.',
+    actionFailed: 'Action failed',
+    info: {
+      title: 'Certificates are issued by Angie itself (built-in ACME — no certbot)',
+      body: 'A certificate starts issuing after you attach it to a proxy host and Apply. HTTPS for that host activates once issuance completes.',
+    },
+    table: {
+      name: 'Name',
+      domains: 'Domains',
+      challenge: 'Challenge',
+      keyType: 'Key',
+      environment: 'Environment',
+      status: 'Status',
+      created: 'Created',
+      actions: 'Actions',
+    },
+    challenge: {
+      http: 'HTTP-01',
+      alpn: 'TLS-ALPN-01',
+      dns: 'DNS-01',
+    },
+    keyType: {
+      ecdsa: 'ECDSA',
+      rsa: 'RSA',
+    },
+    environment: {
+      staging: 'STAGING',
+      production: 'Production',
+    },
+    status: {
+      unknown: 'Unknown',
+      unknownHint: 'Angie status API unreachable',
+      issued: 'Issued',
+      pending: 'Pending',
+    },
+    actions: {
+      delete: 'Delete',
+    },
+    delete: {
+      title: 'Delete certificate?',
+      body: 'This removes the certificate “{{name}}”. It takes effect on the next Apply.',
+      failed: 'Could not delete certificate',
+    },
+    wizard: {
+      title: 'Add certificate',
+      description:
+        'Angie requests this certificate over ACME once you attach it to a proxy host and Apply.',
+      name: 'Name',
+      nameHelp:
+        'Identifier: lowercase letters, digits, underscore; used in the config and cannot be changed later.',
+      domains: 'Domains',
+      domainPlaceholder: 'example.com',
+      addDomain: 'Add',
+      removeDomain: 'Remove {{domain}}',
+      invalidDomain: 'That does not look like a valid domain name.',
+      duplicateDomain: 'That domain is already in the list.',
+      noName: 'Enter a name for the certificate.',
+      noDomains: 'Add at least one domain name.',
+      challenge: 'Validation method',
+      challengeHttp: 'HTTP-01 (default)',
+      challengeAlpn: 'TLS-ALPN-01 (port 443 only)',
+      challengeDns: 'DNS-01 (required for wildcards)',
+      wildcardNote: 'Wildcard domains require DNS-01.',
+      keyType: 'Key type',
+      email: 'Contact email (optional)',
+      emailPlaceholder: 'admin@example.com',
+      staging: 'Use staging environment',
+      stagingNote:
+        'Let’s Encrypt staging CA — certificates are UNTRUSTED; use only for testing.',
+      submit: 'Create certificate',
+      createFailed: 'Could not create certificate',
+      createdToastTitle: 'Certificate created',
+      createdToastBody:
+        'Attach it to a proxy host and Apply to start issuance.',
+    },
+    precheck: {
+      title: 'DNS-01 delegation required',
+      intro:
+        'Delegate _acme-challenge to this host so Angie can answer the DNS challenge. Wildcard certificates require DNS-01, and UDP/53 must be reachable from the internet.',
+      resolvers: 'Resolvers',
+      requires: 'Requires',
+      records: 'Records to create',
+      loading: 'Loading delegation hints…',
+      loadFailed: 'Could not load delegation hints',
+      done: 'Done',
     },
   },
 }

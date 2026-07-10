@@ -1,11 +1,8 @@
 {
   "version": "0.0.1",
   "configurations": [
-    {
-      "name": "angie-panel",
-      "runtimeExecutable": "bash",
+    { "name": "angie-panel", "runtimeExecutable": "bash",
       "runtimeArgs": ["-c", "cd backend && exec cargo run -q -- serve --config ../dev/angie-panel.toml"],
-      "port": 8080
-    }
+      "port": 8080 }
   ]
 }
