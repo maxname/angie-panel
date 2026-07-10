@@ -50,6 +50,12 @@ struct Statement {
 pub fn check_fileset(files: &crate::generator::FileSet, policy: &LintPolicy) -> Vec<LintViolation> {
     let mut violations = Vec::new();
     for (name, body) in files {
+        // Only *.conf files are loaded by Angie (`include *.conf`); other
+        // managed files (e.g. `access-<id>.htpasswd`) are data, not directives,
+        // and must not be parsed as config.
+        if !name.ends_with(".conf") {
+            continue;
+        }
         check_file(name, body, policy, &mut violations);
     }
     violations

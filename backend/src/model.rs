@@ -54,6 +54,7 @@ pub struct ProxyHost {
     pub hsts_subdomains: bool,
     pub trust_forwarded_proto: bool,
     pub certificate_id: Option<i64>,
+    pub access_list_id: Option<i64>,
     pub locations: Vec<CustomLocation>,
     pub advanced_snippet: Option<String>,
     pub enabled: bool,
@@ -86,6 +87,8 @@ pub struct ProxyHostInput {
     pub trust_forwarded_proto: bool,
     #[serde(default)]
     pub certificate_id: Option<i64>,
+    #[serde(default)]
+    pub access_list_id: Option<i64>,
     #[serde(default)]
     pub locations: Vec<CustomLocation>,
     #[serde(default)]
@@ -483,6 +486,204 @@ pub fn validate_cert_input(mut input: CertificateInput) -> Result<CertificateInp
     Ok(input)
 }
 
+// ============================================================ access lists
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Satisfy {
+    /// Access granted if EITHER auth or IP rules pass.
+    Any,
+    /// Access requires BOTH auth and IP rules to pass.
+    All,
+}
+
+impl Satisfy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Satisfy::Any => "any",
+            Satisfy::All => "all",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Directive {
+    Allow,
+    Deny,
+}
+
+impl Directive {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Directive::Allow => "allow",
+            Directive::Deny => "deny",
+        }
+    }
+}
+
+/// A basic-auth user as returned to the UI. The password hash is NEVER exposed.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccessListUser {
+    pub username: String,
+    /// True when a password is stored (so the UI can show "set" without the hash).
+    pub has_password: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccessListClient {
+    pub directive: Directive,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccessList {
+    pub id: i64,
+    pub name: String,
+    pub satisfy: Satisfy,
+    pub pass_auth: bool,
+    pub users: Vec<AccessListUser>,
+    pub clients: Vec<AccessListClient>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccessListUserInput {
+    pub username: String,
+    /// Absent on update = keep the existing password for this username.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccessListClientInput {
+    pub directive: Directive,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccessListInput {
+    pub name: String,
+    #[serde(default = "default_satisfy")]
+    pub satisfy: Satisfy,
+    #[serde(default)]
+    pub pass_auth: bool,
+    #[serde(default)]
+    pub users: Vec<AccessListUserInput>,
+    #[serde(default)]
+    pub clients: Vec<AccessListClientInput>,
+}
+
+fn default_satisfy() -> Satisfy {
+    Satisfy::All
+}
+
+pub const MAX_ACL_NAME_LEN: usize = 100;
+pub const MAX_ACL_USERS: usize = 200;
+pub const MAX_ACL_CLIENTS: usize = 200;
+/// bcrypt only hashes the first 72 bytes; reject longer to avoid silent truncation.
+pub const MAX_PASSWORD_LEN: usize = 72;
+
+/// Basic-auth username — goes into the htpasswd file as `username:hash`, so it
+/// must not contain `:`, whitespace, or control characters.
+pub fn validate_acl_username(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim();
+    let ok = !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'@'));
+    if !ok {
+        return Err(bad(
+            "invalid_username",
+            format!("'{raw}': username must be 1-64 chars of [A-Za-z0-9._@-]"),
+        ));
+    }
+    Ok(s.to_string())
+}
+
+/// An IP allow/deny target: a bare IP, an IP/CIDR, or the literal `all`. This
+/// value is interpolated into an `allow`/`deny` directive, so it is validated
+/// strictly (never escaped).
+pub fn validate_acl_address(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim();
+    if s == "all" {
+        return Ok(s.to_string());
+    }
+    let bad_addr = || {
+        bad(
+            "invalid_address",
+            format!("'{raw}' is not an IP, CIDR, or 'all'"),
+        )
+    };
+    match s.split_once('/') {
+        Some((ip, prefix)) => {
+            let addr: std::net::IpAddr = ip.parse().map_err(|_| bad_addr())?;
+            let max = if addr.is_ipv4() { 32 } else { 128 };
+            let p: u8 = prefix.parse().map_err(|_| bad_addr())?;
+            if p as u16 > max {
+                return Err(bad_addr());
+            }
+            // Re-render canonically from the parsed parts (no raw passthrough).
+            Ok(format!("{addr}/{p}"))
+        }
+        None => {
+            let addr: std::net::IpAddr = s.parse().map_err(|_| bad_addr())?;
+            Ok(addr.to_string())
+        }
+    }
+}
+
+/// Validate + normalize an access-list payload. Passwords are NOT hashed here
+/// (the handler does that, preserving existing hashes on update).
+pub fn validate_acl_input(mut input: AccessListInput) -> Result<AccessListInput, ApiError> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() || name.len() > MAX_ACL_NAME_LEN || name.contains(['\n', '\r']) {
+        return Err(bad("invalid_name", "invalid access-list name"));
+    }
+    input.name = name;
+
+    if input.users.len() > MAX_ACL_USERS {
+        return Err(bad("too_many_users", "too many users"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for u in &mut input.users {
+        u.username = validate_acl_username(&u.username)?;
+        if !seen.insert(u.username.clone()) {
+            return Err(bad(
+                "duplicate_username",
+                format!("duplicate username {}", u.username),
+            ));
+        }
+        if let Some(p) = &u.password {
+            if p.is_empty() {
+                u.password = None; // "keep existing" sentinel
+            } else if p.len() > MAX_PASSWORD_LEN {
+                return Err(bad(
+                    "password_too_long",
+                    format!("password must be at most {MAX_PASSWORD_LEN} bytes"),
+                ));
+            }
+        }
+    }
+
+    if input.clients.len() > MAX_ACL_CLIENTS {
+        return Err(bad("too_many_clients", "too many IP rules"));
+    }
+    for c in &mut input.clients {
+        c.address = validate_acl_address(&c.address)?;
+    }
+
+    // An access list with neither users nor clients is meaningless.
+    if input.users.is_empty() && input.clients.is_empty() {
+        return Err(bad(
+            "empty_access_list",
+            "an access list needs at least one user or one IP rule",
+        ));
+    }
+
+    Ok(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,6 +800,7 @@ mod tests {
             hsts_subdomains: false,
             trust_forwarded_proto: false,
             certificate_id: None,
+            access_list_id: None,
             locations: vec![],
             advanced_snippet: Some("client_max_body_size 100m;".into()),
             enabled: true,
@@ -649,5 +851,56 @@ mod tests {
 
         // Injection in a domain still dies here.
         assert!(validate_cert_input(cert_input("w", &["a.com; }"], Challenge::Http)).is_err());
+    }
+
+    #[test]
+    fn acl_address_strictness() {
+        assert_eq!(validate_acl_address("all").unwrap(), "all");
+        assert_eq!(validate_acl_address("192.168.1.1").unwrap(), "192.168.1.1");
+        assert_eq!(validate_acl_address("10.0.0.0/8").unwrap(), "10.0.0.0/8");
+        assert_eq!(
+            validate_acl_address("2a01:4f8::/32").unwrap(),
+            "2a01:4f8::/32"
+        );
+        for evil in [
+            "1.2.3.4; deny all",
+            "1.2.3.4 }",
+            "10.0.0.0/33",
+            "10.0.0.0/999",
+            "not-an-ip",
+            "$remote_addr",
+            "",
+        ] {
+            assert!(
+                validate_acl_address(evil).is_err(),
+                "should reject {evil:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn acl_username_rejects_htpasswd_delimiter() {
+        assert_eq!(validate_acl_username("bob.smith_1").unwrap(), "bob.smith_1");
+        for evil in ["a:b", "a b", "a\nb", "", "user;"] {
+            assert!(
+                validate_acl_username(evil).is_err(),
+                "should reject {evil:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn acl_input_requires_content() {
+        let empty = AccessListInput {
+            name: "office".into(),
+            satisfy: Satisfy::All,
+            pass_auth: false,
+            users: vec![],
+            clients: vec![],
+        };
+        assert_eq!(
+            validate_acl_input(empty).unwrap_err().code,
+            "empty_access_list"
+        );
     }
 }

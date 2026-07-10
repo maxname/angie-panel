@@ -29,6 +29,7 @@ struct HostRow {
     hsts_subdomains: i64,
     trust_forwarded_proto: i64,
     certificate_id: Option<i64>,
+    access_list_id: Option<i64>,
     locations: String,
     advanced_snippet: Option<String>,
     enabled: i64,
@@ -60,6 +61,7 @@ impl HostRow {
             hsts_subdomains: self.hsts_subdomains != 0,
             trust_forwarded_proto: self.trust_forwarded_proto != 0,
             certificate_id: self.certificate_id,
+            access_list_id: self.access_list_id,
             locations: serde_json::from_str(&self.locations).context("locations json")?,
             advanced_snippet: self.advanced_snippet,
             enabled: self.enabled != 0,
@@ -71,7 +73,7 @@ impl HostRow {
 
 const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_port, \
      websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
-     hsts_subdomains, trust_forwarded_proto, certificate_id, locations, \
+     hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
      advanced_snippet, enabled, created_at, updated_at";
 
 // -------------------------------------------------------------- host CRUD
@@ -109,9 +111,9 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO proxy_hosts (domains, forward_scheme, forward_host, forward_port, \
          websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
-         hsts_subdomains, trust_forwarded_proto, certificate_id, locations, \
+         hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
          advanced_snippet, enabled, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -126,6 +128,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(input.hsts_subdomains as i64)
     .bind(input.trust_forwarded_proto as i64)
     .bind(input.certificate_id)
+    .bind(input.access_list_id)
     .bind(locations_json(&input.locations))
     .bind(input.advanced_snippet.as_deref())
     .bind(input.enabled as i64)
@@ -141,8 +144,8 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     let rows = sqlx::query(
         "UPDATE proxy_hosts SET domains=?, forward_scheme=?, forward_host=?, forward_port=?, \
          websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, force_ssl=?, hsts=?, \
-         hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, locations=?, \
-         advanced_snippet=?, enabled=?, updated_at=? WHERE id=?",
+         hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
+         locations=?, advanced_snippet=?, enabled=?, updated_at=? WHERE id=?",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -157,6 +160,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(input.hsts_subdomains as i64)
     .bind(input.trust_forwarded_proto as i64)
     .bind(input.certificate_id)
+    .bind(input.access_list_id)
     .bind(locations_json(&input.locations))
     .bind(input.advanced_snippet.as_deref())
     .bind(input.enabled as i64)
@@ -333,9 +337,9 @@ pub async fn import_replace(
         sqlx::query(
             "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
              websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
-             hsts_subdomains, trust_forwarded_proto, certificate_id, locations, \
+             hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
              advanced_snippet, enabled, created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -351,6 +355,7 @@ pub async fn import_replace(
         .bind(h.hsts_subdomains as i64)
         .bind(h.trust_forwarded_proto as i64)
         .bind(h.certificate_id)
+        .bind(h.access_list_id)
         .bind(locations_json(&h.locations))
         .bind(h.advanced_snippet.as_deref())
         .bind(h.enabled as i64)
@@ -381,6 +386,220 @@ pub async fn hosts_using_cert(db: &SqlitePool, cert_id: i64) -> anyhow::Result<V
     Ok(hosts
         .into_iter()
         .filter(|h| h.certificate_id == Some(cert_id))
+        .map(|h| (h.id, h.domains.first().cloned().unwrap_or_default()))
+        .collect())
+}
+
+// ----------------------------------------------------------- access lists
+
+use crate::model::{
+    AccessList, AccessListClient, AccessListInput, AccessListUser, Directive, Satisfy,
+};
+
+fn satisfy_from_str(s: &str) -> Satisfy {
+    match s {
+        "any" => Satisfy::Any,
+        _ => Satisfy::All,
+    }
+}
+fn directive_from_str(s: &str) -> Directive {
+    match s {
+        "allow" => Directive::Allow,
+        _ => Directive::Deny,
+    }
+}
+
+/// A user with the bcrypt hash (internal — the API never exposes the hash).
+pub struct AclUserHash {
+    pub username: String,
+    pub password_hash: String,
+}
+
+pub async fn list_access_lists(db: &SqlitePool) -> anyhow::Result<Vec<AccessList>> {
+    let rows: Vec<(i64, String, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, name, satisfy, pass_auth, created_at FROM access_lists ORDER BY id",
+    )
+    .fetch_all(db)
+    .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (id, name, satisfy, pass_auth, created_at) in rows {
+        out.push(AccessList {
+            id,
+            name,
+            satisfy: satisfy_from_str(&satisfy),
+            pass_auth: pass_auth != 0,
+            users: acl_users(db, id).await?,
+            clients: acl_clients(db, id).await?,
+            created_at,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn get_access_list(db: &SqlitePool, id: i64) -> anyhow::Result<Option<AccessList>> {
+    let row: Option<(i64, String, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, name, satisfy, pass_auth, created_at FROM access_lists WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    let Some((id, name, satisfy, pass_auth, created_at)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(AccessList {
+        id,
+        name,
+        satisfy: satisfy_from_str(&satisfy),
+        pass_auth: pass_auth != 0,
+        users: acl_users(db, id).await?,
+        clients: acl_clients(db, id).await?,
+        created_at,
+    }))
+}
+
+async fn acl_users(db: &SqlitePool, list_id: i64) -> anyhow::Result<Vec<AccessListUser>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT username FROM access_list_users WHERE access_list_id = ? ORDER BY id",
+    )
+    .bind(list_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(username,)| AccessListUser {
+            username,
+            has_password: true,
+        })
+        .collect())
+}
+
+/// Full users with hashes — used when regenerating the htpasswd file and when
+/// preserving existing passwords on update.
+pub async fn acl_user_hashes(db: &SqlitePool, list_id: i64) -> anyhow::Result<Vec<AclUserHash>> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT username, password_hash FROM access_list_users WHERE access_list_id = ? ORDER BY id",
+    )
+    .bind(list_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(username, password_hash)| AclUserHash {
+            username,
+            password_hash,
+        })
+        .collect())
+}
+
+async fn acl_clients(db: &SqlitePool, list_id: i64) -> anyhow::Result<Vec<AccessListClient>> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT directive, address FROM access_list_clients WHERE access_list_id = ? ORDER BY id",
+    )
+    .bind(list_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(directive, address)| AccessListClient {
+            directive: directive_from_str(&directive),
+            address,
+        })
+        .collect())
+}
+
+/// Insert or update an access list and its users/clients in one transaction.
+/// `user_hashes` is the resolved final user set (passwords already hashed /
+/// preserved by the caller). Pass `id = None` to insert; returns the id.
+pub async fn upsert_access_list(
+    db: &SqlitePool,
+    id: Option<i64>,
+    input: &AccessListInput,
+    user_hashes: &[AclUserHash],
+) -> anyhow::Result<i64> {
+    let mut tx = db.begin().await?;
+    let list_id = match id {
+        Some(id) => {
+            sqlx::query(
+                "UPDATE access_lists SET name = ?, satisfy = ?, pass_auth = ? WHERE id = ?",
+            )
+            .bind(&input.name)
+            .bind(input.satisfy.as_str())
+            .bind(input.pass_auth as i64)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM access_list_users WHERE access_list_id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM access_list_clients WHERE access_list_id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            id
+        }
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO access_lists (name, satisfy, pass_auth, created_at) \
+             VALUES (?,?,?,?) RETURNING id",
+            )
+            .bind(&input.name)
+            .bind(input.satisfy.as_str())
+            .bind(input.pass_auth as i64)
+            .bind(now_epoch())
+            .fetch_one(&mut *tx)
+            .await?
+        }
+    };
+
+    for u in user_hashes {
+        sqlx::query(
+            "INSERT INTO access_list_users (access_list_id, username, password_hash) VALUES (?,?,?)",
+        )
+        .bind(list_id)
+        .bind(&u.username)
+        .bind(&u.password_hash)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for c in &input.clients {
+        sqlx::query(
+            "INSERT INTO access_list_clients (access_list_id, directive, address) VALUES (?,?,?)",
+        )
+        .bind(list_id)
+        .bind(c.directive.as_str())
+        .bind(&c.address)
+        .execute(&mut *tx)
+        .await?;
+    }
+    // Bump hosts referencing this list so the apply preview picks up the change.
+    sqlx::query("UPDATE proxy_hosts SET updated_at = ? WHERE access_list_id = ?")
+        .bind(now_epoch())
+        .bind(list_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(list_id)
+}
+
+pub async fn delete_access_list(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM access_lists WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+/// Hosts (id + first domain) referencing this access list.
+pub async fn hosts_using_access_list(
+    db: &SqlitePool,
+    list_id: i64,
+) -> anyhow::Result<Vec<(i64, String)>> {
+    let hosts = list_hosts(db).await?;
+    Ok(hosts
+        .into_iter()
+        .filter(|h| h.access_list_id == Some(list_id))
         .map(|h| (h.id, h.domains.first().cloned().unwrap_or_default()))
         .collect())
 }

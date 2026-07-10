@@ -43,6 +43,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         hsts_subdomains: false,
         trust_forwarded_proto: false,
         certificate_id: None,
+        access_list_id: None,
         locations: vec![],
         advanced_snippet: None,
         enabled: true,
@@ -56,6 +57,15 @@ fn input(
     certs: Vec<Certificate>,
     settings: EffectiveSettings,
 ) -> GeneratorInput {
+    input_acl(hosts, certs, settings, vec![])
+}
+
+fn input_acl(
+    hosts: Vec<ProxyHost>,
+    certs: Vec<Certificate>,
+    settings: EffectiveSettings,
+    access_lists: Vec<AccessList>,
+) -> GeneratorInput {
     GeneratorInput {
         hosts,
         settings,
@@ -64,6 +74,8 @@ fn input(
         public_dir: public_dir(),
         certificates: certs,
         acme_socket_dir: PathBuf::from("/run/angie-panel"),
+        access_lists,
+        http_d_dir: PathBuf::from("/etc/angie/http.d"),
     }
 }
 
@@ -296,6 +308,67 @@ fn golden_host_advanced_snippet() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-advanced-snippet.conf", body);
+}
+
+#[test]
+fn golden_host_with_access_list() {
+    // A host gated by an access list with both basic-auth users and IP rules
+    // (satisfy all), pass_auth off → emits auth_basic + allow/deny + deny all +
+    // Authorization strip, plus a separate access-<id>.htpasswd file.
+    let mut host = base_host(2, "admin.example.com");
+    host.access_list_id = Some(5);
+    let acl = AccessList {
+        id: 5,
+        satisfy: "all".into(),
+        pass_auth: false,
+        users: vec![
+            ("alice".into(), "$2b$10$abcdefghijklmnopqrstuv".into()),
+            ("bob".into(), "$2b$10$0123456789012345678901".into()),
+        ],
+        clients: vec![
+            ("allow".into(), "192.168.0.0/16".into()),
+            ("deny".into(), "192.168.5.5".into()),
+        ],
+    };
+    let files = generate(&input_acl(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+        vec![acl],
+    ))
+    .unwrap();
+    let host_body = files
+        .iter()
+        .find(|(k, _)| k.starts_with("20-host-"))
+        .unwrap()
+        .1;
+    assert_golden("20-host-access-list.conf", host_body);
+    // The htpasswd file is emitted with the users' hashes.
+    let htp = files.get("access-5.htpasswd").expect("htpasswd file");
+    assert_golden("access-5.htpasswd", htp);
+}
+
+#[test]
+fn access_list_htpasswd_only_when_referenced_and_has_users() {
+    // An access list with users but NOT referenced by any host → no file.
+    let acl = AccessList {
+        id: 9,
+        satisfy: "all".into(),
+        pass_auth: true,
+        users: vec![("x".into(), "$2b$10$zzzzzzzzzzzzzzzzzzzzzz".into())],
+        clients: vec![],
+    };
+    let files = generate(&input_acl(
+        vec![base_host(1, "a.example.com")],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+        vec![acl],
+    ))
+    .unwrap();
+    assert!(
+        !files.keys().any(|k| k.ends_with(".htpasswd")),
+        "unreferenced access list must not emit an htpasswd file"
+    );
 }
 
 // --------------------------------------------------------------- behaviour

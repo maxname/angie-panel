@@ -13,6 +13,7 @@ askama = "0.16.0"
 async-trait = "0.1"
 axum = "0.8"
 axum-extra = { version = "0.10", features = ["cookie"] }
+bcrypt = "0.15"
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.3"
 hex = "0.4"

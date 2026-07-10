@@ -156,6 +156,27 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         })
         .collect();
 
+    // Access lists, with the bcrypt hashes needed to write the htpasswd files.
+    let db_lists = repo::list_access_lists(&state.db).await?;
+    let mut access_lists = Vec::with_capacity(db_lists.len());
+    for l in &db_lists {
+        let hashes = repo::acl_user_hashes(&state.db, l.id).await?;
+        access_lists.push(generator::AccessList {
+            id: l.id,
+            satisfy: l.satisfy.as_str().to_string(),
+            pass_auth: l.pass_auth,
+            users: hashes
+                .into_iter()
+                .map(|u| (u.username, u.password_hash))
+                .collect(),
+            clients: l
+                .clients
+                .iter()
+                .map(|c| (c.directive.as_str().to_string(), c.address.clone()))
+                .collect(),
+        });
+    }
+
     Ok(GeneratorInput {
         hosts,
         settings,
@@ -164,6 +185,8 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         public_dir: state.cfg.public_dir(),
         certificates,
         acme_socket_dir: state.cfg.angie.acme_socket_dir.clone(),
+        access_lists,
+        http_d_dir: state.cfg.angie.http_d_dir.clone(),
     })
 }
 

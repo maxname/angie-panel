@@ -5,7 +5,9 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::state::AppState;
-use crate::{apply_api, assets, auth, certs, dashboard, export_import, hosts, security, system};
+use crate::{
+    access_lists, apply_api, assets, auth, certs, dashboard, export_import, hosts, security, system,
+};
 
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
@@ -32,6 +34,16 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(certs::get_one).delete(certs::delete),
         )
         .route("/certificates/{id}/precheck", post(certs::precheck))
+        .route(
+            "/access-lists",
+            get(access_lists::list).post(access_lists::create),
+        )
+        .route(
+            "/access-lists/{id}",
+            get(access_lists::get_one)
+                .put(access_lists::update)
+                .delete(access_lists::delete),
+        )
         .route("/apply/preview", get(apply_api::preview))
         .route("/apply", post(apply_api::apply_now))
         .route("/apply/history", get(apply_api::history))

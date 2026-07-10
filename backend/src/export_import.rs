@@ -119,7 +119,16 @@ pub async fn import(
         certs.push((id, input));
     }
 
-    // --- validate hosts (and referential integrity to certs) ---
+    // Access lists are not part of the export document (managed via their own
+    // CRUD); import leaves them intact. A host may only reference one that
+    // currently exists, so fetch the live ids to validate against.
+    let existing_acls: std::collections::HashSet<i64> = repo::list_access_lists(&state.db)
+        .await?
+        .into_iter()
+        .map(|l| l.id)
+        .collect();
+
+    // --- validate hosts (and referential integrity to certs / access lists) ---
     let mut hosts: Vec<(i64, ProxyHostInput)> = Vec::new();
     let mut host_ids = std::collections::HashSet::new();
     let mut enabled_domains = std::collections::HashSet::new();
@@ -138,6 +147,17 @@ pub async fn import(
                     "host",
                     i,
                     "certificate_id references an unknown certificate",
+                ));
+            }
+        }
+        // access_list_id must reference an existing access list.
+        if let Some(aid) = input.access_list_id {
+            if !existing_acls.contains(&aid) {
+                return Err(bad_entry(
+                    "host",
+                    i,
+                    "access_list_id references an access list that does not exist \
+                     (create the access list before importing, or remove the reference)",
                 ));
             }
         }

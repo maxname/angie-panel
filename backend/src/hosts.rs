@@ -169,6 +169,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         hsts_subdomains: h.hsts_subdomains,
         trust_forwarded_proto: h.trust_forwarded_proto,
         certificate_id: h.certificate_id,
+        access_list_id: h.access_list_id,
         locations: h.locations.clone(),
         advanced_snippet: h.advanced_snippet.clone(),
         enabled,

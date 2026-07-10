@@ -52,6 +52,26 @@ pub struct GeneratorInput {
     /// Directory for the ACME collector unix sockets (one per certificate).
     /// The root helper ensures it exists before reload.
     pub acme_socket_dir: std::path::PathBuf,
+    /// Access lists referenced by hosts via `access_list_id`.
+    pub access_lists: Vec<AccessList>,
+    /// Managed config dir — where generated files (incl. htpasswd) live; used
+    /// to build the absolute `auth_basic_user_file` path.
+    pub http_d_dir: std::path::PathBuf,
+}
+
+/// An access list reduced to what the generator needs. Usernames carry their
+/// bcrypt hashes (written verbatim into the htpasswd file).
+#[derive(Debug, Clone)]
+pub struct AccessList {
+    pub id: i64,
+    /// "any" | "all".
+    pub satisfy: String,
+    /// When false, the client's Authorization header is stripped from upstream.
+    pub pass_auth: bool,
+    /// (username, bcrypt-hash) pairs for basic auth.
+    pub users: Vec<(String, String)>,
+    /// (directive, address) pairs — directive is "allow"|"deny".
+    pub clients: Vec<(String, String)>,
 }
 
 /// Let's Encrypt ACME directory endpoints.
@@ -140,7 +160,35 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
         files.insert(filename, body);
     }
 
+    // htpasswd files for access lists that have basic-auth users. These are
+    // NOT *.conf, so Angie's `include *.conf` never loads them; the apply
+    // pipeline manages them via the MANAGED-BY header (nginx auth_basic skips
+    // '#' comment lines). Only emit lists that are actually referenced by a
+    // host, to avoid stray files.
+    let referenced: std::collections::HashSet<i64> = input
+        .hosts
+        .iter()
+        .filter_map(|h| h.access_list_id)
+        .collect();
+    let mut lists: Vec<&AccessList> = input
+        .access_lists
+        .iter()
+        .filter(|l| referenced.contains(&l.id) && !l.users.is_empty())
+        .collect();
+    lists.sort_by_key(|l| l.id);
+    for list in lists {
+        let mut body = String::new();
+        for (username, hash) in &list.users {
+            let _ = writeln!(body, "{username}:{hash}");
+        }
+        files.insert(htpasswd_name(list.id), body);
+    }
+
     Ok(files)
+}
+
+fn htpasswd_name(list_id: i64) -> String {
+    format!("access-{list_id}.htpasswd")
 }
 
 // ------------------------------------------------------------- 00-panel.conf
@@ -466,6 +514,32 @@ fn host_features(
         let _ = writeln!(out, "    include {p};");
     }
 
+    // Access control (basic auth + IP allow/deny), server scope so it covers
+    // every location. Values were strictly validated upstream.
+    if let Some(list) = host
+        .access_list_id
+        .and_then(|id| input.access_lists.iter().find(|l| l.id == id))
+    {
+        let has_auth = !list.users.is_empty();
+        let has_ip = !list.clients.is_empty();
+        // `satisfy` only matters when BOTH mechanisms are present.
+        if has_auth && has_ip {
+            let _ = writeln!(out, "    satisfy {};", list.satisfy);
+        }
+        if has_auth {
+            let file = input.http_d_dir.join(htpasswd_name(list.id));
+            let _ = writeln!(out, "    auth_basic \"Restricted\";");
+            let _ = writeln!(out, "    auth_basic_user_file {};", file.display());
+        }
+        for (directive, address) in &list.clients {
+            let _ = writeln!(out, "    {directive} {address};");
+        }
+        // NPM parity: once any IP rule exists, everything else is denied.
+        if has_ip {
+            let _ = writeln!(out, "    deny all;");
+        }
+    }
+
     // Main location. cache-assets.conf is directives-only (proxy_cache*, no
     // location/proxy_pass) and MUST be included inside this location, next to
     // proxy_pass — so it is emitted here rather than at server scope.
@@ -539,7 +613,6 @@ fn proxy_body(
     host: &ProxyHost,
     input: &GeneratorInput,
 ) {
-    let _ = input; // reserved for future per-host proxy tuning
     let _ = writeln!(out, "        proxy_pass {}://{target};", scheme.as_str());
     let _ = writeln!(out, "        proxy_set_header Host $host;");
     let _ = writeln!(
@@ -566,6 +639,19 @@ fn proxy_body(
             out,
             "        proxy_set_header Connection $connection_upgrade;"
         );
+    }
+
+    // When the host's access list has basic auth and "pass auth to upstream" is
+    // OFF, strip the Authorization header so the upstream never sees the
+    // gate's credentials. Emitted per-location because a location that sets any
+    // proxy_set_header does not inherit server-scope ones.
+    if let Some(list) = host
+        .access_list_id
+        .and_then(|id| input.access_lists.iter().find(|l| l.id == id))
+    {
+        if !list.pass_auth && !list.users.is_empty() {
+            let _ = writeln!(out, "        proxy_set_header Authorization \"\";");
+        }
     }
 }
 

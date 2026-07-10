@@ -59,10 +59,11 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(h.finalize())
 }
 
-/// Scan a directory for `*.conf` files and classify each as managed (via the
-/// generator's [`crate::generator::managed_meta`]) or foreign. Temp files
-/// (`.angie-panel.*.tmp`) and non-`.conf` entries are ignored, matching Angie's
-/// own `include http.d/*.conf` glob. Missing directory → empty list.
+/// Scan a directory for managed files and classify each as managed (via the
+/// generator's [`crate::generator::managed_meta`]) or foreign. We manage
+/// `*.conf` (loaded by Angie's `include *.conf`) and `*.htpasswd` (basic-auth
+/// user files, referenced by absolute path, not included). Temp files
+/// (`.angie-panel.*.tmp`) and other entries are ignored. Missing dir → empty.
 pub fn scan_dir(dir: &Path) -> anyhow::Result<Vec<ScannedFile>> {
     let mut out = Vec::new();
     let rd = match std::fs::read_dir(dir) {
@@ -75,7 +76,8 @@ pub fn scan_dir(dir: &Path) -> anyhow::Result<Vec<ScannedFile>> {
     for entry in rd {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".conf") || name.starts_with(atomic::TMP_PREFIX) {
+        let managed_ext = name.ends_with(".conf") || name.ends_with(".htpasswd");
+        if !managed_ext || name.starts_with(atomic::TMP_PREFIX) {
             continue;
         }
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
