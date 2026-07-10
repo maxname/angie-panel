@@ -247,6 +247,118 @@ async fn hosts_crud_and_preview() {
 }
 
 #[tokio::test]
+async fn export_import_roundtrip_and_rejects_injection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Seed a cert + a host that references it.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/certificates",
+            Some(json!({"name":"web","domains":["app.example.com"],"challenge":"http"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let cert_id = body_json(res).await["id"].as_i64().unwrap();
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["app.example.com"],"forward_scheme":"http",
+                "forward_host":"192.168.1.10","forward_port":8123,"certificate_id":cert_id
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Export.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/export", None, Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let export = body_json(res).await;
+    assert_eq!(export["version"], json!(1));
+    assert_eq!(export["hosts"].as_array().unwrap().len(), 1);
+    assert_eq!(export["certificates"].as_array().unwrap().len(), 1);
+
+    // Re-import the same doc → round-trips cleanly.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/import",
+            Some(export.clone()),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let summary = body_json(res).await;
+    assert_eq!(summary["imported"]["hosts"], json!(1));
+    assert_eq!(summary["imported"]["certificates"], json!(1));
+
+    // Hosts survived with their cert reference intact.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/hosts", None, Some(&cookie)))
+        .await
+        .unwrap();
+    let hosts = body_json(res).await;
+    assert_eq!(hosts["hosts"][0]["certificate_id"], json!(cert_id));
+
+    // An import with an injected forward_host is rejected — validation runs on
+    // untrusted import exactly like the API.
+    let malicious = json!({
+        "version": 1,
+        "hosts": [{"id":1,"domains":["x.example.com"],"forward_scheme":"http",
+            "forward_host":"1.2.3.4; } location /r { root /; ","forward_port":80}],
+        "certificates": [],
+        "settings": {}
+    });
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/import",
+            Some(malicious),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // A host referencing a non-existent certificate is rejected.
+    let dangling = json!({
+        "version": 1,
+        "hosts": [{"id":1,"domains":["y.example.com"],"forward_scheme":"http",
+            "forward_host":"10.0.0.9","forward_port":80,"certificate_id":999}],
+        "certificates": [],
+        "settings": {}
+    });
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/import",
+            Some(dangling),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn dashboard_degrades_without_angie() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

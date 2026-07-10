@@ -5,7 +5,7 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::state::AppState;
-use crate::{apply_api, assets, auth, certs, dashboard, hosts, security, system};
+use crate::{apply_api, assets, auth, certs, dashboard, export_import, hosts, security, system};
 
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
@@ -40,6 +40,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(apply_api::get_settings).put(apply_api::put_settings),
         )
         .route("/dashboard", get(dashboard::get_dashboard))
+        .route("/export", get(export_import::export))
+        .route("/import", post(export_import::import))
         .fallback(security::api_not_found);
 
     Router::new()

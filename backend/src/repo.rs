@@ -292,6 +292,89 @@ pub async fn delete_cert(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
     Ok(rows.rows_affected() > 0)
 }
 
+/// Transactionally REPLACE all hosts + certificates with an imported set
+/// (config import). Every input is already validated by the caller. Explicit
+/// ids are preserved so hosts keep their certificate_id references. The admin
+/// user, sessions, and apply history are untouched; settings are upserted.
+pub async fn import_replace(
+    db: &SqlitePool,
+    certs: &[(i64, CertificateInput)],
+    hosts: &[(i64, ProxyHostInput)],
+    settings: &std::collections::HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let now = now_epoch();
+    let mut tx = db.begin().await?;
+
+    sqlx::query("DELETE FROM proxy_hosts")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM certificates")
+        .execute(&mut *tx)
+        .await?;
+
+    for (id, c) in certs {
+        sqlx::query(
+            "INSERT INTO certificates (id, name, domains, challenge, key_type, email, staging, created_at) \
+             VALUES (?,?,?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(&c.name)
+        .bind(domains_json(&c.domains))
+        .bind(c.challenge.as_str())
+        .bind(c.key_type.as_str())
+        .bind(c.email.as_deref())
+        .bind(c.staging as i64)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (id, h) in hosts {
+        sqlx::query(
+            "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
+             websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
+             hsts_subdomains, trust_forwarded_proto, certificate_id, locations, \
+             advanced_snippet, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(domains_json(&h.domains))
+        .bind(h.forward_scheme.as_str())
+        .bind(&h.forward_host)
+        .bind(h.forward_port as i64)
+        .bind(h.websockets_upgrade as i64)
+        .bind(h.block_exploits as i64)
+        .bind(h.cache_assets as i64)
+        .bind(h.http2 as i64)
+        .bind(h.force_ssl as i64)
+        .bind(h.hsts as i64)
+        .bind(h.hsts_subdomains as i64)
+        .bind(h.trust_forwarded_proto as i64)
+        .bind(h.certificate_id)
+        .bind(locations_json(&h.locations))
+        .bind(h.advanced_snippet.as_deref())
+        .bind(h.enabled as i64)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (k, v) in settings {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES (?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(k)
+        .bind(v)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Hosts (id + first domain for the message) that reference this certificate.
 pub async fn hosts_using_cert(db: &SqlitePool, cert_id: i64) -> anyhow::Result<Vec<(i64, String)>> {
     let hosts = list_hosts(db).await?;
