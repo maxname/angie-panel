@@ -73,11 +73,20 @@ fn write_report(data_dir: &Path, report: &ConfigtestReport) -> anyhow::Result<()
     Ok(())
 }
 
-/// M1 will implement the full apply pipeline (lint → validate staging →
-/// snapshot → sync → reload → verify). Shipping the unit now keeps the
-/// packaging stable.
-pub async fn apply(_cfg: &PanelConfig) -> anyhow::Result<()> {
-    anyhow::bail!("helper apply is not implemented yet (planned for M1)")
+/// The full apply pipeline (lint → validate staging → snapshot → sync →
+/// reload → verify, with rollback on failure). Reads the staged set the panel
+/// wrote under `<data_dir>/staging` and writes an ApplyReport to
+/// `<data_dir>/apply-result.json`. Like `configtest`, an invalid/rejected
+/// config is a *result* written to the report, not a helper failure — the
+/// helper only returns `Err` when it cannot write the report at all.
+pub async fn apply(cfg: &PanelConfig) -> anyhow::Result<()> {
+    let report = crate::apply::helper_apply(cfg).await?;
+    if report.result.is_ok() {
+        println!("apply: OK ({})", report.summary);
+    } else {
+        println!("apply: {:?} ({})", report.result, report.summary);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
