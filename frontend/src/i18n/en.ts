@@ -297,6 +297,23 @@ export const en = {
       description: 'Default contact email for ACME certificate accounts.',
       email: 'ACME account email',
     },
+    backup: {
+      title: 'Backup & restore',
+      description: 'Export the full configuration as a JSON file, or restore from one.',
+      exportButton: 'Export configuration',
+      importButton: 'Import configuration',
+      secretsNote:
+        'The backup includes all proxy hosts, certificates, and settings. It may contain secrets embedded in custom config snippets — store it securely.',
+      exported: 'Configuration exported',
+      exportFailed: 'Export failed',
+      notJson: 'That file is not valid JSON.',
+      confirmTitle: 'Import configuration?',
+      confirmBody:
+        'Importing REPLACES all current proxy hosts and certificates. Your admin account is preserved. Changes take effect on the next Apply.',
+      confirmImport: 'Replace and import',
+      imported: 'Imported {{hosts}} hosts, {{certs}} certificates',
+      goToApply: 'Go to Apply to activate the imported configuration',
+    },
   },
   certificates: {
     title: 'Certificates',

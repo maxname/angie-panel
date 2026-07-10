@@ -107,6 +107,11 @@ jobs:
     name: Publish GitHub release
     needs: build-deb
     runs-on: ubuntu-latest
+    # Job-level env so the sign step's `if:` can read whether a key is set
+    # (secrets cannot be referenced directly in `if:` conditions).
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       # Needed for packaging/install.sh.
       - uses: actions/checkout@v6
@@ -121,12 +126,28 @@ jobs:
         run: |
           cp packaging/install.sh dist/
           cd dist
-          sha256sum * > SHA256SUMS.txt
+          sha256sum -- *.deb install.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      # TODO(M4, PLAN.md §8/§10): GPG-sign the release artifacts (detached .asc for
-      # each .deb and for SHA256SUMS.txt) and publish a signed apt repository.
-      # Until then releases are integrity-checked (sha256) but not authenticated.
+      # GPG-sign the artifacts (detached ASCII .asc for each .deb, install.sh,
+      # and SHA256SUMS.txt) when a signing key is configured. Gated on the
+      # secret so forks / unconfigured repos still cut an (unsigned) release
+      # instead of failing. Set repo secrets GPG_PRIVATE_KEY (ASCII-armored)
+      # and optionally GPG_PASSPHRASE to enable authenticated releases.
+      - name: GPG-sign artifacts
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          for f in dist/*.deb dist/install.sh dist/SHA256SUMS.txt; do
+            gpg --batch --yes --pinentry-mode loopback \
+                --passphrase "${GPG_PASSPHRASE:-}" \
+                --local-user "$keyid" \
+                --armor --detach-sign --output "$f.asc" "$f"
+          done
+          gpg --armor --export "$keyid" > dist/angie-panel-signing-key.asc
+          ls -l dist
+
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

@@ -481,4 +481,14 @@ export const api = {
 
   precheckCertificate: (id: number) =>
     request<CertPrecheck>('POST', `/api/certificates/${id}/precheck`),
+
+  exportConfig: () => request<unknown>('GET', '/api/export'),
+
+  importConfig: (doc: unknown) =>
+    request<ImportResult>('POST', '/api/import', doc),
+}
+
+export interface ImportResult {
+  ok: boolean
+  imported: { hosts: number; certificates: number; settings: number }
 }

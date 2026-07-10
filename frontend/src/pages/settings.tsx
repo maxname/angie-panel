@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -12,6 +13,14 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -26,6 +35,7 @@ import {
   api,
   ApiError,
   type DefaultSite,
+  type ImportResult,
   type SettingsResponse,
 } from '@/lib/api'
 import { toast } from '@/lib/toast'
@@ -71,7 +81,177 @@ export function SettingsPage() {
       ) : (
         <SettingsForm data={settingsQuery.data} />
       )}
+      <BackupRestore />
     </div>
+  )
+}
+
+function BackupRestore() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [pendingImport, setPendingImport] = useState<unknown | null>(null)
+  const [parseError, setParseError] = useState<string | null>(null)
+
+  const exportMutation = useMutation({
+    mutationFn: () => api.exportConfig(),
+    onSuccess: (doc) => {
+      // Trigger a client-side download of the returned JSON.
+      const date = new Date().toISOString().slice(0, 10)
+      const blob = new Blob([JSON.stringify(doc, null, 2)], {
+        type: 'application/json',
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `angie-panel-config-${date}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      toast({ variant: 'success', title: t('settings.backup.exported') })
+    },
+    onError: () =>
+      toast({ variant: 'destructive', title: t('settings.backup.exportFailed') }),
+  })
+
+  const importMutation = useMutation({
+    mutationFn: (doc: unknown) => api.importConfig(doc),
+    onSuccess: (result: ImportResult) => {
+      setPendingImport(null)
+      void queryClient.invalidateQueries({ queryKey: ['hosts'] })
+      void queryClient.invalidateQueries({ queryKey: ['certificates'] })
+      toast({
+        variant: 'success',
+        title: t('settings.backup.imported', {
+          hosts: result.imported.hosts,
+          certs: result.imported.certificates,
+        }),
+      })
+    },
+  })
+
+  const onFilePicked = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setParseError(null)
+    const file = event.target.files?.[0]
+    // Reset so picking the same file again re-fires onChange.
+    event.target.value = ''
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        setPendingImport(JSON.parse(String(reader.result)))
+      } catch {
+        setParseError(t('settings.backup.notJson'))
+      }
+    }
+    reader.onerror = () => setParseError(t('settings.backup.notJson'))
+    reader.readAsText(file)
+  }
+
+  const importError =
+    importMutation.isError && importMutation.error instanceof ApiError
+      ? importMutation.error.message
+      : importMutation.isError
+        ? t('common.error')
+        : null
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('settings.backup.title')}</CardTitle>
+        <CardDescription>{t('settings.backup.description')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => exportMutation.mutate()}
+            disabled={exportMutation.isPending}
+          >
+            {exportMutation.isPending && (
+              <Loader2 className="animate-spin" aria-hidden="true" />
+            )}
+            {t('settings.backup.exportButton')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {t('settings.backup.importButton')}
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={onFilePicked}
+          />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {t('settings.backup.secretsNote')}
+        </p>
+        {parseError !== null && (
+          <p className="text-sm text-destructive" role="alert">
+            {parseError}
+          </p>
+        )}
+      </CardContent>
+
+      <Dialog
+        open={pendingImport !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingImport(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('settings.backup.confirmTitle')}</DialogTitle>
+            <DialogDescription>
+              {t('settings.backup.confirmBody')}
+            </DialogDescription>
+          </DialogHeader>
+          {importError !== null && (
+            <Alert variant="destructive">
+              <AlertDescription>{importError}</AlertDescription>
+            </Alert>
+          )}
+          {importMutation.isSuccess ? (
+            <Alert>
+              <AlertDescription>
+                <Link to="/apply" className="font-medium underline underline-offset-4">
+                  {t('settings.backup.goToApply')}
+                </Link>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPendingImport(null)}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={importMutation.isPending}
+              onClick={() => {
+                if (pendingImport !== null) importMutation.mutate(pendingImport)
+              }}
+            >
+              {importMutation.isPending && (
+                <Loader2 className="animate-spin" aria-hidden="true" />
+              )}
+              {t('settings.backup.confirmImport')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   )
 }
 
