@@ -29,7 +29,9 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::model::{CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, Scheme, Stream};
+use crate::model::{
+    Ban, CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, Scheme, Stream,
+};
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
 /// (Angie's separate `stream {}` context), not `http.d/`.
@@ -68,6 +70,8 @@ pub struct GeneratorInput {
     /// TCP/UDP port forwards (stream context). Emitted with the STREAM_PREFIX
     /// so the apply pipeline routes them to stream.d.
     pub streams: Vec<Stream>,
+    /// Blocked IPs/CIDRs — emitted as http-scope `deny` rules (03-bans.conf).
+    pub bans: Vec<Ban>,
 }
 
 /// An access list reduced to what the generator needs. Usernames carry their
@@ -148,6 +152,11 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
     let mut files = FileSet::new();
 
     files.insert("00-panel.conf".to_string(), gen_panel(input));
+    // Global IP blocklist (http-scope `deny`). Emitted early so the deny rules
+    // are inherited by every server that has no access rules of its own.
+    if let Some(body) = gen_bans(input) {
+        files.insert("03-bans.conf".to_string(), body);
+    }
     files.insert("05-default.conf".to_string(), gen_default(input)?);
     files.insert("10-acme.conf".to_string(), gen_acme(input));
     // Rate-limit zones: emitted before 20-host-* so the zones exist in http
@@ -534,6 +543,26 @@ fn emit_rate_limit(out: &mut String, host: &ProxyHost) {
         let _ = writeln!(out, "    limit_conn rlconn_host_{} {};", host.id, rl.conn);
         let _ = writeln!(out, "    limit_conn_status 429;");
     }
+}
+
+// -------------------------------------------------------------- 03-bans.conf
+
+/// Global IP blocklist as http-scope `deny` rules. Addresses were validated to
+/// a bare IP or IP/CIDR upstream (never free text), so they interpolate safely.
+/// Returns None when there are no bans (no file emitted). The `deny` rules are
+/// inherited by every server that defines no access rules of its own; hosts
+/// with their own allow/deny (access lists) are a documented exception.
+fn gen_bans(input: &GeneratorInput) -> Option<String> {
+    if input.bans.is_empty() {
+        return None;
+    }
+    let mut bans: Vec<&Ban> = input.bans.iter().collect();
+    bans.sort_by_key(|b| b.id);
+    let mut out = String::new();
+    for b in bans {
+        let _ = writeln!(out, "deny {};", b.address);
+    }
+    Some(out)
 }
 
 // ------------------------------------------------------------- upstream pool

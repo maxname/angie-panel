@@ -840,6 +840,49 @@ pub fn validate_acl_address(raw: &str) -> Result<String, ApiError> {
     }
 }
 
+// =============================================================== ip blocklist
+
+/// A banned IP or CIDR (global `deny` rule). `reason` is UI metadata only — it
+/// is NEVER written into the config (so it can't inject anything).
+#[derive(Debug, Clone, Serialize)]
+pub struct Ban {
+    pub id: i64,
+    pub address: String,
+    pub reason: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BanInput {
+    pub address: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+pub const MAX_BAN_REASON_LEN: usize = 200;
+
+/// Validate a blocklist entry. The address is a bare IP or IP/CIDR (never
+/// `all` — that would deny the whole internet). The reason is trimmed and
+/// length-bounded; it stays out of the generated config entirely.
+pub fn validate_ban(mut input: BanInput) -> Result<BanInput, ApiError> {
+    let s = input.address.trim();
+    if s == "all" {
+        return Err(bad(
+            "invalid_address",
+            "'all' would block everyone — ban specific IPs or CIDRs",
+        ));
+    }
+    input.address = validate_acl_address(s)?;
+    input.reason = match input.reason.map(|r| r.trim().to_string()) {
+        Some(r) if r.is_empty() => None,
+        Some(r) if r.len() > MAX_BAN_REASON_LEN => {
+            return Err(bad("invalid_reason", "reason is too long"));
+        }
+        other => other,
+    };
+    Ok(input)
+}
+
 /// Validate a bcrypt hash coming from an UNTRUSTED import. The hash is written
 /// verbatim into an htpasswd line (`username:hash`), so a malformed value could
 /// inject extra lines or break parsing — accept only the canonical bcrypt shape

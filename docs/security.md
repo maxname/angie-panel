@@ -87,6 +87,14 @@ inline `Authorization`-заголовки). Каталог `/var/lib/angie-panel
 - Learned from NPM CVEs: no default credentials (one-time setup token), CSRF header + Origin
   check, no CORS ever, Host allowlist (DNS-rebinding), SSRF guard on upstreams, CSP, argon2id,
   login rate-limit, shell-free argv commands.
+- **Roles** (admin / viewer): authorization is enforced at one central choke point
+  (`security_layer`) — every mutating request from a non-admin is rejected, with a small
+  self-service allowlist (login/setup/logout + change own password). A viewer, or any future
+  endpoint, can never mutate config even if a handler forgets to check.
+- **IP blocklist**: banned IPs/CIDRs are generated as http-scope `deny` rules (03-bans.conf) and
+  return 403. This is the panel-native enforcement point fail2ban / CrowdSec can drive (push a ban
+  via the API, then apply). Caveat: the global `deny` is NOT inherited by hosts that define their
+  own IP access rules (access lists) — add the IP to those lists too if needed.
 - The config export is a full backup (every host type, certificates, access lists, settings) and
   contains secrets — advanced-snippet contents and basic-auth password hashes — so treat the file
   as sensitive. On import those hashes are shape-checked as bcrypt (they land in an htpasswd file).

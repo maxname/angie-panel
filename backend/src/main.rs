@@ -4,6 +4,7 @@ mod apply;
 mod apply_api;
 mod assets;
 mod auth;
+mod bans;
 mod certs;
 mod config;
 mod dashboard;

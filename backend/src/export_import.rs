@@ -42,6 +42,7 @@ struct Export {
     redirect_hosts: Vec<Value>,
     dead_hosts: Vec<Value>,
     streams: Vec<Value>,
+    bans: Vec<Value>,
     settings: HashMap<String, String>,
 }
 
@@ -61,6 +62,7 @@ pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResu
     let redirects = repo::list_redirects(&state.db).await?;
     let deads = repo::list_dead(&state.db).await?;
     let streams = repo::list_streams(&state.db).await?;
+    let bans = repo::list_bans(&state.db).await?;
     let mut settings = repo::all_settings(&state.db).await?;
 
     // Never export internal bookkeeping keys.
@@ -97,6 +99,7 @@ pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResu
         redirect_hosts: to_values(&redirects),
         dead_hosts: to_values(&deads),
         streams: to_values(&streams),
+        bans: to_values(&bans),
         settings,
     };
     Ok(Json(serde_json::to_value(&doc).unwrap_or(Value::Null)))
@@ -118,6 +121,8 @@ pub struct ImportDoc {
     dead_hosts: Vec<Value>,
     #[serde(default)]
     streams: Vec<Value>,
+    #[serde(default)]
+    bans: Vec<Value>,
     #[serde(default)]
     settings: HashMap<String, String>,
 }
@@ -359,6 +364,24 @@ pub async fn import(
         streams.push((id, input));
     }
 
+    // --- bans (validated like the CRUD API; dedup by address) ---
+    let mut bans: Vec<(i64, model::BanInput)> = Vec::new();
+    let mut ban_ids = std::collections::HashSet::new();
+    let mut ban_addrs = std::collections::HashSet::new();
+    for (i, v) in doc.bans.iter().enumerate() {
+        let id = extract_id(v).ok_or_else(|| bad_entry("ban", i, "missing numeric id"))?;
+        let input: model::BanInput =
+            serde_json::from_value(v.clone()).map_err(|e| bad_entry("ban", i, &e.to_string()))?;
+        let input = model::validate_ban(input)?;
+        if !ban_ids.insert(id) {
+            return Err(bad_entry("ban", i, "duplicate id"));
+        }
+        if !ban_addrs.insert(input.address.clone()) {
+            return Err(bad_entry("ban", i, "duplicate address"));
+        }
+        bans.push((id, input));
+    }
+
     // --- settings keys ---
     let mut settings = HashMap::new();
     for (k, val) in &doc.settings {
@@ -372,7 +395,7 @@ pub async fn import(
     }
 
     repo::import_replace(
-        &state.db, &certs, &acls, &hosts, &redirects, &deads, &streams, &settings,
+        &state.db, &certs, &acls, &hosts, &redirects, &deads, &streams, &bans, &settings,
     )
     .await?;
 
@@ -385,6 +408,7 @@ pub async fn import(
             "redirect_hosts": redirects.len(),
             "dead_hosts": deads.len(),
             "streams": streams.len(),
+            "bans": bans.len(),
             "settings": settings.len(),
         },
     })))

@@ -232,7 +232,8 @@ pub async fn hosts_revision(db: &SqlitePool) -> anyhow::Result<i64> {
         "SELECT MAX(m) FROM (SELECT MAX(updated_at) m FROM proxy_hosts \
          UNION ALL SELECT MAX(updated_at) FROM redirect_hosts \
          UNION ALL SELECT MAX(updated_at) FROM dead_hosts \
-         UNION ALL SELECT MAX(updated_at) FROM streams)",
+         UNION ALL SELECT MAX(updated_at) FROM streams \
+         UNION ALL SELECT MAX(created_at) FROM bans)",
     )
     .fetch_one(db)
     .await?;
@@ -788,6 +789,7 @@ pub async fn import_replace(
     redirects: &[(i64, RedirectHostInput)],
     deads: &[(i64, DeadHostInput)],
     streams: &[(i64, StreamInput)],
+    bans: &[(i64, BanInput)],
     settings: &std::collections::HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let now = now_epoch();
@@ -800,6 +802,7 @@ pub async fn import_replace(
         "redirect_hosts",
         "dead_hosts",
         "streams",
+        "bans",
         "access_list_users",
         "access_list_clients",
         "access_lists",
@@ -959,6 +962,16 @@ pub async fn import_replace(
         .bind(now)
         .execute(&mut *tx)
         .await?;
+    }
+
+    for (id, b) in bans {
+        sqlx::query("INSERT INTO bans (id, address, reason, created_at) VALUES (?,?,?,?)")
+            .bind(id)
+            .bind(&b.address)
+            .bind(b.reason.as_deref())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
     }
 
     for (k, v) in settings {
@@ -1410,4 +1423,66 @@ pub async fn count_admins(db: &SqlitePool) -> anyhow::Result<i64> {
             .fetch_one(db)
             .await?,
     )
+}
+
+// --------------------------------------------------------------- ip blocklist
+
+use crate::model::{Ban, BanInput};
+
+pub async fn list_bans(db: &SqlitePool) -> anyhow::Result<Vec<Ban>> {
+    let rows: Vec<(i64, String, Option<String>, i64)> =
+        sqlx::query_as("SELECT id, address, reason, created_at FROM bans ORDER BY id")
+            .fetch_all(db)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, address, reason, created_at)| Ban {
+            id,
+            address,
+            reason,
+            created_at,
+        })
+        .collect())
+}
+
+pub async fn ban_address_exists(db: &SqlitePool, address: &str) -> anyhow::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bans WHERE address = ?")
+        .bind(address)
+        .fetch_one(db)
+        .await?;
+    Ok(n > 0)
+}
+
+pub async fn insert_ban(db: &SqlitePool, input: &BanInput) -> anyhow::Result<i64> {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO bans (address, reason, created_at) VALUES (?,?,?) RETURNING id",
+    )
+    .bind(&input.address)
+    .bind(input.reason.as_deref())
+    .bind(now_epoch())
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn get_ban(db: &SqlitePool, id: i64) -> anyhow::Result<Option<Ban>> {
+    let row: Option<(i64, String, Option<String>, i64)> =
+        sqlx::query_as("SELECT id, address, reason, created_at FROM bans WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.map(|(id, address, reason, created_at)| Ban {
+        id,
+        address,
+        reason,
+        created_at,
+    }))
+}
+
+pub async fn delete_ban(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM bans WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
 }

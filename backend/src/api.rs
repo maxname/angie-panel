@@ -6,8 +6,8 @@ use axum::Router;
 
 use crate::state::AppState;
 use crate::{
-    access_lists, apply_api, assets, auth, certs, dashboard, export_import, hosts, other_hosts,
-    security, streams, system, users,
+    access_lists, apply_api, assets, auth, bans, certs, dashboard, export_import, hosts,
+    other_hosts, security, streams, system, users,
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -89,6 +89,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/streams/{id}/enable", post(streams::enable))
         .route("/streams/{id}/disable", post(streams::disable))
         .route("/streams/enable-context", post(streams::enable_context))
+        .route("/bans", get(bans::list).post(bans::create))
+        .route("/bans/{id}", axum::routing::delete(bans::delete))
         .route("/apply/preview", get(apply_api::preview))
         .route("/apply", post(apply_api::apply_now))
         .route("/apply/history", get(apply_api::history))

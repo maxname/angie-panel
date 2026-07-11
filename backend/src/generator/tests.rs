@@ -85,6 +85,7 @@ fn input_acl(
         redirect_hosts: vec![],
         dead_hosts: vec![],
         streams: vec![],
+        bans: vec![],
     }
 }
 
@@ -341,6 +342,45 @@ fn rate_limit_zone_omitted_when_inactive() {
     let (_, body) = only_host_file(&files);
     assert!(!body.contains("limit_req"), "no directives when disabled");
     assert!(!body.contains("limit_conn"), "no directives when disabled");
+}
+
+#[test]
+fn golden_bans() {
+    use crate::model::Ban;
+    let mut inp = input(vec![], vec![], settings(DefaultSite::NotFound, false));
+    inp.bans = vec![
+        Ban {
+            id: 1,
+            address: "203.0.113.7".into(),
+            reason: Some("brute force".into()),
+            created_at: 0,
+        },
+        Ban {
+            id: 2,
+            address: "198.51.100.0/24".into(),
+            reason: None,
+            created_at: 0,
+        },
+        Ban {
+            id: 3,
+            address: "2001:db8::/32".into(),
+            reason: None,
+            created_at: 0,
+        },
+    ];
+    let files = generate(&inp).unwrap();
+    assert_golden("03-bans.conf", &files["03-bans.conf"]);
+}
+
+#[test]
+fn no_bans_file_when_empty() {
+    let files = generate(&input(
+        vec![],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert!(!files.contains_key("03-bans.conf"));
 }
 
 #[test]

@@ -190,6 +190,7 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         redirect_hosts: repo::list_redirects(&state.db).await?,
         dead_hosts: repo::list_dead(&state.db).await?,
         streams: repo::list_streams(&state.db).await?,
+        bans: repo::list_bans(&state.db).await?,
     })
 }
 

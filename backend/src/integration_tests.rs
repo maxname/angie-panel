@@ -770,6 +770,99 @@ async fn stream_crud_port_conflict_and_preview() {
 }
 
 #[tokio::test]
+async fn bans_crud_and_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Ban an IP and a CIDR.
+    for addr in ["203.0.113.7", "198.51.100.0/24"] {
+        let res = app
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/bans",
+                Some(json!({ "address": addr, "reason": "brute force" })),
+                Some(&cookie),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "banning {addr}");
+    }
+
+    // Duplicate address → 409.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/bans",
+            Some(json!({ "address": "203.0.113.7" })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // 'all' and garbage are rejected.
+    for bad in ["all", "not-an-ip", "1.2.3.4; deny 0.0.0.0/0"] {
+        let res = app
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/bans",
+                Some(json!({ "address": bad })),
+                Some(&cookie),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "rejecting {bad:?}");
+    }
+
+    // Apply preview shows the global blocklist file.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/apply/preview",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let files = body_json(res).await["diff"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        files.iter().any(|n| n == "03-bans.conf"),
+        "expected the blocklist file, got {files:?}"
+    );
+
+    // List, then delete one.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/bans", None, Some(&cookie)))
+        .await
+        .unwrap();
+    let bans = body_json(res).await;
+    let arr = bans["bans"].as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    let id = arr[0]["id"].as_i64().unwrap();
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/bans/{id}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn dashboard_degrades_without_angie() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

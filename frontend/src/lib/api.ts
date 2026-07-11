@@ -110,6 +110,15 @@ export interface Upstream {
   fail_timeout_secs: number
 }
 
+export interface Ban {
+  id: number
+  /** Bare IP or IP/CIDR (v4 or v6). */
+  address: string
+  reason: string | null
+  /** Unix timestamp, seconds. */
+  created_at: number
+}
+
 export interface Host {
   id: number
   domains: string[]
@@ -709,6 +718,13 @@ export const api = {
   disableDeadHost: (id: number) =>
     request<{ ok: true; enabled: false }>('POST', `/api/dead-hosts/${id}/disable`),
 
+  listBans: () => request<{ bans: Ban[] }>('GET', '/api/bans'),
+
+  createBan: (body: { address: string; reason?: string | null }) =>
+    request<Ban>('POST', '/api/bans', body),
+
+  deleteBan: (id: number) => request<OkResponse>('DELETE', `/api/bans/${id}`),
+
   listStreams: () => request<{ streams: Stream[] }>('GET', '/api/streams'),
 
   createStream: (body: StreamInput) =>
@@ -792,6 +808,7 @@ export interface ImportResult {
     redirect_hosts: number
     dead_hosts: number
     streams: number
+    bans: number
     settings: number
   }
 }
