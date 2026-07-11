@@ -717,5 +717,13 @@ export const api = {
 
 export interface ImportResult {
   ok: boolean
-  imported: { hosts: number; certificates: number; settings: number }
+  imported: {
+    certificates: number
+    access_lists: number
+    hosts: number
+    redirect_hosts: number
+    dead_hosts: number
+    streams: number
+    settings: number
+  }
 }

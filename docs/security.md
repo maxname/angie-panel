@@ -87,4 +87,7 @@ inline `Authorization`-заголовки). Каталог `/var/lib/angie-panel
 - Learned from NPM CVEs: no default credentials (one-time setup token), CSRF header + Origin
   check, no CORS ever, Host allowlist (DNS-rebinding), SSRF guard on upstreams, CSP, argon2id,
   login rate-limit, shell-free argv commands.
-- Backups/exports may contain secrets; `/var/lib/angie-panel` is 0700, the DB 0600.
+- The config export is a full backup (every host type, certificates, access lists, settings) and
+  contains secrets — advanced-snippet contents and basic-auth password hashes — so treat the file
+  as sensitive. On import those hashes are shape-checked as bcrypt (they land in an htpasswd file).
+  `/var/lib/angie-panel` is 0700, the DB 0600.

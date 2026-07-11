@@ -312,7 +312,7 @@ export const en = {
       exportButton: 'Export configuration',
       importButton: 'Import configuration',
       secretsNote:
-        'The backup includes all proxy hosts, certificates, and settings. It may contain secrets embedded in custom config snippets — store it securely.',
+        'The backup includes every host (proxy, redirect, 404, and stream), certificates, access lists, and settings. It contains secrets — custom config snippets and basic-auth password hashes — so store it securely.',
       exported: 'Configuration exported',
       exportFailed: 'Export failed',
       notJson: 'That file is not valid JSON.',
@@ -320,7 +320,8 @@ export const en = {
       confirmBody:
         'Importing REPLACES all current proxy hosts and certificates. Your admin account is preserved. Changes take effect on the next Apply.',
       confirmImport: 'Replace and import',
-      imported: 'Imported {{hosts}} hosts, {{certs}} certificates',
+      imported:
+        'Imported {{hosts}} hosts, {{streams}} streams, {{certs}} certificates, {{lists}} access lists',
       goToApply: 'Go to Apply to activate the imported configuration',
     },
   },

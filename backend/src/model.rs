@@ -633,6 +633,33 @@ pub fn validate_acl_address(raw: &str) -> Result<String, ApiError> {
     }
 }
 
+/// Validate a bcrypt hash coming from an UNTRUSTED import. The hash is written
+/// verbatim into an htpasswd line (`username:hash`), so a malformed value could
+/// inject extra lines or break parsing — accept only the canonical bcrypt shape
+/// (`$2[aby]$NN$` + 53 base64 chars, 60 total). This is the trust boundary for
+/// imported password material.
+pub fn validate_bcrypt_hash(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim();
+    let bytes = s.as_bytes();
+    let shape_ok = bytes.len() == 60
+        && bytes.starts_with(b"$2")
+        && matches!(bytes[2], b'a' | b'b' | b'y')
+        && bytes[3] == b'$'
+        && bytes[4].is_ascii_digit()
+        && bytes[5].is_ascii_digit()
+        && bytes[6] == b'$'
+        && bytes[7..]
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'/'));
+    if !shape_ok {
+        return Err(bad(
+            "invalid_password_hash",
+            "a user password hash is not a valid bcrypt hash",
+        ));
+    }
+    Ok(s.to_string())
+}
+
 /// Validate + normalize an access-list payload. Passwords are NOT hashed here
 /// (the handler does that, preserving existing hashes on update).
 pub fn validate_acl_input(mut input: AccessListInput) -> Result<AccessListInput, ApiError> {
@@ -1063,6 +1090,31 @@ mod tests {
             "a".repeat(33).as_str(),
         ] {
             assert!(validate_cert_name(evil).is_err(), "should reject {evil:?}");
+        }
+    }
+
+    #[test]
+    fn bcrypt_hash_import_guard() {
+        // A canonical bcrypt hash (60 chars, $2b$NN$ + 53 base64) is accepted.
+        let good = "$2b$12$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0";
+        assert_eq!(good.len(), 60);
+        assert_eq!(validate_bcrypt_hash(good).unwrap(), good);
+        // Anything off the canonical shape is rejected — especially a newline
+        // (would inject a second htpasswd line) or a `:` (breaks user:hash).
+        let with_colon = "$2b$12$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:";
+        assert_eq!(with_colon.len(), 60);
+        for evil in [
+            "not-a-hash",
+            "",
+            "$2b$12$short",
+            "$2b$12$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0\nroot:x",
+            "$1$md5salt$xxxxxxxxxxxxxxxxxxxxxx",
+            with_colon,
+        ] {
+            assert!(
+                validate_bcrypt_hash(evil).is_err(),
+                "should reject {evil:?}"
+            );
         }
     }
 

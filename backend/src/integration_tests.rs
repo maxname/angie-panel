@@ -251,7 +251,8 @@ async fn export_import_roundtrip_and_rejects_injection() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;
 
-    // Seed a cert + a host that references it.
+    // Seed a cert, an access list (with a basic-auth user), a proxy host that
+    // references both, a redirect host, and a stream — one of every type.
     let res = app
         .clone()
         .oneshot(request(
@@ -264,6 +265,22 @@ async fn export_import_roundtrip_and_rejects_injection() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let cert_id = body_json(res).await["id"].as_i64().unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/access-lists",
+            Some(json!({"name":"team","satisfy":"all","pass_auth":false,
+                "users":[{"username":"alice","password":"s3cret-pw"}],
+                "clients":[{"directive":"allow","address":"10.0.0.0/8"}]})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let acl_id = body_json(res).await["id"].as_i64().unwrap();
+
     let res = app
         .clone()
         .oneshot(request(
@@ -271,7 +288,8 @@ async fn export_import_roundtrip_and_rejects_injection() {
             "/api/hosts",
             Some(json!({
                 "domains":["app.example.com"],"forward_scheme":"http",
-                "forward_host":"192.168.1.10","forward_port":8123,"certificate_id":cert_id
+                "forward_host":"192.168.1.10","forward_port":8123,
+                "certificate_id":cert_id,"access_list_id":acl_id
             })),
             Some(&cookie),
         ))
@@ -279,7 +297,31 @@ async fn export_import_roundtrip_and_rejects_injection() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    // Export.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/redirect-hosts",
+            Some(json!({"domains":["old.example.com"],"forward_domain":"new.example.com"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":5432,"forward_host":"192.168.1.20","forward_port":5432})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Export the full config.
     let res = app
         .clone()
         .oneshot(request(Method::GET, "/api/export", None, Some(&cookie)))
@@ -287,11 +329,22 @@ async fn export_import_roundtrip_and_rejects_injection() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let export = body_json(res).await;
-    assert_eq!(export["version"], json!(1));
+    assert_eq!(export["version"], json!(2));
     assert_eq!(export["hosts"].as_array().unwrap().len(), 1);
     assert_eq!(export["certificates"].as_array().unwrap().len(), 1);
+    assert_eq!(export["access_lists"].as_array().unwrap().len(), 1);
+    assert_eq!(export["redirect_hosts"].as_array().unwrap().len(), 1);
+    assert_eq!(export["streams"].as_array().unwrap().len(), 1);
+    // The access list carries the user's bcrypt hash (faithful restore).
+    let hash = export["access_lists"][0]["users"][0]["password_hash"]
+        .as_str()
+        .unwrap();
+    assert!(
+        hash.starts_with("$2"),
+        "expected a bcrypt hash, got {hash:?}"
+    );
 
-    // Re-import the same doc → round-trips cleanly.
+    // Re-import the same doc → round-trips cleanly, every type counted.
     let res = app
         .clone()
         .oneshot(request(
@@ -306,8 +359,11 @@ async fn export_import_roundtrip_and_rejects_injection() {
     let summary = body_json(res).await;
     assert_eq!(summary["imported"]["hosts"], json!(1));
     assert_eq!(summary["imported"]["certificates"], json!(1));
+    assert_eq!(summary["imported"]["access_lists"], json!(1));
+    assert_eq!(summary["imported"]["redirect_hosts"], json!(1));
+    assert_eq!(summary["imported"]["streams"], json!(1));
 
-    // Hosts survived with their cert reference intact.
+    // Host survived with both references intact; the stream survived too.
     let res = app
         .clone()
         .oneshot(request(Method::GET, "/api/hosts", None, Some(&cookie)))
@@ -315,15 +371,23 @@ async fn export_import_roundtrip_and_rejects_injection() {
         .unwrap();
     let hosts = body_json(res).await;
     assert_eq!(hosts["hosts"][0]["certificate_id"], json!(cert_id));
+    assert_eq!(hosts["hosts"][0]["access_list_id"], json!(acl_id));
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/streams", None, Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(res).await["streams"][0]["incoming_port"],
+        json!(5432)
+    );
 
     // An import with an injected forward_host is rejected — validation runs on
     // untrusted import exactly like the API.
     let malicious = json!({
-        "version": 1,
+        "version": 2,
         "hosts": [{"id":1,"domains":["x.example.com"],"forward_scheme":"http",
             "forward_host":"1.2.3.4; } location /r { root /; ","forward_port":80}],
-        "certificates": [],
-        "settings": {}
     });
     let res = app
         .clone()
@@ -339,11 +403,9 @@ async fn export_import_roundtrip_and_rejects_injection() {
 
     // A host referencing a non-existent certificate is rejected.
     let dangling = json!({
-        "version": 1,
+        "version": 2,
         "hosts": [{"id":1,"domains":["y.example.com"],"forward_scheme":"http",
             "forward_host":"10.0.0.9","forward_port":80,"certificate_id":999}],
-        "certificates": [],
-        "settings": {}
     });
     let res = app
         .clone()
@@ -351,6 +413,26 @@ async fn export_import_roundtrip_and_rejects_injection() {
             Method::POST,
             "/api/import",
             Some(dangling),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // An access list whose user hash is not a real bcrypt hash is rejected
+    // (it would land in an htpasswd file verbatim).
+    let bad_hash = json!({
+        "version": 2,
+        "access_lists": [{"id":1,"name":"evil","satisfy":"all","pass_auth":false,
+            "users":[{"username":"bob","password_hash":"not-a-hash\nroot:x"}],
+            "clients":[]}],
+    });
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/import",
+            Some(bad_hash),
             Some(&cookie),
         ))
         .await

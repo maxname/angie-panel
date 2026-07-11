@@ -743,21 +743,36 @@ pub async fn delete_cert(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
 /// (config import). Every input is already validated by the caller. Explicit
 /// ids are preserved so hosts keep their certificate_id references. The admin
 /// user, sessions, and apply history are untouched; settings are upserted.
+#[allow(clippy::too_many_arguments)]
 pub async fn import_replace(
     db: &SqlitePool,
     certs: &[(i64, CertificateInput)],
+    access_lists: &[AclImportRow],
     hosts: &[(i64, ProxyHostInput)],
+    redirects: &[(i64, RedirectHostInput)],
+    deads: &[(i64, DeadHostInput)],
+    streams: &[(i64, StreamInput)],
     settings: &std::collections::HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let now = now_epoch();
     let mut tx = db.begin().await?;
 
-    sqlx::query("DELETE FROM proxy_hosts")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM certificates")
-        .execute(&mut *tx)
-        .await?;
+    // Clear children (which reference certs/access lists) before parents, so a
+    // full replace works whether or not FK enforcement is on.
+    for table in [
+        "proxy_hosts",
+        "redirect_hosts",
+        "dead_hosts",
+        "streams",
+        "access_list_users",
+        "access_list_clients",
+        "access_lists",
+        "certificates",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(&mut *tx)
+            .await?;
+    }
 
     for (id, c) in certs {
         sqlx::query(
@@ -774,6 +789,39 @@ pub async fn import_replace(
         .bind(now)
         .execute(&mut *tx)
         .await?;
+    }
+
+    for l in access_lists {
+        sqlx::query(
+            "INSERT INTO access_lists (id, name, satisfy, pass_auth, created_at) VALUES (?,?,?,?,?)",
+        )
+        .bind(l.id)
+        .bind(&l.name)
+        .bind(l.satisfy.as_str())
+        .bind(l.pass_auth as i64)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        for u in &l.users {
+            sqlx::query(
+                "INSERT INTO access_list_users (access_list_id, username, password_hash) VALUES (?,?,?)",
+            )
+            .bind(l.id)
+            .bind(&u.username)
+            .bind(&u.password_hash)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for (directive, address) in &l.clients {
+            sqlx::query(
+                "INSERT INTO access_list_clients (access_list_id, directive, address) VALUES (?,?,?)",
+            )
+            .bind(l.id)
+            .bind(directive.as_str())
+            .bind(address)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
 
     for (id, h) in hosts {
@@ -802,6 +850,72 @@ pub async fn import_replace(
         .bind(locations_json(&h.locations))
         .bind(h.advanced_snippet.as_deref())
         .bind(h.enabled as i64)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (id, r) in redirects {
+        sqlx::query(
+            "INSERT INTO redirect_hosts (id, domains, forward_scheme, forward_domain, \
+             forward_http_code, preserve_path, certificate_id, force_ssl, hsts, hsts_subdomains, \
+             http2, block_exploits, advanced_snippet, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(domains_json(&r.domains))
+        .bind(redirect_scheme_str(r.forward_scheme))
+        .bind(&r.forward_domain)
+        .bind(r.forward_http_code as i64)
+        .bind(r.preserve_path as i64)
+        .bind(r.certificate_id)
+        .bind(r.force_ssl as i64)
+        .bind(r.hsts as i64)
+        .bind(r.hsts_subdomains as i64)
+        .bind(r.http2 as i64)
+        .bind(r.block_exploits as i64)
+        .bind(r.advanced_snippet.as_deref())
+        .bind(r.enabled as i64)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (id, d) in deads {
+        sqlx::query(
+            "INSERT INTO dead_hosts (id, domains, certificate_id, force_ssl, hsts, hsts_subdomains, \
+             http2, advanced_snippet, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(domains_json(&d.domains))
+        .bind(d.certificate_id)
+        .bind(d.force_ssl as i64)
+        .bind(d.hsts as i64)
+        .bind(d.hsts_subdomains as i64)
+        .bind(d.http2 as i64)
+        .bind(d.advanced_snippet.as_deref())
+        .bind(d.enabled as i64)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (id, s) in streams {
+        sqlx::query(
+            "INSERT INTO streams (id, incoming_port, forward_host, forward_port, tcp, udp, \
+             enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(s.incoming_port as i64)
+        .bind(&s.forward_host)
+        .bind(s.forward_port as i64)
+        .bind(s.tcp as i64)
+        .bind(s.udp as i64)
+        .bind(s.enabled as i64)
         .bind(now)
         .bind(now)
         .execute(&mut *tx)
@@ -868,6 +982,17 @@ fn directive_from_str(s: &str) -> Directive {
 pub struct AclUserHash {
     pub username: String,
     pub password_hash: String,
+}
+
+/// One access list from an import document: explicit id + already-validated
+/// user hashes and clients. Used only by [`import_replace`].
+pub struct AclImportRow {
+    pub id: i64,
+    pub name: String,
+    pub satisfy: Satisfy,
+    pub pass_auth: bool,
+    pub users: Vec<AclUserHash>,
+    pub clients: Vec<(Directive, String)>,
 }
 
 pub async fn list_access_lists(db: &SqlitePool) -> anyhow::Result<Vec<AccessList>> {

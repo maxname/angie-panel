@@ -119,13 +119,25 @@ function BackupRestore() {
     mutationFn: (doc: unknown) => api.importConfig(doc),
     onSuccess: (result: ImportResult) => {
       setPendingImport(null)
-      void queryClient.invalidateQueries({ queryKey: ['hosts'] })
-      void queryClient.invalidateQueries({ queryKey: ['certificates'] })
+      for (const key of [
+        'hosts',
+        'redirect-hosts',
+        'dead-hosts',
+        'streams',
+        'certificates',
+        'access-lists',
+        'dashboard',
+      ]) {
+        void queryClient.invalidateQueries({ queryKey: [key] })
+      }
+      const i = result.imported
       toast({
         variant: 'success',
         title: t('settings.backup.imported', {
-          hosts: result.imported.hosts,
-          certs: result.imported.certificates,
+          hosts: i.hosts + i.redirect_hosts + i.dead_hosts,
+          streams: i.streams,
+          certs: i.certificates,
+          lists: i.access_lists,
         }),
       })
     },
