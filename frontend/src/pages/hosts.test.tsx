@@ -32,6 +32,7 @@ const sampleHost: Host = {
   access_list_id: null,
   locations: [],
   advanced_snippet: null,
+  rate_limit: { enabled: false, rps: 0, burst: 0, nodelay: false, conn: 0 },
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,

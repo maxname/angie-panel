@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 use crate::db::now_epoch;
 use crate::model::{
     Certificate, CertificateInput, Challenge, CustomLocation, KeyType, ProxyHost, ProxyHostInput,
-    Scheme,
+    RateLimit, Scheme,
 };
 
 // ------------------------------------------------------------------- rows
@@ -32,6 +32,7 @@ struct HostRow {
     access_list_id: Option<i64>,
     locations: String,
     advanced_snippet: Option<String>,
+    rate_limit: Option<String>,
     enabled: i64,
     created_at: i64,
     updated_at: i64,
@@ -64,6 +65,7 @@ impl HostRow {
             access_list_id: self.access_list_id,
             locations: serde_json::from_str(&self.locations).context("locations json")?,
             advanced_snippet: self.advanced_snippet,
+            rate_limit: rate_limit_from_json(self.rate_limit.as_deref())?,
             enabled: self.enabled != 0,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -71,10 +73,22 @@ impl HostRow {
     }
 }
 
+fn rate_limit_json(rl: &RateLimit) -> String {
+    serde_json::to_string(rl).unwrap_or_else(|_| "{}".into())
+}
+
+/// Parse the stored rate_limit JSON (NULL / absent = disabled default).
+fn rate_limit_from_json(raw: Option<&str>) -> anyhow::Result<RateLimit> {
+    match raw {
+        Some(s) if !s.trim().is_empty() => Ok(serde_json::from_str(s).context("rate_limit json")?),
+        _ => Ok(RateLimit::default()),
+    }
+}
+
 const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_port, \
      websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
      hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-     advanced_snippet, enabled, created_at, updated_at";
+     advanced_snippet, rate_limit, enabled, created_at, updated_at";
 
 // -------------------------------------------------------------- host CRUD
 
@@ -112,8 +126,8 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
         "INSERT INTO proxy_hosts (domains, forward_scheme, forward_host, forward_port, \
          websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
          hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-         advanced_snippet, enabled, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         advanced_snippet, rate_limit, enabled, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -131,6 +145,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(input.access_list_id)
     .bind(locations_json(&input.locations))
     .bind(input.advanced_snippet.as_deref())
+    .bind(rate_limit_json(&input.rate_limit))
     .bind(input.enabled as i64)
     .bind(now)
     .bind(now)
@@ -145,7 +160,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
         "UPDATE proxy_hosts SET domains=?, forward_scheme=?, forward_host=?, forward_port=?, \
          websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, force_ssl=?, hsts=?, \
          hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
-         locations=?, advanced_snippet=?, enabled=?, updated_at=? WHERE id=?",
+         locations=?, advanced_snippet=?, rate_limit=?, enabled=?, updated_at=? WHERE id=?",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -163,6 +178,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(input.access_list_id)
     .bind(locations_json(&input.locations))
     .bind(input.advanced_snippet.as_deref())
+    .bind(rate_limit_json(&input.rate_limit))
     .bind(input.enabled as i64)
     .bind(now_epoch())
     .bind(id)
@@ -829,8 +845,8 @@ pub async fn import_replace(
             "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
              websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
              hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-             advanced_snippet, enabled, created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             advanced_snippet, rate_limit, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -849,6 +865,7 @@ pub async fn import_replace(
         .bind(h.access_list_id)
         .bind(locations_json(&h.locations))
         .bind(h.advanced_snippet.as_deref())
+        .bind(rate_limit_json(&h.rate_limit))
         .bind(h.enabled as i64)
         .bind(now)
         .bind(now)

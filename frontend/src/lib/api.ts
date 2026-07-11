@@ -63,6 +63,19 @@ export interface Location {
   snippet?: string | null
 }
 
+/** Per-host rate limiting (Angie limit_req / limit_conn, keyed on client IP). */
+export interface RateLimit {
+  enabled: boolean
+  /** Requests/second ceiling (0 = no request-rate limit). */
+  rps: number
+  /** Burst allowance above the rate. */
+  burst: number
+  /** Serve the burst immediately instead of queueing it. */
+  nodelay: boolean
+  /** Max concurrent connections per client IP (0 = no limit). */
+  conn: number
+}
+
 export interface Host {
   id: number
   domains: string[]
@@ -81,6 +94,7 @@ export interface Host {
   access_list_id: number | null
   locations: Location[]
   advanced_snippet: string | null
+  rate_limit: RateLimit
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -106,6 +120,7 @@ export interface HostInput {
   access_list_id?: number | null
   locations?: Location[]
   advanced_snippet?: string | null
+  rate_limit?: RateLimit
   enabled?: boolean
 }
 

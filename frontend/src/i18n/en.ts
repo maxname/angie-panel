@@ -167,6 +167,7 @@ export const en = {
         details: 'Details',
         ssl: 'SSL',
         locations: 'Locations',
+        rateLimit: 'Rate limit',
         advanced: 'Advanced',
       },
       domains: 'Domain names',
@@ -208,6 +209,17 @@ export const en = {
         path: 'Path',
         rewrite: 'Rewrite (optional)',
         add: 'Add location',
+      },
+      rateLimit: {
+        description:
+          'Throttle abusive clients by IP — protects the upstream from brute-force, scraping, and floods.',
+        enable: 'Enable rate limiting',
+        rps: 'Requests / second',
+        burst: 'Burst',
+        nodelay: 'Serve burst immediately (nodelay)',
+        conn: 'Max connections per IP',
+        hint: 'Leave a field at 0 to disable that limit. Over-limit requests get HTTP 429.',
+        errNoLimit: 'Set a request rate or a connection limit before enabling.',
       },
       advanced: {
         warningTitle: 'Advanced configuration is root-equivalent',

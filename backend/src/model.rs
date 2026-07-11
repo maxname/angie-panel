@@ -38,6 +38,65 @@ pub struct CustomLocation {
     pub snippet: Option<String>,
 }
 
+/// Per-host rate limiting (Angie `limit_req` / `limit_conn`, keyed on the
+/// client IP). Stored as one JSON column on the host; all-zero / disabled by
+/// default. The generator emits a shared-memory zone per host plus the
+/// server-scope limit directives (see generator::gen_rate_limits).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateLimit {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Request rate ceiling in requests/second (`limit_req rate=Nr/s`). 0 = no
+    /// request-rate limit (connection limiting may still apply).
+    #[serde(default)]
+    pub rps: u32,
+    /// Burst allowance above `rps` before requests are rejected/delayed.
+    #[serde(default)]
+    pub burst: u32,
+    /// Serve the burst immediately instead of queueing it (`nodelay`).
+    #[serde(default)]
+    pub nodelay: bool,
+    /// Max concurrent connections per client IP (`limit_conn`). 0 = no limit.
+    #[serde(default)]
+    pub conn: u32,
+}
+
+/// Sanity ceilings — generous, just to reject absurd values that would make no
+/// operational sense (and keep the generated numbers bounded).
+pub const MAX_RATE_RPS: u32 = 1_000_000;
+pub const MAX_RATE_BURST: u32 = 100_000;
+pub const MAX_RATE_CONN: u32 = 100_000;
+
+/// Validate + normalize a rate-limit config. When disabled it is flattened to
+/// the default (so the DB/JSON never carries stale numbers). When enabled it
+/// must define at least one of a request rate or a connection limit.
+pub fn validate_rate_limit(mut rl: RateLimit) -> Result<RateLimit, ApiError> {
+    if !rl.enabled {
+        return Ok(RateLimit::default());
+    }
+    if rl.rps == 0 && rl.conn == 0 {
+        return Err(bad(
+            "invalid_rate_limit",
+            "enable at least a request rate (rps) or a connection limit (conn)",
+        ));
+    }
+    if rl.rps > MAX_RATE_RPS {
+        return Err(bad("invalid_rate_limit", "request rate is too high"));
+    }
+    if rl.burst > MAX_RATE_BURST {
+        return Err(bad("invalid_rate_limit", "burst is too high"));
+    }
+    if rl.conn > MAX_RATE_CONN {
+        return Err(bad("invalid_rate_limit", "connection limit is too high"));
+    }
+    // burst / nodelay only mean anything alongside a request rate.
+    if rl.rps == 0 {
+        rl.burst = 0;
+        rl.nodelay = false;
+    }
+    Ok(rl)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyHost {
     pub id: i64,
@@ -57,6 +116,7 @@ pub struct ProxyHost {
     pub access_list_id: Option<i64>,
     pub locations: Vec<CustomLocation>,
     pub advanced_snippet: Option<String>,
+    pub rate_limit: RateLimit,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -93,6 +153,8 @@ pub struct ProxyHostInput {
     pub locations: Vec<CustomLocation>,
     #[serde(default)]
     pub advanced_snippet: Option<String>,
+    #[serde(default)]
+    pub rate_limit: RateLimit,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -338,6 +400,8 @@ pub fn validate_host_input(
             input.advanced_snippet = Some(validate_snippet(s, allow_advanced_snippets)?);
         }
     }
+
+    input.rate_limit = validate_rate_limit(input.rate_limit)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1060,6 +1124,7 @@ mod tests {
             access_list_id: None,
             locations: vec![],
             advanced_snippet: Some("client_max_body_size 100m;".into()),
+            rate_limit: RateLimit::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -1091,6 +1156,49 @@ mod tests {
         ] {
             assert!(validate_cert_name(evil).is_err(), "should reject {evil:?}");
         }
+    }
+
+    #[test]
+    fn rate_limit_validation() {
+        // Disabled → flattened to default regardless of stale numbers.
+        let flat = validate_rate_limit(RateLimit {
+            enabled: false,
+            rps: 99,
+            burst: 99,
+            nodelay: true,
+            conn: 99,
+        })
+        .unwrap();
+        assert_eq!(flat, RateLimit::default());
+
+        // Enabled but no actual limit → rejected.
+        let err = validate_rate_limit(RateLimit {
+            enabled: true,
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_rate_limit");
+
+        // burst/nodelay are cleared when there is no request rate (conn-only).
+        let conn_only = validate_rate_limit(RateLimit {
+            enabled: true,
+            rps: 0,
+            burst: 50,
+            nodelay: true,
+            conn: 5,
+        })
+        .unwrap();
+        assert_eq!(conn_only.burst, 0);
+        assert!(!conn_only.nodelay);
+        assert_eq!(conn_only.conn, 5);
+
+        // Absurd values are rejected.
+        assert!(validate_rate_limit(RateLimit {
+            enabled: true,
+            rps: MAX_RATE_RPS + 1,
+            ..Default::default()
+        })
+        .is_err());
     }
 
     #[test]

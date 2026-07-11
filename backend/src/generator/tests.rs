@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    CustomLocation, DeadHost, ProxyHost, RedirectHost, RedirectScheme, Scheme, Stream,
+    CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme, Stream,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -48,6 +48,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         access_list_id: None,
         locations: vec![],
         advanced_snippet: None,
+        rate_limit: RateLimit::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -235,6 +236,54 @@ fn golden_plain_http_host() {
     let (name, body) = only_host_file(&files);
     assert_eq!(name, "20-host-1-app-example-com.conf");
     assert_golden("20-host-plain-http.conf", body);
+}
+
+#[test]
+fn golden_host_rate_limited() {
+    // Requests/sec + burst + nodelay AND a per-IP connection cap.
+    let mut host = base_host(2, "api.example.com");
+    host.rate_limit = RateLimit {
+        enabled: true,
+        rps: 10,
+        burst: 20,
+        nodelay: true,
+        conn: 5,
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    // The zone file is emitted with both zones.
+    assert_golden("15-rate-limits.conf", &files["15-rate-limits.conf"]);
+    // The host server block carries the limit_req/limit_conn directives.
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-rate-limited.conf", body);
+}
+
+#[test]
+fn rate_limit_zone_omitted_when_inactive() {
+    // Enabled but all-zero → validator would reject, but a stored zeroed config
+    // (or a disabled host) must emit no zone file and no directives.
+    let mut host = base_host(3, "plain.example.com");
+    host.rate_limit = RateLimit {
+        enabled: false,
+        rps: 10,
+        burst: 5,
+        nodelay: false,
+        conn: 0,
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert!(!files.contains_key("15-rate-limits.conf"));
+    let (_, body) = only_host_file(&files);
+    assert!(!body.contains("limit_req"), "no directives when disabled");
+    assert!(!body.contains("limit_conn"), "no directives when disabled");
 }
 
 #[test]

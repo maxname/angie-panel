@@ -559,6 +559,89 @@ async fn redirect_host_and_cross_type_domain_conflict() {
 }
 
 #[tokio::test]
+async fn host_rate_limit_persists_and_generates() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Create a host with a rate limit (rps + burst + nodelay + conn).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["api.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.5","forward_port":80,
+                "rate_limit":{"enabled":true,"rps":15,"burst":30,"nodelay":true,"conn":5}
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let host = body_json(res).await;
+    let id = host["id"].as_i64().unwrap();
+    assert_eq!(host["rate_limit"]["rps"], json!(15));
+    assert_eq!(host["rate_limit"]["nodelay"], json!(true));
+
+    // It round-trips through GET.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/hosts/{id}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(res).await["rate_limit"]["conn"], json!(5));
+
+    // Apply preview includes the rate-limit zone file.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/apply/preview",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let files = body_json(res).await["diff"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        files.iter().any(|n| n == "15-rate-limits.conf"),
+        "expected the rate-limit zone file, got {files:?}"
+    );
+
+    // Enabling the limit with no actual ceiling is rejected.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["bad.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.6","forward_port":80,
+                "rate_limit":{"enabled":true,"rps":0,"conn":0}
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(res).await["error"]["code"],
+        json!("invalid_rate_limit")
+    );
+}
+
+#[tokio::test]
 async fn stream_crud_port_conflict_and_preview() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

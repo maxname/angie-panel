@@ -89,3 +89,68 @@ describe('host editor validation', () => {
     ).toBeInTheDocument()
   })
 })
+
+describe('host editor rate limiting', () => {
+  async function fillValidBasics(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText('Domain names'), 'example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.type(screen.getByLabelText('Forward host'), '10.0.0.5')
+  }
+
+  it('requires a limit when rate limiting is enabled', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubFetch()
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'Rate limit' }))
+    await user.click(screen.getByLabelText('Enable rate limiting'))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(
+      await screen.findByText(
+        'Set a request rate or a connection limit before enabling.',
+      ),
+    ).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/hosts', expect.anything())
+  })
+
+  it('submits the rate_limit config in the create payload', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'Rate limit' }))
+    await user.click(screen.getByLabelText('Enable rate limiting'))
+    await user.type(screen.getByLabelText('Requests / second'), '10')
+    await user.type(screen.getByLabelText('Burst'), '20')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    // The POST body carries the rate_limit object.
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.rate_limit).toEqual({
+      enabled: true,
+      rps: 10,
+      burst: 20,
+      nodelay: false,
+      conn: 0,
+    })
+  })
+})

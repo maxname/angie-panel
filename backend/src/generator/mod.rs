@@ -29,7 +29,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::model::{CustomLocation, DeadHost, ProxyHost, RedirectHost, Scheme, Stream};
+use crate::model::{CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, Scheme, Stream};
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
 /// (Angie's separate `stream {}` context), not `http.d/`.
@@ -150,6 +150,11 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
     files.insert("00-panel.conf".to_string(), gen_panel(input));
     files.insert("05-default.conf".to_string(), gen_default(input)?);
     files.insert("10-acme.conf".to_string(), gen_acme(input));
+    // Rate-limit zones: emitted before 20-host-* so the zones exist in http
+    // context before any server block references them.
+    if let Some(body) = gen_rate_limits(input) {
+        files.insert("15-rate-limits.conf".to_string(), body);
+    }
 
     // Index certificates by id so hosts can resolve name + readiness in O(1).
     let certs: BTreeMap<i64, &Certificate> = input.certificates.iter().map(|c| (c.id, c)).collect();
@@ -462,6 +467,75 @@ fn gen_acme(input: &GeneratorInput) -> String {
     out
 }
 
+// ------------------------------------------------------- 15-rate-limits.conf
+
+/// A rate-limit config is "active" only when enabled AND it defines at least
+/// one actual limit (a request rate and/or a connection cap). Zeroed configs
+/// (e.g. a disabled host, or enabled with all-zero) emit nothing.
+fn rate_limit_active(rl: &RateLimit) -> bool {
+    rl.enabled && (rl.rps > 0 || rl.conn > 0)
+}
+
+/// Per-host `limit_req_zone` / `limit_conn_zone` shared-memory zones. These are
+/// http-context directives; emitting them in a low-sorted file guarantees each
+/// zone is defined before the `20-host-*` server block that uses it. Returns
+/// None when no enabled host has an active rate limit.
+fn gen_rate_limits(input: &GeneratorInput) -> Option<String> {
+    let mut hosts: Vec<&ProxyHost> = input
+        .hosts
+        .iter()
+        .filter(|h| h.enabled && rate_limit_active(&h.rate_limit))
+        .collect();
+    hosts.sort_by_key(|h| h.id);
+    if hosts.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    for h in hosts {
+        let rl = &h.rate_limit;
+        if rl.rps > 0 {
+            let _ = writeln!(
+                out,
+                "limit_req_zone $binary_remote_addr zone=rlreq_host_{}:10m rate={}r/s;",
+                h.id, rl.rps
+            );
+        }
+        if rl.conn > 0 {
+            let _ = writeln!(
+                out,
+                "limit_conn_zone $binary_remote_addr zone=rlconn_host_{}:10m;",
+                h.id
+            );
+        }
+    }
+    Some(out)
+}
+
+/// Emit the server-scope `limit_req` / `limit_conn` directives (with a 429
+/// status instead of the default 503). Zones come from [`gen_rate_limits`].
+fn emit_rate_limit(out: &mut String, host: &ProxyHost) {
+    let rl = &host.rate_limit;
+    if !rate_limit_active(rl) {
+        return;
+    }
+    if rl.rps > 0 {
+        let mut line = format!("    limit_req zone=rlreq_host_{}", host.id);
+        if rl.burst > 0 {
+            let _ = write!(line, " burst={}", rl.burst);
+            if rl.nodelay {
+                line.push_str(" nodelay");
+            }
+        }
+        line.push(';');
+        let _ = writeln!(out, "{line}");
+        let _ = writeln!(out, "    limit_req_status 429;");
+    }
+    if rl.conn > 0 {
+        let _ = writeln!(out, "    limit_conn rlconn_host_{} {};", host.id, rl.conn);
+        let _ = writeln!(out, "    limit_conn_status 429;");
+    }
+}
+
 // -------------------------------------------------- 20-host-<id>-<slug>.conf
 
 /// Render one proxy-host file. Returns (filename, body).
@@ -599,6 +673,9 @@ fn host_features(
             let _ = writeln!(out, "    deny all;");
         }
     }
+
+    // Rate limiting (server scope → applies to every location below).
+    emit_rate_limit(out, host);
 
     // Main location. cache-assets.conf is directives-only (proxy_cache*, no
     // location/proxy_pass) and MUST be included inside this location, next to

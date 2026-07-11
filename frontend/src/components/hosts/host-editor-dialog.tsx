@@ -60,6 +60,11 @@ interface FormState {
   access_list_id: number | null
   locations: LocationDraft[]
   advanced_snippet: string
+  rate_limit_enabled: boolean
+  rate_limit_rps: string
+  rate_limit_burst: string
+  rate_limit_nodelay: boolean
+  rate_limit_conn: string
 }
 
 function initialState(host: Host | null): FormState {
@@ -81,8 +86,14 @@ function initialState(host: Host | null): FormState {
       access_list_id: null,
       locations: [],
       advanced_snippet: '',
+      rate_limit_enabled: false,
+      rate_limit_rps: '',
+      rate_limit_burst: '',
+      rate_limit_nodelay: false,
+      rate_limit_conn: '',
     }
   }
+  const rl = host.rate_limit
   return {
     domains: [...host.domains],
     forward_scheme: host.forward_scheme,
@@ -106,6 +117,11 @@ function initialState(host: Host | null): FormState {
       rewrite: location.rewrite ?? '',
     })),
     advanced_snippet: host.advanced_snippet ?? '',
+    rate_limit_enabled: rl.enabled,
+    rate_limit_rps: rl.rps > 0 ? String(rl.rps) : '',
+    rate_limit_burst: rl.burst > 0 ? String(rl.burst) : '',
+    rate_limit_nodelay: rl.nodelay,
+    rate_limit_conn: rl.conn > 0 ? String(rl.conn) : '',
   }
 }
 
@@ -239,6 +255,13 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       setTab('details')
       return
     }
+    const rlRps = Number.parseInt(form.rate_limit_rps, 10) || 0
+    const rlConn = Number.parseInt(form.rate_limit_conn, 10) || 0
+    if (form.rate_limit_enabled && rlRps <= 0 && rlConn <= 0) {
+      setFormError(t('hosts.editor.rateLimit.errNoLimit'))
+      setTab('rateLimit')
+      return
+    }
 
     const locations = form.locations.map((location) => ({
       path: location.path.trim(),
@@ -266,6 +289,13 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       locations,
       advanced_snippet:
         form.advanced_snippet.trim() === '' ? null : form.advanced_snippet,
+      rate_limit: {
+        enabled: form.rate_limit_enabled,
+        rps: rlRps,
+        burst: Number.parseInt(form.rate_limit_burst, 10) || 0,
+        nodelay: form.rate_limit_nodelay,
+        conn: rlConn,
+      },
       enabled: host === null ? true : host.enabled,
     }
 
@@ -280,6 +310,9 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           <TabsTrigger value="ssl">{t('hosts.editor.tabs.ssl')}</TabsTrigger>
           <TabsTrigger value="locations">
             {t('hosts.editor.tabs.locations')}
+          </TabsTrigger>
+          <TabsTrigger value="rateLimit">
+            {t('hosts.editor.tabs.rateLimit')}
           </TabsTrigger>
           <TabsTrigger value="advanced">
             {t('hosts.editor.tabs.advanced')}
@@ -662,6 +695,83 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             <Plus aria-hidden="true" />
             {t('hosts.editor.locations.add')}
           </Button>
+        </TabsContent>
+
+        <TabsContent value="rateLimit" className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {t('hosts.editor.rateLimit.description')}
+          </p>
+          <div className="space-y-3 rounded-lg border p-3">
+            <ToggleRow
+              id="host-rate-limit-enabled"
+              label={t('hosts.editor.rateLimit.enable')}
+              checked={form.rate_limit_enabled}
+              onChange={(checked) => patch({ rate_limit_enabled: checked })}
+            />
+          </div>
+          {form.rate_limit_enabled && (
+            <div className="space-y-4 rounded-lg border p-3">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="host-rl-rps">
+                    {t('hosts.editor.rateLimit.rps')}
+                  </Label>
+                  <Input
+                    id="host-rl-rps"
+                    inputMode="numeric"
+                    placeholder="10"
+                    value={form.rate_limit_rps}
+                    onChange={(event) =>
+                      patch({
+                        rate_limit_rps: event.target.value.replace(/[^0-9]/g, ''),
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="host-rl-burst">
+                    {t('hosts.editor.rateLimit.burst')}
+                  </Label>
+                  <Input
+                    id="host-rl-burst"
+                    inputMode="numeric"
+                    placeholder="20"
+                    value={form.rate_limit_burst}
+                    onChange={(event) =>
+                      patch({
+                        rate_limit_burst: event.target.value.replace(/[^0-9]/g, ''),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <ToggleRow
+                id="host-rl-nodelay"
+                label={t('hosts.editor.rateLimit.nodelay')}
+                checked={form.rate_limit_nodelay}
+                onChange={(checked) => patch({ rate_limit_nodelay: checked })}
+              />
+              <div className="space-y-2 sm:max-w-[16rem]">
+                <Label htmlFor="host-rl-conn">
+                  {t('hosts.editor.rateLimit.conn')}
+                </Label>
+                <Input
+                  id="host-rl-conn"
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={form.rate_limit_conn}
+                  onChange={(event) =>
+                    patch({
+                      rate_limit_conn: event.target.value.replace(/[^0-9]/g, ''),
+                    })
+                  }
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('hosts.editor.rateLimit.hint')}
+              </p>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4">
