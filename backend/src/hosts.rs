@@ -160,6 +160,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         block_exploits: h.block_exploits,
         cache_assets: h.cache_assets,
         http2: h.http2,
+        http3: h.http3,
         force_ssl: h.force_ssl,
         hsts: h.hsts,
         hsts_subdomains: h.hsts_subdomains,

@@ -187,6 +187,7 @@ export const en = {
       cacheAssets: 'Cache assets',
       forceSsl: 'Force SSL',
       http2: 'HTTP/2 support',
+      http3: 'HTTP/3 (QUIC) support',
       hsts: 'HSTS enabled',
       hstsSubdomains: 'HSTS include subdomains',
       trustForwardedProto: 'Trust X-Forwarded-Proto',

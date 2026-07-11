@@ -61,6 +61,7 @@ interface FormState {
   block_exploits: boolean
   cache_assets: boolean
   http2: boolean
+  http3: boolean
   force_ssl: boolean
   hsts: boolean
   hsts_subdomains: boolean
@@ -92,6 +93,7 @@ function initialState(host: Host | null): FormState {
       block_exploits: false,
       cache_assets: false,
       http2: true,
+      http3: false,
       force_ssl: false,
       hsts: false,
       hsts_subdomains: false,
@@ -123,6 +125,7 @@ function initialState(host: Host | null): FormState {
     block_exploits: host.block_exploits,
     cache_assets: host.cache_assets,
     http2: host.http2,
+    http3: host.http3,
     force_ssl: host.force_ssl,
     hsts: host.hsts,
     hsts_subdomains: host.hsts_subdomains,
@@ -327,6 +330,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       block_exploits: form.block_exploits,
       cache_assets: form.cache_assets,
       http2: form.http2,
+      http3: form.http3,
       force_ssl: form.force_ssl,
       hsts: form.hsts,
       hsts_subdomains: form.hsts_subdomains,
@@ -584,6 +588,12 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
               label={t('hosts.editor.http2')}
               checked={form.http2}
               onChange={(checked) => patch({ http2: checked })}
+            />
+            <ToggleRow
+              id="host-http3"
+              label={t('hosts.editor.http3')}
+              checked={form.http3}
+              onChange={(checked) => patch({ http3: checked })}
             />
             <ToggleRow
               id="host-hsts"

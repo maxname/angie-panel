@@ -244,6 +244,7 @@ pub struct ProxyHost {
     pub block_exploits: bool,
     pub cache_assets: bool,
     pub http2: bool,
+    pub http3: bool,
     pub force_ssl: bool,
     pub hsts: bool,
     pub hsts_subdomains: bool,
@@ -274,6 +275,8 @@ pub struct ProxyHostInput {
     pub cache_assets: bool,
     #[serde(default = "default_true")]
     pub http2: bool,
+    #[serde(default)]
+    pub http3: bool,
     #[serde(default)]
     pub force_ssl: bool,
     #[serde(default)]
@@ -1256,6 +1259,7 @@ mod tests {
             block_exploits: false,
             cache_assets: false,
             http2: true,
+            http3: false,
             force_ssl: false,
             hsts: false,
             hsts_subdomains: false,

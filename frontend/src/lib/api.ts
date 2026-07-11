@@ -109,6 +109,7 @@ export interface Host {
   block_exploits: boolean
   cache_assets: boolean
   http2: boolean
+  http3: boolean
   force_ssl: boolean
   hsts: boolean
   hsts_subdomains: boolean
@@ -136,6 +137,7 @@ export interface HostInput {
   block_exploits?: boolean
   cache_assets?: boolean
   http2?: boolean
+  http3?: boolean
   force_ssl?: boolean
   hsts?: boolean
   hsts_subdomains?: boolean

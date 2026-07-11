@@ -115,6 +115,35 @@ describe('host editor rate limiting', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/hosts', expect.anything())
   })
 
+  it('submits the http3 flag from the SSL tab', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'SSL' }))
+    await user.click(screen.getByLabelText('HTTP/3 (QUIC) support'))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.http3).toBe(true)
+  })
+
   it('adds a backend server and submits the upstream pool', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {

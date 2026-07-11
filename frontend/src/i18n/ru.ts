@@ -187,6 +187,7 @@ export const ru: typeof en = {
       cacheAssets: 'Кэшировать статику',
       forceSsl: 'Принудительный SSL',
       http2: 'Поддержка HTTP/2',
+      http3: 'Поддержка HTTP/3 (QUIC)',
       hsts: 'Включить HSTS',
       hstsSubdomains: 'HSTS для поддоменов',
       trustForwardedProto: 'Доверять X-Forwarded-Proto',

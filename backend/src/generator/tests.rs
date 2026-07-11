@@ -41,6 +41,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         block_exploits: false,
         cache_assets: false,
         http2: true,
+        http3: false,
         force_ssl: false,
         hsts: false,
         hsts_subdomains: false,
@@ -394,6 +395,43 @@ fn golden_https_host_with_cert() {
     let (name, body) = only_host_file(&files);
     assert_eq!(name, "20-host-7-secure-example-com.conf");
     assert_golden("20-host-https.conf", body);
+}
+
+#[test]
+fn golden_https_host_http3() {
+    // HTTP/3 adds quic listeners (v4 + v6), `http3 on;`, and the Alt-Svc header
+    // alongside the normal TLS listener. Verified valid by angie -t on real Angie.
+    let mut host = base_host(8, "quic.example.com");
+    host.certificate_id = Some(1);
+    host.force_ssl = true;
+    host.http2 = true;
+    host.http3 = true;
+    let cert = ready_cert(1, "quic", &["quic.example.com"]);
+    let files = generate(&input(
+        vec![host],
+        vec![cert],
+        settings(DefaultSite::NotFound, true),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-http3.conf", body);
+}
+
+#[test]
+fn http3_only_over_tls() {
+    // http3 on a plain-HTTP host (no cert) emits NOTHING quic — QUIC is TLS-only.
+    let mut host = base_host(9, "plain.example.com");
+    host.http3 = true;
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(!body.contains("quic"), "no QUIC listener without TLS");
+    assert!(!body.contains("http3"), "no http3 directive without TLS");
+    assert!(!body.contains("Alt-Svc"), "no Alt-Svc without TLS");
 }
 
 #[test]

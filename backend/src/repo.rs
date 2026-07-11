@@ -24,6 +24,7 @@ struct HostRow {
     block_exploits: i64,
     cache_assets: i64,
     http2: i64,
+    http3: i64,
     force_ssl: i64,
     hsts: i64,
     hsts_subdomains: i64,
@@ -58,6 +59,7 @@ impl HostRow {
             block_exploits: self.block_exploits != 0,
             cache_assets: self.cache_assets != 0,
             http2: self.http2 != 0,
+            http3: self.http3 != 0,
             force_ssl: self.force_ssl != 0,
             hsts: self.hsts != 0,
             hsts_subdomains: self.hsts_subdomains != 0,
@@ -100,7 +102,7 @@ fn upstream_from_json(raw: Option<&str>) -> anyhow::Result<Upstream> {
 }
 
 const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_port, \
-     websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
+     websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
      hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
      advanced_snippet, rate_limit, upstream, enabled, created_at, updated_at";
 
@@ -138,10 +140,10 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     let now = now_epoch();
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO proxy_hosts (domains, forward_scheme, forward_host, forward_port, \
-         websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
+         websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
          hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
          advanced_snippet, rate_limit, upstream, enabled, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -151,6 +153,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(input.block_exploits as i64)
     .bind(input.cache_assets as i64)
     .bind(input.http2 as i64)
+    .bind(input.http3 as i64)
     .bind(input.force_ssl as i64)
     .bind(input.hsts as i64)
     .bind(input.hsts_subdomains as i64)
@@ -173,7 +176,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
 pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> anyhow::Result<bool> {
     let rows = sqlx::query(
         "UPDATE proxy_hosts SET domains=?, forward_scheme=?, forward_host=?, forward_port=?, \
-         websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, force_ssl=?, hsts=?, \
+         websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, http3=?, force_ssl=?, hsts=?, \
          hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
          locations=?, advanced_snippet=?, rate_limit=?, upstream=?, enabled=?, updated_at=? WHERE id=?",
     )
@@ -185,6 +188,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(input.block_exploits as i64)
     .bind(input.cache_assets as i64)
     .bind(input.http2 as i64)
+    .bind(input.http3 as i64)
     .bind(input.force_ssl as i64)
     .bind(input.hsts as i64)
     .bind(input.hsts_subdomains as i64)
@@ -859,10 +863,10 @@ pub async fn import_replace(
     for (id, h) in hosts {
         sqlx::query(
             "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
-             websockets_upgrade, block_exploits, cache_assets, http2, force_ssl, hsts, \
+             websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
              hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
              advanced_snippet, rate_limit, upstream, enabled, created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -873,6 +877,7 @@ pub async fn import_replace(
         .bind(h.block_exploits as i64)
         .bind(h.cache_assets as i64)
         .bind(h.http2 as i64)
+        .bind(h.http3 as i64)
         .bind(h.force_ssl as i64)
         .bind(h.hsts as i64)
         .bind(h.hsts_subdomains as i64)

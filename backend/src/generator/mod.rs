@@ -635,8 +635,20 @@ fn gen_host(
         if ipv6 {
             let _ = writeln!(out, "    listen [::]:443 ssl;");
         }
+        // HTTP/3 (QUIC over UDP 443) alongside the TLS listener. No `reuseport`
+        // — it may appear at most once per address across all servers, and a
+        // plain `listen 443 quic;` shares the socket fine (verified on Angie).
+        if host.http3 {
+            let _ = writeln!(out, "    listen 443 quic;");
+            if ipv6 {
+                let _ = writeln!(out, "    listen [::]:443 quic;");
+            }
+        }
         if host.http2 {
             let _ = writeln!(out, "    http2 on;");
+        }
+        if host.http3 {
+            let _ = writeln!(out, "    http3 on;");
         }
         let _ = writeln!(out, "    server_name {server_names};");
         let _ = writeln!(out, "    status_zone {zone};");
@@ -644,6 +656,13 @@ fn gen_host(
         // filesystem path — the linter enforces that).
         let _ = writeln!(out, "    ssl_certificate     $acme_cert_{};", cert.name);
         let _ = writeln!(out, "    ssl_certificate_key $acme_cert_key_{};", cert.name);
+        // Advertise h3 so clients upgrade to QUIC on their next connection.
+        if host.http3 {
+            let _ = writeln!(
+                out,
+                "    add_header Alt-Svc 'h3=\":443\"; ma=86400' always;"
+            );
+        }
         host_features(&mut out, host, input, /* tls */ true)?;
         let _ = writeln!(out, "}}");
     } else {

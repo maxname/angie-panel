@@ -24,6 +24,7 @@ const sampleHost: Host = {
   block_exploits: true,
   cache_assets: false,
   http2: true,
+  http3: false,
   force_ssl: false,
   hsts: false,
   hsts_subdomains: false,
