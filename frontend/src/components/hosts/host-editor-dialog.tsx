@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   api,
   ApiError,
+  type BalanceMethod,
   type ForwardScheme,
   type Host,
   type HostInput,
@@ -41,6 +42,14 @@ interface LocationDraft {
   forward_host: string
   forward_port: string
   rewrite: string
+}
+
+interface ServerDraft {
+  host: string
+  port: string
+  weight: string
+  backup: boolean
+  down: boolean
 }
 
 interface FormState {
@@ -65,6 +74,11 @@ interface FormState {
   rate_limit_burst: string
   rate_limit_nodelay: boolean
   rate_limit_conn: string
+  balance_method: BalanceMethod
+  primary_weight: string
+  max_fails: string
+  fail_timeout_secs: string
+  servers: ServerDraft[]
 }
 
 function initialState(host: Host | null): FormState {
@@ -91,9 +105,15 @@ function initialState(host: Host | null): FormState {
       rate_limit_burst: '',
       rate_limit_nodelay: false,
       rate_limit_conn: '',
+      balance_method: 'round_robin',
+      primary_weight: '1',
+      max_fails: '1',
+      fail_timeout_secs: '10',
+      servers: [],
     }
   }
   const rl = host.rate_limit
+  const up = host.upstream
   return {
     domains: [...host.domains],
     forward_scheme: host.forward_scheme,
@@ -122,6 +142,17 @@ function initialState(host: Host | null): FormState {
     rate_limit_burst: rl.burst > 0 ? String(rl.burst) : '',
     rate_limit_nodelay: rl.nodelay,
     rate_limit_conn: rl.conn > 0 ? String(rl.conn) : '',
+    balance_method: up.method,
+    primary_weight: String(up.primary_weight),
+    max_fails: String(up.max_fails),
+    fail_timeout_secs: String(up.fail_timeout_secs),
+    servers: up.servers.map((s) => ({
+      host: s.host,
+      port: String(s.port),
+      weight: String(s.weight),
+      backup: s.backup,
+      down: s.down,
+    })),
   }
 }
 
@@ -263,6 +294,22 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       return
     }
 
+    // Additional upstream servers: each needs a host and a valid port; ip_hash
+    // forbids backup peers (Angie rejects the combo).
+    for (const s of form.servers) {
+      const sp = Number.parseInt(s.port, 10)
+      if (s.host.trim() === '' || !Number.isInteger(sp) || sp < 1 || sp > 65535) {
+        setFormError(t('hosts.editor.upstreams.errServer'))
+        setTab('upstreams')
+        return
+      }
+      if (form.balance_method === 'ip_hash' && s.backup) {
+        setFormError(t('hosts.editor.upstreams.errIpHashBackup'))
+        setTab('upstreams')
+        return
+      }
+    }
+
     const locations = form.locations.map((location) => ({
       path: location.path.trim(),
       forward_scheme: location.forward_scheme,
@@ -296,6 +343,19 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
         nodelay: form.rate_limit_nodelay,
         conn: rlConn,
       },
+      upstream: {
+        method: form.balance_method,
+        primary_weight: Number.parseInt(form.primary_weight, 10) || 1,
+        max_fails: Number.parseInt(form.max_fails, 10) || 0,
+        fail_timeout_secs: Number.parseInt(form.fail_timeout_secs, 10) || 10,
+        servers: form.servers.map((s) => ({
+          host: s.host.trim(),
+          port: Number.parseInt(s.port, 10) || 0,
+          weight: Number.parseInt(s.weight, 10) || 1,
+          backup: s.backup,
+          down: s.down,
+        })),
+      },
       enabled: host === null ? true : host.enabled,
     }
 
@@ -310,6 +370,9 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           <TabsTrigger value="ssl">{t('hosts.editor.tabs.ssl')}</TabsTrigger>
           <TabsTrigger value="locations">
             {t('hosts.editor.tabs.locations')}
+          </TabsTrigger>
+          <TabsTrigger value="upstreams">
+            {t('hosts.editor.tabs.upstreams')}
           </TabsTrigger>
           <TabsTrigger value="rateLimit">
             {t('hosts.editor.tabs.rateLimit')}
@@ -695,6 +758,225 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             <Plus aria-hidden="true" />
             {t('hosts.editor.locations.add')}
           </Button>
+        </TabsContent>
+
+        <TabsContent value="upstreams" className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {t('hosts.editor.upstreams.description')}
+          </p>
+
+          <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+            <div className="space-y-2">
+              <Label htmlFor="host-balance-method">
+                {t('hosts.editor.upstreams.method')}
+              </Label>
+              <Select
+                value={form.balance_method}
+                onValueChange={(value) =>
+                  patch({ balance_method: value as BalanceMethod })
+                }
+              >
+                <SelectTrigger id="host-balance-method">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="round_robin">
+                    {t('hosts.editor.upstreams.roundRobin')}
+                  </SelectItem>
+                  <SelectItem value="least_conn">least_conn</SelectItem>
+                  <SelectItem value="ip_hash">ip_hash</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Server pool: the primary (from Details) plus additional peers. */}
+          <div className="space-y-3 rounded-lg border p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">
+                {t('hosts.editor.upstreams.servers')}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                {t('hosts.editor.upstreams.primary')}
+              </span>
+              <span className="font-mono text-xs">
+                {form.forward_host || '—'}:{form.forward_port || '—'}
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                <Label
+                  htmlFor="host-primary-weight"
+                  className="text-xs font-normal text-muted-foreground"
+                >
+                  {t('hosts.editor.upstreams.weight')}
+                </Label>
+                <Input
+                  id="host-primary-weight"
+                  inputMode="numeric"
+                  className="h-8 w-16"
+                  value={form.primary_weight}
+                  onChange={(event) =>
+                    patch({
+                      primary_weight: event.target.value.replace(/[^0-9]/g, ''),
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            {form.servers.map((server, index) => (
+              <div
+                key={index}
+                className="flex flex-wrap items-center gap-2 border-t pt-3"
+              >
+                <Input
+                  aria-label={t('hosts.editor.upstreams.serverHost')}
+                  placeholder="10.0.0.2"
+                  className="h-8 w-40"
+                  value={server.host}
+                  onChange={(event) =>
+                    patch({
+                      servers: form.servers.map((s, i) =>
+                        i === index ? { ...s, host: event.target.value } : s,
+                      ),
+                    })
+                  }
+                />
+                <Input
+                  aria-label={t('hosts.editor.upstreams.serverPort')}
+                  inputMode="numeric"
+                  placeholder="8080"
+                  className="h-8 w-20"
+                  value={server.port}
+                  onChange={(event) =>
+                    patch({
+                      servers: form.servers.map((s, i) =>
+                        i === index
+                          ? { ...s, port: event.target.value.replace(/[^0-9]/g, '') }
+                          : s,
+                      ),
+                    })
+                  }
+                />
+                <Input
+                  aria-label={t('hosts.editor.upstreams.weight')}
+                  inputMode="numeric"
+                  placeholder="1"
+                  className="h-8 w-14"
+                  value={server.weight}
+                  onChange={(event) =>
+                    patch({
+                      servers: form.servers.map((s, i) =>
+                        i === index
+                          ? { ...s, weight: event.target.value.replace(/[^0-9]/g, '') }
+                          : s,
+                      ),
+                    })
+                  }
+                />
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={server.backup}
+                    onChange={(event) =>
+                      patch({
+                        servers: form.servers.map((s, i) =>
+                          i === index ? { ...s, backup: event.target.checked } : s,
+                        ),
+                      })
+                    }
+                  />
+                  {t('hosts.editor.upstreams.backup')}
+                </label>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={server.down}
+                    onChange={(event) =>
+                      patch({
+                        servers: form.servers.map((s, i) =>
+                          i === index ? { ...s, down: event.target.checked } : s,
+                        ),
+                      })
+                    }
+                  />
+                  {t('hosts.editor.upstreams.down')}
+                </label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="ml-auto"
+                  aria-label={t('hosts.editor.upstreams.removeServer')}
+                  onClick={() =>
+                    patch({
+                      servers: form.servers.filter((_, i) => i !== index),
+                    })
+                  }
+                >
+                  <X aria-hidden="true" />
+                </Button>
+              </div>
+            ))}
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                patch({
+                  servers: [
+                    ...form.servers,
+                    { host: '', port: '', weight: '1', backup: false, down: false },
+                  ],
+                })
+              }
+            >
+              <Plus aria-hidden="true" />
+              {t('hosts.editor.upstreams.addServer')}
+            </Button>
+          </div>
+
+          {/* Passive health checks. */}
+          <div className="space-y-3 rounded-lg border p-3">
+            <span className="text-sm font-medium">
+              {t('hosts.editor.upstreams.health')}
+            </span>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="host-max-fails">
+                  {t('hosts.editor.upstreams.maxFails')}
+                </Label>
+                <Input
+                  id="host-max-fails"
+                  inputMode="numeric"
+                  value={form.max_fails}
+                  onChange={(event) =>
+                    patch({ max_fails: event.target.value.replace(/[^0-9]/g, '') })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="host-fail-timeout">
+                  {t('hosts.editor.upstreams.failTimeout')}
+                </Label>
+                <Input
+                  id="host-fail-timeout"
+                  inputMode="numeric"
+                  value={form.fail_timeout_secs}
+                  onChange={(event) =>
+                    patch({
+                      fail_timeout_secs: event.target.value.replace(/[^0-9]/g, ''),
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.upstreams.healthHint')}
+            </p>
+          </div>
         </TabsContent>
 
         <TabsContent value="rateLimit" className="space-y-4">

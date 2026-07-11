@@ -169,6 +169,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         locations: h.locations.clone(),
         advanced_snippet: h.advanced_snippet.clone(),
         rate_limit: h.rate_limit.clone(),
+        upstream: h.upstream.clone(),
         enabled,
     }
 }

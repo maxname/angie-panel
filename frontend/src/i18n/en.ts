@@ -167,6 +167,7 @@ export const en = {
         details: 'Details',
         ssl: 'SSL',
         locations: 'Locations',
+        upstreams: 'Upstreams',
         rateLimit: 'Rate limit',
         advanced: 'Advanced',
       },
@@ -209,6 +210,28 @@ export const en = {
         path: 'Path',
         rewrite: 'Rewrite (optional)',
         add: 'Add location',
+      },
+      upstreams: {
+        description:
+          'Load-balance across multiple backend servers. Passive health checks drop a peer after repeated failures and retry it later. (Active probes need Angie PRO.)',
+        method: 'Balancing method',
+        roundRobin: 'round_robin (default)',
+        servers: 'Backend servers',
+        primary: 'primary',
+        weight: 'Weight',
+        serverHost: 'Server host / IP',
+        serverPort: 'Server port',
+        backup: 'backup',
+        down: 'down',
+        addServer: 'Add server',
+        removeServer: 'Remove server',
+        health: 'Passive health',
+        maxFails: 'Max fails',
+        failTimeout: 'Fail timeout (seconds)',
+        healthHint:
+          'A peer is taken out of rotation after “max fails” errors within the fail timeout, then retried. max fails 0 disables passive checking.',
+        errServer: 'Each backend server needs a host and a valid port (1–65535).',
+        errIpHashBackup: 'ip_hash balancing cannot be combined with backup servers.',
       },
       rateLimit: {
         description:

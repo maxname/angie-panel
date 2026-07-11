@@ -536,6 +536,55 @@ fn emit_rate_limit(out: &mut String, host: &ProxyHost) {
     }
 }
 
+// ------------------------------------------------------------- upstream pool
+
+/// Emit the `upstream <zone> { ... }` block: shared-memory zone, optional
+/// balancing method, the primary server, then any extra pool members. Passive
+/// health (`max_fails`/`fail_timeout`) is attached to every peer when tuned off
+/// the Angie defaults (1 / 10s). Hosts/ports were SSRF-validated upstream.
+fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
+    let up = &host.upstream;
+    let _ = writeln!(out, "upstream {zone} {{");
+    let _ = writeln!(out, "    zone {zone} 64k;");
+    if let Some(method) = up.method.directive() {
+        let _ = writeln!(out, "    {method};");
+    }
+    // Passive-health suffix shared by every peer (empty when at defaults).
+    let health = if up.max_fails != 1 || up.fail_timeout_secs != 10 {
+        format!(
+            " max_fails={} fail_timeout={}s",
+            up.max_fails, up.fail_timeout_secs
+        )
+    } else {
+        String::new()
+    };
+    // Primary server (never backup/down — it is the host's main target).
+    let mut primary = format!("    server {}:{}", host.forward_host, host.forward_port);
+    if up.primary_weight != 1 {
+        let _ = write!(primary, " weight={}", up.primary_weight);
+    }
+    primary.push_str(&health);
+    primary.push(';');
+    let _ = writeln!(out, "{primary}");
+    // Extra pool members.
+    for s in &up.servers {
+        let mut line = format!("    server {}:{}", s.host, s.port);
+        if s.weight != 1 {
+            let _ = write!(line, " weight={}", s.weight);
+        }
+        line.push_str(&health);
+        if s.backup {
+            line.push_str(" backup");
+        }
+        if s.down {
+            line.push_str(" down");
+        }
+        line.push(';');
+        let _ = writeln!(out, "{line}");
+    }
+    let _ = writeln!(out, "}}");
+}
+
 // -------------------------------------------------- 20-host-<id>-<slug>.conf
 
 /// Render one proxy-host file. Returns (filename, body).
@@ -557,16 +606,11 @@ fn gen_host(
 
     let mut out = String::new();
 
-    // upstream block: the `zone` gives us per-upstream metrics in /status and a
-    // hook for health checks/balancing in v2 (PLAN.md §4).
-    let _ = writeln!(out, "upstream {zone} {{");
-    let _ = writeln!(out, "    zone {zone} 64k;");
-    let _ = writeln!(
-        out,
-        "    server {}:{};",
-        host.forward_host, host.forward_port
-    );
-    let _ = writeln!(out, "}}");
+    // upstream block: the `zone` gives us per-upstream metrics in /status. The
+    // primary server is forward_host:forward_port; extra pool members, the
+    // balancing method, and passive health (max_fails/fail_timeout) come from
+    // host.upstream (PLAN.md §4).
+    gen_upstream_block(&mut out, &zone, host);
     out.push('\n');
 
     if https {

@@ -76,6 +76,29 @@ export interface RateLimit {
   conn: number
 }
 
+export type BalanceMethod = 'round_robin' | 'least_conn' | 'ip_hash'
+
+/** One additional backend server beyond the primary (forward_host:port). */
+export interface UpstreamServer {
+  host: string
+  port: number
+  weight: number
+  backup: boolean
+  down: boolean
+}
+
+/** Load balancing + passive health for a host's upstream pool. */
+export interface Upstream {
+  /** Additional peers beyond the primary. */
+  servers: UpstreamServer[]
+  method: BalanceMethod
+  /** Weight of the primary server. */
+  primary_weight: number
+  /** Passive health: mark a peer failed after N errors within fail_timeout. */
+  max_fails: number
+  fail_timeout_secs: number
+}
+
 export interface Host {
   id: number
   domains: string[]
@@ -95,6 +118,7 @@ export interface Host {
   locations: Location[]
   advanced_snippet: string | null
   rate_limit: RateLimit
+  upstream: Upstream
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -121,6 +145,7 @@ export interface HostInput {
   locations?: Location[]
   advanced_snippet?: string | null
   rate_limit?: RateLimit
+  upstream?: Upstream
   enabled?: boolean
 }
 

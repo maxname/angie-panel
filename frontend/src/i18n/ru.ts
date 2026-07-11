@@ -167,6 +167,7 @@ export const ru: typeof en = {
         details: 'Основное',
         ssl: 'SSL',
         locations: 'Локации',
+        upstreams: 'Апстримы',
         rateLimit: 'Лимиты',
         advanced: 'Расширенно',
       },
@@ -209,6 +210,28 @@ export const ru: typeof en = {
         path: 'Путь',
         rewrite: 'Rewrite (необязательно)',
         add: 'Добавить локацию',
+      },
+      upstreams: {
+        description:
+          'Балансировка нагрузки между несколькими бэкендами. Пассивные проверки выводят упавший сервер из ротации после серии ошибок и позже пробуют снова. (Активные пробы — только Angie PRO.)',
+        method: 'Метод балансировки',
+        roundRobin: 'round_robin (по умолчанию)',
+        servers: 'Бэкенд-серверы',
+        primary: 'основной',
+        weight: 'Вес',
+        serverHost: 'Хост / IP сервера',
+        serverPort: 'Порт сервера',
+        backup: 'резерв',
+        down: 'выкл',
+        addServer: 'Добавить сервер',
+        removeServer: 'Удалить сервер',
+        health: 'Пассивные проверки',
+        maxFails: 'Макс. ошибок',
+        failTimeout: 'Таймаут (секунды)',
+        healthHint:
+          'Сервер выводится из ротации после «макс. ошибок» в пределах таймаута, затем пробуется снова. Значение 0 отключает пассивные проверки.',
+        errServer: 'У каждого бэкенда должен быть хост и корректный порт (1–65535).',
+        errIpHashBackup: 'ip_hash нельзя сочетать с backup-серверами.',
       },
       rateLimit: {
         description:

@@ -115,6 +115,59 @@ describe('host editor rate limiting', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/hosts', expect.anything())
   })
 
+  it('adds a backend server and submits the upstream pool', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'Upstreams' }))
+    await user.click(screen.getByRole('button', { name: 'Add server' }))
+    await user.type(screen.getByLabelText('Server host / IP'), '10.0.0.2')
+    await user.type(screen.getByLabelText('Server port'), '8080')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.upstream.servers).toEqual([
+      { host: '10.0.0.2', port: 8080, weight: 1, backup: false, down: false },
+    ])
+  })
+
+  it('blocks an incomplete backend server', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubFetch()
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'Upstreams' }))
+    await user.click(screen.getByRole('button', { name: 'Add server' }))
+    // Host left blank → validation error, nothing submitted.
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(
+      await screen.findByText(
+        'Each backend server needs a host and a valid port (1–65535).',
+      ),
+    ).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/hosts', expect.anything())
+  })
+
   it('submits the rate_limit config in the create payload', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {

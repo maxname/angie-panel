@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme, Stream,
+    BalanceMethod, CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, RedirectScheme,
+    Scheme, Stream, Upstream, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -49,6 +50,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         locations: vec![],
         advanced_snippet: None,
         rate_limit: RateLimit::default(),
+        upstream: Upstream::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -236,6 +238,60 @@ fn golden_plain_http_host() {
     let (name, body) = only_host_file(&files);
     assert_eq!(name, "20-host-1-app-example-com.conf");
     assert_golden("20-host-plain-http.conf", body);
+}
+
+#[test]
+fn golden_host_load_balanced() {
+    // Primary + two extra servers, least_conn, weights, a backup, a down, and
+    // tuned passive health (max_fails/fail_timeout on every peer).
+    let mut host = base_host(4, "lb.example.com");
+    host.upstream = Upstream {
+        method: BalanceMethod::LeastConn,
+        primary_weight: 3,
+        max_fails: 2,
+        fail_timeout_secs: 20,
+        servers: vec![
+            UpstreamServer {
+                host: "10.0.0.2".into(),
+                port: 8080,
+                weight: 1,
+                backup: false,
+                down: false,
+            },
+            UpstreamServer {
+                host: "10.0.0.3".into(),
+                port: 8080,
+                weight: 1,
+                backup: true,
+                down: false,
+            },
+        ],
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-load-balanced.conf", body);
+}
+
+#[test]
+fn plain_host_upstream_unchanged() {
+    // A default upstream must emit exactly the classic single-server block.
+    let files = generate(&input(
+        vec![base_host(9, "plain.example.com")],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(
+        body.contains("upstream host_9 {\n    zone host_9 64k;\n    server 192.168.1.10:8080;\n}")
+    );
+    assert!(!body.contains("least_conn"));
+    assert!(!body.contains("max_fails"));
 }
 
 #[test]

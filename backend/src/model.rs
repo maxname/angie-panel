@@ -67,6 +67,142 @@ pub const MAX_RATE_RPS: u32 = 1_000_000;
 pub const MAX_RATE_BURST: u32 = 100_000;
 pub const MAX_RATE_CONN: u32 = 100_000;
 
+/// Load-balancing method for a host's upstream pool.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BalanceMethod {
+    /// Weighted round-robin (Angie/nginx default — no method directive emitted).
+    #[default]
+    RoundRobin,
+    /// Fewest active connections wins.
+    LeastConn,
+    /// Sticky by client IP (cannot be combined with `backup` servers).
+    IpHash,
+}
+
+impl BalanceMethod {
+    /// The upstream directive to emit, or None for round-robin (the default).
+    pub fn directive(self) -> Option<&'static str> {
+        match self {
+            BalanceMethod::RoundRobin => None,
+            BalanceMethod::LeastConn => Some("least_conn"),
+            BalanceMethod::IpHash => Some("ip_hash"),
+        }
+    }
+}
+
+/// One additional backend server beyond the host's primary
+/// (`forward_host:forward_port`). Validated exactly like the primary upstream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpstreamServer {
+    pub host: String,
+    pub port: u16,
+    #[serde(default = "default_weight")]
+    pub weight: u32,
+    /// Only used when all primary/non-backup servers are unavailable.
+    #[serde(default)]
+    pub backup: bool,
+    /// Marked out of rotation (kept for quick re-enable).
+    #[serde(default)]
+    pub down: bool,
+}
+
+impl Default for UpstreamServer {
+    fn default() -> Self {
+        UpstreamServer {
+            host: String::new(),
+            port: 0,
+            weight: 1,
+            backup: false,
+            down: false,
+        }
+    }
+}
+
+/// Load balancing + passive health for a host. `servers` are ADDITIONAL peers;
+/// the primary is always the host's `forward_host:forward_port`. Passive health
+/// (`max_fails`/`fail_timeout`) applies to every peer — Angie removes a peer
+/// after `max_fails` failures within `fail_timeout` and retries after it.
+/// Active health checks (`health_check`) are Angie PRO only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Upstream {
+    #[serde(default)]
+    pub servers: Vec<UpstreamServer>,
+    #[serde(default)]
+    pub method: BalanceMethod,
+    #[serde(default = "default_weight")]
+    pub primary_weight: u32,
+    #[serde(default = "default_max_fails")]
+    pub max_fails: u32,
+    #[serde(default = "default_fail_timeout")]
+    pub fail_timeout_secs: u32,
+}
+
+// Manual Default so `Upstream::default()` matches the serde field defaults
+// (a plain single-server host with Angie's own max_fails=1 / fail_timeout=10s),
+// NOT the all-zero derive which would emit `weight=0 max_fails=0`.
+impl Default for Upstream {
+    fn default() -> Self {
+        Upstream {
+            servers: Vec::new(),
+            method: BalanceMethod::RoundRobin,
+            primary_weight: 1,
+            max_fails: 1,
+            fail_timeout_secs: 10,
+        }
+    }
+}
+
+fn default_weight() -> u32 {
+    1
+}
+fn default_max_fails() -> u32 {
+    1
+}
+fn default_fail_timeout() -> u32 {
+    10
+}
+
+pub const MAX_UPSTREAM_SERVERS: usize = 16;
+pub const MAX_WEIGHT: u32 = 1000;
+pub const MAX_FAILS: u32 = 1000;
+pub const MAX_FAIL_TIMEOUT: u32 = 86400;
+
+/// Validate + normalize a host's upstream/load-balancing config. Each extra
+/// server's host runs through the SAME SSRF-guarded validation as the primary.
+pub fn validate_upstream(mut up: Upstream, policy: &UpstreamPolicy) -> Result<Upstream, ApiError> {
+    if up.servers.len() > MAX_UPSTREAM_SERVERS {
+        return Err(bad("invalid_upstream", "too many backend servers"));
+    }
+    let weight_ok = |w: u32| (1..=MAX_WEIGHT).contains(&w);
+    if !weight_ok(up.primary_weight) {
+        return Err(bad("invalid_upstream", "primary weight out of range"));
+    }
+    if up.max_fails > MAX_FAILS {
+        return Err(bad("invalid_upstream", "max_fails is too high"));
+    }
+    if up.fail_timeout_secs == 0 || up.fail_timeout_secs > MAX_FAIL_TIMEOUT {
+        return Err(bad("invalid_upstream", "fail_timeout out of range"));
+    }
+    for s in &mut up.servers {
+        s.host = validate_forward_host(&s.host, policy)?;
+        if s.port == 0 {
+            return Err(bad("invalid_upstream", "server port must be 1-65535"));
+        }
+        if !weight_ok(s.weight) {
+            return Err(bad("invalid_upstream", "server weight out of range"));
+        }
+        // ip_hash cannot be combined with backup servers (Angie rejects it).
+        if up.method == BalanceMethod::IpHash && s.backup {
+            return Err(bad(
+                "invalid_upstream",
+                "ip_hash balancing cannot be combined with backup servers",
+            ));
+        }
+    }
+    Ok(up)
+}
+
 /// Validate + normalize a rate-limit config. When disabled it is flattened to
 /// the default (so the DB/JSON never carries stale numbers). When enabled it
 /// must define at least one of a request rate or a connection limit.
@@ -117,6 +253,7 @@ pub struct ProxyHost {
     pub locations: Vec<CustomLocation>,
     pub advanced_snippet: Option<String>,
     pub rate_limit: RateLimit,
+    pub upstream: Upstream,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -155,6 +292,8 @@ pub struct ProxyHostInput {
     pub advanced_snippet: Option<String>,
     #[serde(default)]
     pub rate_limit: RateLimit,
+    #[serde(default)]
+    pub upstream: Upstream,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -402,6 +541,7 @@ pub fn validate_host_input(
     }
 
     input.rate_limit = validate_rate_limit(input.rate_limit)?;
+    input.upstream = validate_upstream(input.upstream, upstream_policy)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1125,6 +1265,7 @@ mod tests {
             locations: vec![],
             advanced_snippet: Some("client_max_body_size 100m;".into()),
             rate_limit: RateLimit::default(),
+            upstream: Upstream::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -1156,6 +1297,81 @@ mod tests {
         ] {
             assert!(validate_cert_name(evil).is_err(), "should reject {evil:?}");
         }
+    }
+
+    #[test]
+    fn upstream_validation() {
+        // A valid pool with an extra server passes and keeps its values.
+        let up = validate_upstream(
+            Upstream {
+                method: BalanceMethod::LeastConn,
+                primary_weight: 2,
+                max_fails: 3,
+                fail_timeout_secs: 15,
+                servers: vec![UpstreamServer {
+                    host: "10.0.0.2".into(),
+                    port: 8080,
+                    weight: 5,
+                    backup: true,
+                    down: false,
+                }],
+            },
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!(up.servers[0].host, "10.0.0.2");
+
+        // ip_hash + a backup server is rejected (Angie forbids the combo).
+        let err = validate_upstream(
+            Upstream {
+                method: BalanceMethod::IpHash,
+                servers: vec![UpstreamServer {
+                    host: "10.0.0.2".into(),
+                    port: 8080,
+                    weight: 1,
+                    backup: true,
+                    down: false,
+                }],
+                ..Default::default()
+            },
+            &policy(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_upstream");
+
+        // An injected server host is rejected via the SSRF-guarded validator.
+        assert!(validate_upstream(
+            Upstream {
+                servers: vec![UpstreamServer {
+                    host: "1.2.3.4; } location /x { root /; ".into(),
+                    port: 80,
+                    weight: 1,
+                    backup: false,
+                    down: false,
+                }],
+                ..Default::default()
+            },
+            &policy(),
+        )
+        .is_err());
+
+        // Out-of-range weight / fail_timeout are rejected.
+        assert!(validate_upstream(
+            Upstream {
+                primary_weight: MAX_WEIGHT + 1,
+                ..Default::default()
+            },
+            &policy(),
+        )
+        .is_err());
+        assert!(validate_upstream(
+            Upstream {
+                fail_timeout_secs: 0,
+                ..Default::default()
+            },
+            &policy(),
+        )
+        .is_err());
     }
 
     #[test]

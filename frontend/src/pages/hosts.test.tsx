@@ -33,6 +33,13 @@ const sampleHost: Host = {
   locations: [],
   advanced_snippet: null,
   rate_limit: { enabled: false, rps: 0, burst: 0, nodelay: false, conn: 0 },
+  upstream: {
+    servers: [],
+    method: 'round_robin',
+    primary_weight: 1,
+    max_fails: 1,
+    fail_timeout_secs: 10,
+  },
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,
