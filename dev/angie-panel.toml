@@ -1,6 +1,7 @@
 # Local development config: cd backend && cargo run -- serve --config ../dev/angie-panel.toml
 bind_addr = "127.0.0.1"
-port = 8080
+# 8080 is commonly taken (Docker/OrbStack); use 8090 for the dev panel.
+port = 8090
 data_dir = "../dev-data"
 # Vite dev server origin must pass the Origin check:
 allowed_hosts = ["localhost", "127.0.0.1"]
