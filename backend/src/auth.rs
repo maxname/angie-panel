@@ -7,9 +7,10 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::{Algorithm, Argon2, Params, Version};
 use axum::extract::{ConnectInfo, FromRequestParts, Json, State};
 use axum::http::request::Parts;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 
@@ -21,7 +22,46 @@ pub const SESSION_COOKIE: &str = "ap_session";
 const SESSION_TTL: i64 = 7 * 24 * 3600;
 const TOKEN_TTL: Duration = Duration::from_secs(24 * 3600);
 pub const TOKEN_FILE: &str = "setup-token";
-const MIN_PASSWORD_LEN: usize = 8;
+pub const MIN_PASSWORD_LEN: usize = 8;
+
+/// Operator role. `admin` may change anything; `viewer` is read-only (enforced
+/// centrally in `security::security_layer` — every mutating request from a
+/// non-admin is rejected there, so no handler can forget the check).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Admin,
+    Viewer,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Viewer => "viewer",
+        }
+    }
+    pub fn from_str(s: &str) -> Role {
+        // Fail safe: anything unrecognized is the LEAST-privileged role.
+        match s {
+            "admin" => Role::Admin,
+            _ => Role::Viewer,
+        }
+    }
+}
+
+/// Validate + normalize an email (shared by setup and user creation).
+pub fn normalize_email(raw: &str) -> Result<String, ApiError> {
+    let email = raw.trim().to_lowercase();
+    if !email.contains('@')
+        || email.len() < 3
+        || email.len() > 254
+        || email.contains(char::is_whitespace)
+    {
+        return Err(ApiError::bad_request("invalid_email", "invalid email"));
+    }
+    Ok(email)
+}
 
 // ---------------------------------------------------------------- passwords
 
@@ -185,15 +225,33 @@ fn removal_cookie() -> Cookie<'static> {
 }
 
 pub struct AuthUser {
-    #[allow(dead_code)]
     pub user_id: i64,
     pub email: String,
+    pub role: Role,
+}
+
+impl AuthUser {
+    pub fn is_admin(&self) -> bool {
+        self.role == Role::Admin
+    }
+    /// 403 unless this user is an admin (handler-side guard for read endpoints
+    /// the method-based middleware doesn't cover, e.g. GET /api/users).
+    pub fn require_admin(&self) -> ApiResult<()> {
+        if self.is_admin() {
+            Ok(())
+        } else {
+            Err(ApiError::forbidden(
+                "forbidden",
+                "this action requires an administrator",
+            ))
+        }
+    }
 }
 
 async fn session_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser> {
     let sid = jar.get(SESSION_COOKIE)?.value().to_string();
-    let row: Option<(i64, String)> = sqlx::query_as(
-        "SELECT u.id, u.email FROM sessions s JOIN users u ON u.id = s.user_id \
+    let row: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.email, u.role FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.id = ? AND s.expires_at > ?",
     )
     .bind(&sid)
@@ -202,7 +260,19 @@ async fn session_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser> {
     .await
     .ok()
     .flatten();
-    row.map(|(user_id, email)| AuthUser { user_id, email })
+    row.map(|(user_id, email, role)| AuthUser {
+        user_id,
+        email,
+        role: Role::from_str(&role),
+    })
+}
+
+/// The session's role, looked up from raw request headers. Used by the security
+/// middleware to gate mutations. `None` = no/invalid session (the handler's
+/// `AuthUser` extractor then returns a clean 401).
+pub async fn session_role(state: &AppState, headers: &HeaderMap) -> Option<Role> {
+    let jar = CookieJar::from_headers(headers);
+    session_user(state, &jar).await.map(|u| u.role)
 }
 
 impl FromRequestParts<Arc<AppState>> for AuthUser {
@@ -277,10 +347,7 @@ pub async fn setup(
     if expected.as_bytes().ct_eq(supplied.as_bytes()).unwrap_u8() != 1 {
         return Err(ApiError::forbidden("invalid_token", "invalid setup token"));
     }
-    let email = req.email.trim().to_lowercase();
-    if !email.contains('@') || email.len() < 3 {
-        return Err(ApiError::bad_request("invalid_email", "invalid email"));
-    }
+    let email = normalize_email(&req.email)?;
     if req.password.len() < MIN_PASSWORD_LEN {
         return Err(ApiError::bad_request(
             "weak_password",
@@ -289,18 +356,22 @@ pub async fn setup(
     }
     let hash = hash_password(&state, req.password).await?;
 
-    // v1 is single-admin: setup (including recovery) replaces the account.
+    // Setup is the break-glass recovery path: it resets to a SINGLE admin
+    // (wiping any other accounts and sessions). Normal multi-user management is
+    // done by that admin via /api/users.
     let mut tx = state.db.begin().await?;
     sqlx::query("DELETE FROM sessions")
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM users").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)")
-        .bind(&email)
-        .bind(&hash)
-        .bind(now_epoch())
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)",
+    )
+    .bind(&email)
+    .bind(&hash)
+    .bind(now_epoch())
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     let _ = std::fs::remove_file(state.cfg.data_dir.join(TOKEN_FILE));
@@ -361,5 +432,5 @@ pub async fn logout(
 }
 
 pub async fn me(user: AuthUser) -> Json<Value> {
-    Json(json!({ "email": user.email }))
+    Json(json!({ "email": user.email, "role": user.role }))
 }

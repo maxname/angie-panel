@@ -1293,3 +1293,121 @@ pub async fn list_apply_history(
         })
         .collect())
 }
+
+// ------------------------------------------------------------------- users
+
+/// A panel operator as returned to the admin UI (never includes the hash).
+pub struct UserRow {
+    pub id: i64,
+    pub email: String,
+    pub role: String,
+    pub created_at: i64,
+}
+
+pub async fn list_users(db: &SqlitePool) -> anyhow::Result<Vec<UserRow>> {
+    let rows: Vec<(i64, String, String, i64)> =
+        sqlx::query_as("SELECT id, email, role, created_at FROM users ORDER BY id")
+            .fetch_all(db)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, email, role, created_at)| UserRow {
+            id,
+            email,
+            role,
+            created_at,
+        })
+        .collect())
+}
+
+pub async fn get_user(db: &SqlitePool, id: i64) -> anyhow::Result<Option<UserRow>> {
+    let row: Option<(i64, String, String, i64)> =
+        sqlx::query_as("SELECT id, email, role, created_at FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.map(|(id, email, role, created_at)| UserRow {
+        id,
+        email,
+        role,
+        created_at,
+    }))
+}
+
+pub async fn user_email_exists(db: &SqlitePool, email: &str) -> anyhow::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = ?")
+        .bind(email)
+        .fetch_one(db)
+        .await?;
+    Ok(n > 0)
+}
+
+/// Insert a user with an already-hashed password. Returns the new id.
+pub async fn insert_user(
+    db: &SqlitePool,
+    email: &str,
+    password_hash: &str,
+    role: &str,
+) -> anyhow::Result<i64> {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (email, password_hash, role, created_at) VALUES (?,?,?,?) RETURNING id",
+    )
+    .bind(email)
+    .bind(password_hash)
+    .bind(role)
+    .bind(now_epoch())
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn set_user_role(db: &SqlitePool, id: i64, role: &str) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE users SET role = ? WHERE id = ?")
+        .bind(role)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn set_user_password(db: &SqlitePool, id: i64, hash: &str) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(hash)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn user_password_hash(db: &SqlitePool, id: i64) -> anyhow::Result<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?,
+    )
+}
+
+/// Delete a user and revoke all their sessions in one transaction.
+pub async fn delete_user(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let rows = sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+/// Count admins (for the "never remove the last admin" guard).
+pub async fn count_admins(db: &SqlitePool) -> anyhow::Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            .fetch_one(db)
+            .await?,
+    )
+}

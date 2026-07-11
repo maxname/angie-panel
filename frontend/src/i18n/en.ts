@@ -4,6 +4,8 @@ export const en = {
   },
   common: {
     loading: 'Loading…',
+    readOnlyBanner:
+      'You have read-only (viewer) access. Changes are disabled — ask an administrator.',
     yes: 'Yes',
     no: 'No',
     unknown: 'Unknown',
@@ -23,6 +25,7 @@ export const en = {
     certificates: 'Certificates',
     accessLists: 'Access Lists',
     apply: 'Apply',
+    users: 'Users',
     settings: 'Settings',
   },
   header: {
@@ -626,6 +629,34 @@ export const en = {
       noDomains: 'Add at least one domain name.',
       errInvalidDomain: 'One of the domains is not a valid domain name.',
       saveFailed: 'Could not save 404 host',
+    },
+  },
+  users: {
+    title: 'Users',
+    subtitle: 'Panel operators. Admins can change everything; viewers are read-only.',
+    add: 'Add user',
+    loadFailed: 'Failed to load users',
+    actionFailed: 'Action failed',
+    you: '(you)',
+    delete: 'Delete',
+    table: { email: 'Email', role: 'Role', actions: 'Actions' },
+    roles: { admin: 'Admin', viewer: 'Viewer' },
+    create: {
+      title: 'Add user',
+      description: 'Create a panel operator and set their role.',
+      email: 'Email',
+      password: 'Password',
+      role: 'Role',
+      submit: 'Create user',
+      failed: 'Could not create user',
+    },
+    password: {
+      title: 'Change your password',
+      description: 'Update the password for your own account.',
+      current: 'Current password',
+      new: 'New password',
+      submit: 'Change password',
+      changed: 'Password changed',
     },
   },
   streams: {

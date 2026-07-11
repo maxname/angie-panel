@@ -14,6 +14,15 @@ use crate::state::AppState;
 /// with SameSite=Lax cookies it blocks CSRF.
 pub const REQUEST_HEADER: &str = "x-ap-request";
 
+/// Mutating endpoints any authenticated (or unauthenticated) user may call —
+/// exempt from the admin role gate. Everything else requires admin.
+fn is_self_service(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/auth/login" | "/api/auth/setup" | "/api/auth/logout" | "/api/users/me/password"
+    )
+}
+
 fn reject(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
@@ -84,6 +93,23 @@ pub async fn security_layer(
         {
             if origin != "null" && !origin_allowed(&state, origin) {
                 return reject(StatusCode::FORBIDDEN, "csrf", "cross-origin request denied");
+            }
+        }
+
+        // 2b. Role gate (central authz): every mutation requires an admin,
+        //     except a small self-service allowlist. This is the single choke
+        //     point — a viewer (or a future endpoint) can never mutate config
+        //     even if a handler forgets to check. Unauthenticated requests fall
+        //     through so the handler's AuthUser extractor returns a clean 401.
+        if !is_self_service(req.uri().path()) {
+            if let Some(crate::auth::Role::Viewer) =
+                crate::auth::session_role(&state, req.headers()).await
+            {
+                return reject(
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    "this action requires an administrator",
+                );
             }
         }
     }

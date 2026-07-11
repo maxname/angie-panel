@@ -23,6 +23,7 @@ mod state;
 mod streams;
 mod system;
 mod systemd;
+mod users;
 
 #[cfg(test)]
 mod integration_tests;

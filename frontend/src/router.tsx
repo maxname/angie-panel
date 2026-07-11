@@ -20,6 +20,7 @@ import { RedirectHostsPage } from '@/pages/redirect-hosts'
 import { SettingsPage } from '@/pages/settings'
 import { SetupPage } from '@/pages/setup'
 import { StreamsPage } from '@/pages/streams'
+import { UsersPage } from '@/pages/users'
 
 const rootRoute = createRootRoute({
   component: Outlet,
@@ -116,6 +117,12 @@ const applyRoute = createRoute({
   component: ApplyPage,
 })
 
+const usersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/users',
+  component: UsersPage,
+})
+
 const settingsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings',
@@ -134,6 +141,7 @@ const routeTree = rootRoute.addChildren([
     certificatesRoute,
     accessListsRoute,
     applyRoute,
+    usersRoute,
     settingsRoute,
   ]),
 ])

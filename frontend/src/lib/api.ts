@@ -3,8 +3,19 @@ export interface AuthState {
   authenticated: boolean
 }
 
+export type Role = 'admin' | 'viewer'
+
 export interface Me {
   email: string
+  role: Role
+}
+
+export interface User {
+  id: number
+  email: string
+  role: Role
+  /** Unix timestamp, seconds. */
+  created_at: number
 }
 
 export interface OkResponse {
@@ -616,6 +627,21 @@ export const api = {
   logout: () => request<OkResponse>('POST', '/api/auth/logout', undefined, { redirectOn401: false }),
 
   me: () => request<Me>('GET', '/api/auth/me'),
+
+  listUsers: () => request<{ users: User[] }>('GET', '/api/users'),
+
+  createUser: (body: { email: string; password: string; role: Role }) =>
+    request<User>('POST', '/api/users', body),
+
+  setUserRole: (id: number, role: Role) =>
+    request<User>('PUT', `/api/users/${id}/role`, { role }),
+
+  deleteUser: (id: number) => request<OkResponse>('DELETE', `/api/users/${id}`),
+
+  changeOwnPassword: (body: {
+    current_password: string
+    new_password: string
+  }) => request<OkResponse>('POST', '/api/users/me/password', body),
 
   getDashboard: () => request<Dashboard>('GET', '/api/dashboard'),
 

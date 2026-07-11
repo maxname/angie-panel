@@ -14,14 +14,17 @@ import {
   Settings,
   ShieldCheck,
   Sun,
+  Users,
   Waypoints,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Toaster } from '@/components/ui/toaster'
 import { api } from '@/lib/api'
+import { useMe } from '@/lib/use-me'
 import { useTheme } from '@/theme/theme-context'
 
 const NAV_ITEMS = [
@@ -33,11 +36,17 @@ const NAV_ITEMS = [
   { to: '/certificates', labelKey: 'nav.certificates', icon: ShieldCheck, exact: false },
   { to: '/access-lists', labelKey: 'nav.accessLists', icon: ListChecks, exact: false },
   { to: '/apply', labelKey: 'nav.apply', icon: Rocket, exact: false },
+  { to: '/users', labelKey: 'nav.users', icon: Users, exact: false, adminOnly: true },
   { to: '/settings', labelKey: 'nav.settings', icon: Settings, exact: false },
 ] as const
 
 export function AppShell() {
   const { t } = useTranslation()
+  const { data: me } = useMe()
+  const isAdmin = me?.role === 'admin'
+  const navItems = NAV_ITEMS.filter(
+    (item) => isAdmin || !('adminOnly' in item),
+  )
 
   return (
     <div className="flex min-h-svh">
@@ -47,7 +56,7 @@ export function AppShell() {
           {t('app.name')}
         </div>
         <nav className="flex flex-col gap-1 p-3">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <Link
               key={item.to}
               to={item.to}
@@ -64,6 +73,14 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <AppHeader />
         <main className="flex-1 p-4 lg:p-6">
+          {me?.role === 'viewer' && (
+            <div
+              className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300"
+              role="status"
+            >
+              {t('common.readOnlyBanner')}
+            </div>
+          )}
           <Outlet />
         </main>
       </div>
@@ -101,8 +118,13 @@ function AppHeader() {
       <div className="hidden font-semibold md:block">{t('app.name')}</div>
       <div className="flex items-center gap-1">
         {meQuery.data !== undefined && (
-          <span className="mr-2 hidden text-sm text-muted-foreground sm:inline">
+          <span className="mr-2 hidden items-center gap-2 text-sm text-muted-foreground sm:inline-flex">
             {meQuery.data.email}
+            {meQuery.data.role === 'viewer' && (
+              <Badge variant="outline" className="text-xs">
+                {t('users.roles.viewer')}
+              </Badge>
+            )}
           </span>
         )}
         <LanguageToggle />

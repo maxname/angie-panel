@@ -917,6 +917,188 @@ async fn full_auth_flow() {
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// Extract the `ap_session=...` cookie from a Set-Cookie response.
+fn session_cookie(res: &axum::response::Response) -> String {
+    res.headers()
+        .get(header::SET_COOKIE)
+        .expect("session cookie")
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn roles_gate_mutations_and_protect_last_admin() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, admin) = authed_app(dir.path()).await;
+
+    // Admin sees a role of "admin".
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/auth/me", None, Some(&admin)))
+        .await
+        .unwrap();
+    assert_eq!(body_json(res).await["role"], json!("admin"));
+
+    // Admin creates a viewer.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/users",
+            Some(json!({"email":"viewer@example.com","password":"viewerpass","role":"viewer"})),
+            Some(&admin),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let viewer_id = body_json(res).await["id"].as_i64().unwrap();
+
+    // Log in as the viewer.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/auth/login",
+            Some(json!({"email":"viewer@example.com","password":"viewerpass"})),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let viewer = session_cookie(&res);
+
+    // Viewer can READ hosts…
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/hosts", None, Some(&viewer)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // …but every mutation is rejected by the central role gate (403).
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/api/hosts",
+            Some(
+                json!({"domains":["v.example.com"],"forward_scheme":"http","forward_host":"10.0.0.1","forward_port":80}),
+            ),
+        ),
+        (
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":9,"forward_host":"10.0.0.1","forward_port":9})),
+        ),
+        (Method::POST, "/api/apply", Some(json!({}))),
+        (
+            Method::POST,
+            "/api/users",
+            Some(json!({"email":"x@y.z","password":"password1","role":"viewer"})),
+        ),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(request(method, path, body, Some(&viewer)))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "{path} must be admin-only"
+        );
+    }
+
+    // Viewer cannot list users (admin-only handler check), even via GET.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/users", None, Some(&viewer)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // Viewer CAN change their own password (self-service allowlist).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/users/me/password",
+            Some(json!({"current_password":"viewerpass","new_password":"newviewerpass"})),
+            Some(&viewer),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Admin can list both users.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/users", None, Some(&admin)))
+        .await
+        .unwrap();
+    assert_eq!(body_json(res).await["users"].as_array().unwrap().len(), 2);
+
+    // Last-admin protection: the admin cannot demote themselves (only admin).
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/users", None, Some(&admin)))
+        .await
+        .unwrap();
+    let admin_id = body_json(res).await["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["role"] == json!("admin"))
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/users/{admin_id}/role"),
+            Some(json!({"role":"viewer"})),
+            Some(&admin),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(res).await["error"]["code"], json!("last_admin"));
+
+    // Admin cannot delete their own account.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/users/{admin_id}"),
+            None,
+            Some(&admin),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(res).await["error"]["code"],
+        json!("cannot_delete_self")
+    );
+
+    // Admin CAN delete the viewer.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/users/{viewer_id}"),
+            None,
+            Some(&admin),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn host_and_api_fallback() {
     let dir = tempfile::tempdir().unwrap();
