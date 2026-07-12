@@ -536,7 +536,7 @@ pub async fn set_dead_enabled(db: &SqlitePool, id: i64, enabled: bool) -> anyhow
 
 // ---------------------------------------------------------------- streams
 
-use crate::model::{Stream, StreamInput};
+use crate::model::{Stream, StreamInput, StreamTls};
 
 #[derive(sqlx::FromRow)]
 struct StreamRow {
@@ -546,6 +546,8 @@ struct StreamRow {
     forward_port: i64,
     tcp: i64,
     udp: i64,
+    tls: String,
+    certificate_id: Option<i64>,
     enabled: i64,
     created_at: i64,
     updated_at: i64,
@@ -560,6 +562,8 @@ impl From<StreamRow> for Stream {
             forward_port: r.forward_port as u16,
             tcp: r.tcp != 0,
             udp: r.udp != 0,
+            tls: StreamTls::from_stored(&r.tls),
+            certificate_id: r.certificate_id,
             enabled: r.enabled != 0,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -567,8 +571,8 @@ impl From<StreamRow> for Stream {
     }
 }
 
-const STREAM_COLUMNS: &str =
-    "id, incoming_port, forward_host, forward_port, tcp, udp, enabled, created_at, updated_at";
+const STREAM_COLUMNS: &str = "id, incoming_port, forward_host, forward_port, tcp, udp, tls, \
+     certificate_id, enabled, created_at, updated_at";
 
 pub async fn list_streams(db: &SqlitePool) -> anyhow::Result<Vec<Stream>> {
     let rows: Vec<StreamRow> =
@@ -591,14 +595,16 @@ pub async fn get_stream(db: &SqlitePool, id: i64) -> anyhow::Result<Option<Strea
 pub async fn insert_stream(db: &SqlitePool, i: &StreamInput) -> anyhow::Result<i64> {
     let now = now_epoch();
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO streams (incoming_port, forward_host, forward_port, tcp, udp, enabled, \
-         created_at, updated_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+        "INSERT INTO streams (incoming_port, forward_host, forward_port, tcp, udp, tls, \
+         certificate_id, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(i.incoming_port as i64)
     .bind(&i.forward_host)
     .bind(i.forward_port as i64)
     .bind(i.tcp as i64)
     .bind(i.udp as i64)
+    .bind(i.tls.as_str())
+    .bind(i.certificate_id)
     .bind(i.enabled as i64)
     .bind(now)
     .bind(now)
@@ -610,13 +616,15 @@ pub async fn insert_stream(db: &SqlitePool, i: &StreamInput) -> anyhow::Result<i
 pub async fn update_stream(db: &SqlitePool, id: i64, i: &StreamInput) -> anyhow::Result<bool> {
     let rows = sqlx::query(
         "UPDATE streams SET incoming_port=?, forward_host=?, forward_port=?, tcp=?, udp=?, \
-         enabled=?, updated_at=? WHERE id=?",
+         tls=?, certificate_id=?, enabled=?, updated_at=? WHERE id=?",
     )
     .bind(i.incoming_port as i64)
     .bind(&i.forward_host)
     .bind(i.forward_port as i64)
     .bind(i.tcp as i64)
     .bind(i.udp as i64)
+    .bind(i.tls.as_str())
+    .bind(i.certificate_id)
     .bind(i.enabled as i64)
     .bind(now_epoch())
     .bind(id)
@@ -966,7 +974,7 @@ pub async fn import_replace(
     for (id, s) in streams {
         sqlx::query(
             "INSERT INTO streams (id, incoming_port, forward_host, forward_port, tcp, udp, \
-             enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+             tls, certificate_id, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(s.incoming_port as i64)
@@ -974,6 +982,8 @@ pub async fn import_replace(
         .bind(s.forward_port as i64)
         .bind(s.tcp as i64)
         .bind(s.udp as i64)
+        .bind(s.tls.as_str())
+        .bind(s.certificate_id)
         .bind(s.enabled as i64)
         .bind(now)
         .bind(now)
@@ -1023,6 +1033,11 @@ pub async fn hosts_using_cert(db: &SqlitePool, cert_id: i64) -> anyhow::Result<V
     for h in list_dead(db).await? {
         if h.certificate_id == Some(cert_id) {
             out.push(format!("404 #{} ({})", h.id, first(&h.domains)));
+        }
+    }
+    for s in list_streams(db).await? {
+        if s.certificate_id == Some(cert_id) {
+            out.push(format!("stream #{} (:{})", s.id, s.incoming_port));
         }
     }
     Ok(out)

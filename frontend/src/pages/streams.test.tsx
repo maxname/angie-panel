@@ -22,6 +22,8 @@ const sampleStream: Stream = {
   forward_port: 5432,
   tcp: true,
   udp: false,
+  tls: 'none',
+  certificate_id: null,
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,
@@ -153,6 +155,87 @@ describe('stream editor', () => {
       await screen.findByText('Select at least one of TCP or UDP.'),
     ).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalledWith('/api/streams', expect.anything())
+  })
+
+  it('requires a certificate when TLS termination is selected', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <StreamEditorForm stream={null} onDone={() => {}} />
+      </QueryClientProvider>,
+    )
+
+    await user.type(screen.getByLabelText('Incoming port'), '5432')
+    await user.type(screen.getByLabelText('Forward host'), '192.168.1.20')
+    await user.type(screen.getByLabelText('Forward port'), '5432')
+    // Switch the TLS mode Select to "Terminate TLS".
+    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: 'Terminate TLS' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(
+      await screen.findByText('Select a certificate for TLS termination.'),
+    ).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/streams', expect.anything())
+  })
+
+  it('submits tls terminate with the chosen certificate', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(
+          jsonResponse({
+            certificates: [
+              { id: 3, name: 'streamcert', domains: ['db.example.com'] },
+            ],
+          }),
+        )
+      }
+      if (input === '/api/streams' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <StreamEditorForm stream={null} onDone={() => {}} />
+      </QueryClientProvider>,
+    )
+
+    await user.type(screen.getByLabelText('Incoming port'), '5432')
+    await user.type(screen.getByLabelText('Forward host'), '192.168.1.20')
+    await user.type(screen.getByLabelText('Forward port'), '5432')
+    // Mode Select → Terminate TLS.
+    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: 'Terminate TLS' }))
+    // Certificate Select (the second combobox) → the streamcert cert.
+    const combos = screen.getAllByRole('combobox')
+    await user.click(combos[combos.length - 1])
+    await user.click(
+      screen.getByRole('option', { name: /streamcert/ }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/streams' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.tls).toBe('terminate')
+    expect(body.certificate_id).toBe(3)
+    // Terminate forces TCP-only.
+    expect(body.tcp).toBe(true)
+    expect(body.udp).toBe(false)
   })
 
   it('surfaces a 409 port_conflict message on the port field', async () => {

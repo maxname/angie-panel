@@ -695,6 +695,7 @@ export const en = {
     unappliedBody: 'Go to Apply to write and reload the configuration.',
     actionFailed: 'Action failed',
     protocol: { tcp: 'TCP', udp: 'UDP', both: 'TCP + UDP' },
+    tlsBadge: 'TLS',
     table: {
       incomingPort: 'Incoming port',
       forward: 'Forwards to',
@@ -744,6 +745,20 @@ export const en = {
       errInvalidForwardHost: 'The forward host is not a valid IP or hostname.',
       errPortConflict: 'That port is already forwarded by another stream.',
       saveFailed: 'Could not save stream',
+      tls: {
+        title: 'TLS',
+        description:
+          'Terminate TLS on the incoming port with a panel-managed certificate and forward plaintext to the backend. TCP only.',
+        modeNone: 'Off (plain forward)',
+        modeTerminate: 'Terminate TLS',
+        certificate: 'Certificate',
+        certPlaceholder: 'Select a certificate',
+        certHint:
+          'The same certificates as the proxy hosts. Angie auto-renews it; the port serves TLS once it is issued.',
+        certRequired: 'Select a certificate for TLS termination.',
+        certLoadFailed: 'Failed to load certificates',
+        tcpOnly: 'TLS termination is TCP only (no UDP).',
+      },
     },
   },
 }

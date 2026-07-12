@@ -30,7 +30,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Ban, CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, Scheme, Stream,
+    Ban, CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, Scheme, Stream, StreamTls,
 };
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
@@ -225,13 +225,47 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
         if !s.enabled {
             continue;
         }
+        // A TLS-terminating stream needs a real certificate to name in
+        // `$acme_cert_<name>`. If the reference dangles (guarded against by
+        // validation + the cert-in-use delete check, but be defensive) we skip
+        // the stream entirely rather than silently downgrade it to plaintext.
+        let terminate_cert = match s.tls {
+            StreamTls::Terminate => {
+                match s.certificate_id.and_then(|cid| certs.get(&cid).copied()) {
+                    Some(cert) => Some(cert),
+                    None => {
+                        tracing::warn!(
+                            stream_id = s.id,
+                            "TLS-terminating stream references a missing certificate; skipping"
+                        );
+                        continue;
+                    }
+                }
+            }
+            StreamTls::None => None,
+        };
+
         let mut body = String::new();
         let _ = writeln!(body, "server {{");
-        if s.tcp {
-            let _ = writeln!(body, "    listen {};", s.incoming_port);
-        }
-        if s.udp {
-            let _ = writeln!(body, "    listen {} udp;", s.incoming_port);
+        if let Some(cert) = terminate_cert {
+            // TCP-only SSL listener (validated: terminate ⇒ tcp, no udp). The
+            // `$acme_cert_<name>` variable is lazy, so `angie -t` passes before
+            // issuance and Angie hot-loads the cert once the shared http-context
+            // ACME collector obtains it — no readiness gate, no reload.
+            let _ = writeln!(body, "    listen {} ssl;", s.incoming_port);
+            let _ = writeln!(body, "    ssl_certificate     $acme_cert_{};", cert.name);
+            let _ = writeln!(
+                body,
+                "    ssl_certificate_key $acme_cert_key_{};",
+                cert.name
+            );
+        } else {
+            if s.tcp {
+                let _ = writeln!(body, "    listen {};", s.incoming_port);
+            }
+            if s.udp {
+                let _ = writeln!(body, "    listen {} udp;", s.incoming_port);
+            }
         }
         // forward_host/port were validated (bare IP/hostname + u16).
         let _ = writeln!(

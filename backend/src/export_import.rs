@@ -341,6 +341,9 @@ pub async fn import(
         let input: StreamInput = serde_json::from_value(v.clone())
             .map_err(|e| bad_entry("stream", i, &e.to_string()))?;
         let input = model::validate_stream_input(input, &policy)?;
+        if input.tls == model::StreamTls::Terminate {
+            check_cert_ref("stream", i, input.certificate_id, &cert_ids)?;
+        }
         if !stream_ids.insert(id) {
             return Err(bad_entry("stream", i, "duplicate id"));
         }

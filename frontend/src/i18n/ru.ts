@@ -695,6 +695,7 @@ export const ru: typeof en = {
     unappliedBody: 'Перейдите в «Применение», чтобы записать и перезагрузить конфигурацию.',
     actionFailed: 'Не удалось выполнить действие',
     protocol: { tcp: 'TCP', udp: 'UDP', both: 'TCP + UDP' },
+    tlsBadge: 'TLS',
     table: {
       incomingPort: 'Входящий порт',
       forward: 'Проброс на',
@@ -744,6 +745,20 @@ export const ru: typeof en = {
       errInvalidForwardHost: 'Хост назначения не является корректным IP или именем хоста.',
       errPortConflict: 'Этот порт уже пробрасывается другим потоком.',
       saveFailed: 'Не удалось сохранить поток',
+      tls: {
+        title: 'TLS',
+        description:
+          'Терминировать TLS на входящем порту сертификатом панели и проксировать открытый трафик на бэкенд. Только TCP.',
+        modeNone: 'Выкл. (обычный проброс)',
+        modeTerminate: 'Терминировать TLS',
+        certificate: 'Сертификат',
+        certPlaceholder: 'Выберите сертификат',
+        certHint:
+          'Те же сертификаты, что и у прокси-хостов. Angie продлевает его сам; порт отдаёт TLS после выпуска.',
+        certRequired: 'Выберите сертификат для терминации TLS.',
+        certLoadFailed: 'Не удалось загрузить сертификаты',
+        tcpOnly: 'Терминация TLS работает только по TCP (без UDP).',
+      },
     },
   },
 }

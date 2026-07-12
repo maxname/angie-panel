@@ -1205,8 +1205,42 @@ fn normalize_snippet(s: &str, allow_advanced_snippets: bool) -> Result<Option<St
 
 // ============================================================ streams (v2)
 
-/// A TCP/UDP port forward (v1: plain forwarding, no TLS termination — that
-/// would need stream-context ACME, a follow-up).
+/// How a stream handles TLS on its incoming port.
+///
+/// `None` is a plain L4 forward (encrypted or not — Angie passes the bytes
+/// through untouched). `Terminate` makes Angie decrypt using a panel-managed
+/// certificate (`listen … ssl` + `$acme_cert_<name>`) and forward plaintext to
+/// the backend — putting auto-renewed TLS in front of a plaintext TCP service.
+/// TLS is TCP-only here (stream_ssl has no DTLS), so `Terminate` requires
+/// `tcp` and forbids `udp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamTls {
+    #[default]
+    None,
+    Terminate,
+}
+
+impl StreamTls {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StreamTls::None => "none",
+            StreamTls::Terminate => "terminate",
+        }
+    }
+
+    /// Fail-safe parse for the repo: an unknown/NULL value degrades to `None`
+    /// (a plain forward), never a surprise TLS listener.
+    pub fn from_stored(s: &str) -> Self {
+        match s {
+            "terminate" => StreamTls::Terminate,
+            _ => StreamTls::None,
+        }
+    }
+}
+
+/// A TCP/UDP port forward (Angie `stream {}` context), optionally terminating
+/// TLS with a panel-managed certificate (see [`StreamTls`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct Stream {
     pub id: i64,
@@ -1215,6 +1249,11 @@ pub struct Stream {
     pub forward_port: u16,
     pub tcp: bool,
     pub udp: bool,
+    #[serde(default)]
+    pub tls: StreamTls,
+    /// Certificate used when `tls == Terminate` (references `certificates.id`).
+    #[serde(default)]
+    pub certificate_id: Option<i64>,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -1229,6 +1268,10 @@ pub struct StreamInput {
     pub tcp: bool,
     #[serde(default)]
     pub udp: bool,
+    #[serde(default)]
+    pub tls: StreamTls,
+    #[serde(default)]
+    pub certificate_id: Option<i64>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -1248,6 +1291,29 @@ pub fn validate_stream_input(
             "no_protocol",
             "a stream must forward at least one of TCP or UDP",
         ));
+    }
+    match input.tls {
+        StreamTls::Terminate => {
+            // TLS termination is a TCP-only SSL listener.
+            if !input.tcp {
+                return Err(bad(
+                    "tls_requires_tcp",
+                    "TLS termination needs TCP; enable TCP or turn TLS off",
+                ));
+            }
+            if input.udp {
+                return Err(bad(
+                    "tls_tcp_only",
+                    "TLS termination cannot be combined with UDP (no DTLS)",
+                ));
+            }
+            if input.certificate_id.is_none() {
+                return Err(bad("cert_required", "TLS termination needs a certificate"));
+            }
+        }
+        // A plain forward never carries a certificate reference — drop any
+        // stray id so it can't dangle or resurrect on a later mode flip.
+        StreamTls::None => input.certificate_id = None,
     }
     // Reuse the strict upstream validation (bare IP or hostname, SSRF guard).
     input.forward_host = validate_forward_host(&input.forward_host, upstream_policy)?;
@@ -1334,6 +1400,68 @@ mod tests {
             allow_loopback: true,
         };
         assert!(validate_forward_host("127.0.0.1", &permissive).is_ok());
+    }
+
+    fn base_stream_input() -> StreamInput {
+        StreamInput {
+            incoming_port: 5432,
+            forward_host: "192.168.1.20".into(),
+            forward_port: 5432,
+            tcp: true,
+            udp: false,
+            tls: StreamTls::None,
+            certificate_id: None,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn stream_tls_terminate_rules() {
+        // Terminate needs a certificate.
+        let mut s = base_stream_input();
+        s.tls = StreamTls::Terminate;
+        assert_eq!(
+            validate_stream_input(s, &policy()).unwrap_err().code,
+            "cert_required"
+        );
+
+        // Terminate needs TCP.
+        let mut s = base_stream_input();
+        s.tls = StreamTls::Terminate;
+        s.certificate_id = Some(1);
+        s.tcp = false;
+        s.udp = true;
+        assert_eq!(
+            validate_stream_input(s, &policy()).unwrap_err().code,
+            "tls_requires_tcp"
+        );
+
+        // Terminate cannot ride UDP (no DTLS).
+        let mut s = base_stream_input();
+        s.tls = StreamTls::Terminate;
+        s.certificate_id = Some(1);
+        s.udp = true;
+        assert_eq!(
+            validate_stream_input(s, &policy()).unwrap_err().code,
+            "tls_tcp_only"
+        );
+
+        // Valid terminate stream passes.
+        let mut s = base_stream_input();
+        s.tls = StreamTls::Terminate;
+        s.certificate_id = Some(1);
+        let out = validate_stream_input(s, &policy()).unwrap();
+        assert_eq!(out.tls, StreamTls::Terminate);
+        assert_eq!(out.certificate_id, Some(1));
+    }
+
+    #[test]
+    fn stream_none_drops_stray_cert() {
+        // A plain forward must never keep a certificate reference.
+        let mut s = base_stream_input();
+        s.certificate_id = Some(42);
+        let out = validate_stream_input(s, &policy()).unwrap();
+        assert_eq!(out.certificate_id, None);
     }
 
     #[test]

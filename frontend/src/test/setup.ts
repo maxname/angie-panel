@@ -14,6 +14,17 @@ if (!('ResizeObserver' in globalThis)) {
     ResizeObserverStub as unknown as typeof ResizeObserver
 }
 
+// jsdom implements neither the Pointer Capture API nor scrollIntoView, which
+// Radix Select uses when opening its listbox. Stub them so a Select can be
+// driven in tests (open → pick an option).
+const proto = globalThis.HTMLElement?.prototype
+if (proto && !proto.hasPointerCapture) {
+  proto.hasPointerCapture = () => false
+  proto.setPointerCapture = () => {}
+  proto.releasePointerCapture = () => {}
+  proto.scrollIntoView = () => {}
+}
+
 afterEach(() => {
   cleanup()
 })

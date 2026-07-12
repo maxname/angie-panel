@@ -206,6 +206,9 @@ export interface RedirectHost {
 }
 
 /** A TCP/UDP port forward (Angie stream {} context). */
+/** TLS handling on the incoming port. */
+export type StreamTls = 'none' | 'terminate'
+
 export interface Stream {
   id: number
   incoming_port: number
@@ -213,6 +216,9 @@ export interface Stream {
   forward_port: number
   tcp: boolean
   udp: boolean
+  tls: StreamTls
+  /** Certificate used when tls === 'terminate'. */
+  certificate_id: number | null
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -227,6 +233,8 @@ export interface StreamInput {
   forward_port: number
   tcp?: boolean
   udp?: boolean
+  tls?: StreamTls
+  certificate_id?: number | null
   enabled?: boolean
 }
 

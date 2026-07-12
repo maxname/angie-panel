@@ -26,6 +26,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -33,7 +40,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api, ApiError, type Stream, type StreamInput } from '@/lib/api'
+import {
+  api,
+  ApiError,
+  type Stream,
+  type StreamInput,
+  type StreamTls,
+} from '@/lib/api'
 import { toast } from '@/lib/toast'
 
 export function StreamsPage() {
@@ -250,7 +263,14 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
         </span>
       </TableCell>
       <TableCell>
-        <Badge variant="secondary">{protocolLabel(stream, t)}</Badge>
+        <div className="flex flex-wrap items-center gap-1">
+          <Badge variant="secondary">{protocolLabel(stream, t)}</Badge>
+          {stream.tls === 'terminate' && (
+            <Badge className="bg-sky-600/15 text-sky-700 dark:bg-sky-400/15 dark:text-sky-400">
+              {t('streams.tlsBadge')}
+            </Badge>
+          )}
+        </div>
       </TableCell>
       <TableCell>
         {stream.enabled ? (
@@ -405,6 +425,8 @@ interface FormState {
   forward_port: string
   tcp: boolean
   udp: boolean
+  tls: StreamTls
+  certificate_id: number | null
 }
 
 function initialState(stream: Stream | null): FormState {
@@ -415,6 +437,8 @@ function initialState(stream: Stream | null): FormState {
       forward_port: '',
       tcp: true,
       udp: false,
+      tls: 'none',
+      certificate_id: null,
     }
   }
   return {
@@ -423,6 +447,8 @@ function initialState(stream: Stream | null): FormState {
     forward_port: String(stream.forward_port),
     tcp: stream.tcp,
     udp: stream.udp,
+    tls: stream.tls,
+    certificate_id: stream.certificate_id,
   }
 }
 
@@ -431,6 +457,7 @@ interface FieldErrors {
   forwardHost?: string
   forwardPort?: string
   protocol?: string
+  tls?: string
   form?: string
 }
 
@@ -446,8 +473,24 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
   const [form, setForm] = useState<FormState>(() => initialState(stream))
   const [clientErrors, setClientErrors] = useState<FieldErrors>({})
 
+  // Shares the ['certificates'] key so certs created on that page appear here.
+  const certsQuery = useQuery({
+    queryKey: ['certificates'],
+    queryFn: () => api.listCertificates(),
+  })
+  const certificates = certsQuery.data?.certificates ?? []
+
   const patch = (partial: Partial<FormState>) =>
     setForm((prev) => ({ ...prev, ...partial }))
+
+  // TLS termination is a TCP-only SSL listener; selecting it forces TCP on and
+  // UDP off so the form can't build a shape the backend will reject.
+  const setTlsMode = (mode: StreamTls) =>
+    setForm((prev) =>
+      mode === 'terminate'
+        ? { ...prev, tls: mode, tcp: true, udp: false }
+        : { ...prev, tls: mode, certificate_id: null },
+    )
 
   const mutation = useMutation({
     mutationFn: (input: StreamInput) =>
@@ -478,6 +521,11 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
           return { forwardHost: t('streams.editor.errInvalidForwardHost') }
         case 'no_protocol':
           return { protocol: t('streams.editor.noProtocol') }
+        case 'cert_required':
+          return { tls: t('streams.editor.tls.certRequired') }
+        case 'tls_requires_tcp':
+        case 'tls_tcp_only':
+          return { tls: t('streams.editor.tls.tcpOnly') }
         case 'port_conflict':
           return { incomingPort: message }
         default:
@@ -507,6 +555,9 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
     if (!form.tcp && !form.udp) {
       next.protocol = t('streams.editor.noProtocol')
     }
+    if (form.tls === 'terminate' && form.certificate_id === null) {
+      next.tls = t('streams.editor.tls.certRequired')
+    }
     setClientErrors(next)
     if (Object.keys(next).length > 0) {
       return
@@ -518,6 +569,8 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
       forward_port: forward,
       tcp: form.tcp,
       udp: form.udp,
+      tls: form.tls,
+      certificate_id: form.tls === 'terminate' ? form.certificate_id : null,
       enabled: stream === null ? true : stream.enabled,
     }
     mutation.mutate(input)
@@ -598,11 +651,71 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
           id="stream-udp"
           label={t('streams.editor.udp')}
           checked={form.udp}
+          disabled={form.tls === 'terminate'}
           onChange={(checked) => patch({ udp: checked })}
         />
         {errors.protocol !== undefined && (
           <p role="alert" className="text-sm text-destructive">
             {errors.protocol}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-3 rounded-lg border p-3">
+        <div className="space-y-1">
+          <span className="text-sm font-medium">
+            {t('streams.editor.tls.title')}
+          </span>
+          <p className="text-xs text-muted-foreground">
+            {t('streams.editor.tls.description')}
+          </p>
+        </div>
+        <Select value={form.tls} onValueChange={(v) => setTlsMode(v as StreamTls)}>
+          <SelectTrigger id="stream-tls-mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">{t('streams.editor.tls.modeNone')}</SelectItem>
+            <SelectItem value="terminate">
+              {t('streams.editor.tls.modeTerminate')}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {form.tls === 'terminate' && (
+          <div className="space-y-2">
+            <Label htmlFor="stream-tls-cert">
+              {t('streams.editor.tls.certificate')}
+            </Label>
+            <Select
+              value={
+                form.certificate_id === null ? '' : String(form.certificate_id)
+              }
+              onValueChange={(v) => patch({ certificate_id: Number.parseInt(v, 10) })}
+            >
+              <SelectTrigger id="stream-tls-cert">
+                <SelectValue placeholder={t('streams.editor.tls.certPlaceholder')} />
+              </SelectTrigger>
+              <SelectContent>
+                {certificates.map((cert) => (
+                  <SelectItem key={cert.id} value={String(cert.id)}>
+                    {cert.name} — {cert.domains.join(', ')}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {certsQuery.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                {t('streams.editor.tls.certLoadFailed')}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {t('streams.editor.tls.certHint')}
+            </p>
+          </div>
+        )}
+        {errors.tls !== undefined && (
+          <p role="alert" className="text-sm text-destructive">
+            {errors.tls}
           </p>
         )}
       </div>

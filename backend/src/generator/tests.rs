@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::model::{
     BalanceMethod, CustomLocation, DeadHost, Mtls, ProxyHost, RateLimit, RedirectHost,
-    RedirectScheme, Scheme, Stream, Upstream, UpstreamServer,
+    RedirectScheme, Scheme, Stream, StreamTls, Upstream, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -99,6 +99,8 @@ fn base_stream(id: i64, incoming_port: u16, forward_host: &str, forward_port: u1
         forward_port,
         tcp: true,
         udp: false,
+        tls: StreamTls::None,
+        certificate_id: None,
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -418,6 +420,41 @@ fn golden_streams_tcp_udp() {
     assert_golden("stream-1-tcp.conf", &files["stream.d/stream-1.conf"]);
     assert_golden("stream-2-udp.conf", &files["stream.d/stream-2.conf"]);
     assert_golden("stream-3-tcp-udp.conf", &files["stream.d/stream-3.conf"]);
+}
+
+#[test]
+fn golden_stream_tls_terminate() {
+    // A TLS-terminating stream decrypts on its port with a panel cert and
+    // forwards plaintext. The cert need not be `ready` — the `$acme_cert_<name>`
+    // variable is lazy — so an unready cert still emits the ssl listener.
+    let cert = ready_cert(7, "streamcert", &["db.example.com"]);
+    let mut inp = input(vec![], vec![cert], settings(DefaultSite::NotFound, false));
+    inp.streams = vec![{
+        let mut s = base_stream(1, 5432, "192.168.1.20", 5432);
+        s.tls = StreamTls::Terminate;
+        s.certificate_id = Some(7);
+        s
+    }];
+    let files = generate(&inp).unwrap();
+    assert_golden("stream-1-tls.conf", &files["stream.d/stream-1.conf"]);
+}
+
+#[test]
+fn stream_tls_skipped_when_cert_missing() {
+    // Defensive: a terminate stream whose cert reference dangles is skipped
+    // entirely, never downgraded to a plaintext forward.
+    let mut inp = input(vec![], vec![], settings(DefaultSite::NotFound, false));
+    inp.streams = vec![{
+        let mut s = base_stream(1, 5432, "192.168.1.20", 5432);
+        s.tls = StreamTls::Terminate;
+        s.certificate_id = Some(999);
+        s
+    }];
+    let files = generate(&inp).unwrap();
+    assert!(
+        !files.contains_key("stream.d/stream-1.conf"),
+        "terminate stream with a missing cert must be skipped, not emitted"
+    );
 }
 
 #[test]

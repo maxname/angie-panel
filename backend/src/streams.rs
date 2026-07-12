@@ -1,6 +1,8 @@
 //! TCP/UDP port forwarding (Angie `stream {}` context) — the last host type
-//! for full nginx-proxy-manager parity (v2). Streams are plain L4 forwards
-//! (no TLS termination in v1; that needs stream-context ACME, a follow-up).
+//! for full nginx-proxy-manager parity (v2). A stream is a plain L4 forward,
+//! or (TCP only) terminates TLS with a panel-managed certificate — Angie
+//! decrypts on the incoming port via `$acme_cert_<name>` (issued by the same
+//! http-context ACME collector the proxy hosts use) and forwards plaintext.
 //!
 //! Unlike HTTP hosts, streams are keyed by their **incoming port**, not a
 //! domain — two enabled streams cannot listen on the same port for the same
@@ -21,7 +23,7 @@ use serde_json::{json, Value};
 use crate::auth::AuthUser;
 use crate::db::now_epoch;
 use crate::error::{ApiError, ApiResult};
-use crate::model::{self, StreamInput, UpstreamPolicy};
+use crate::model::{self, StreamInput, StreamTls, UpstreamPolicy};
 use crate::repo;
 use crate::state::AppState;
 use crate::systemd;
@@ -30,6 +32,20 @@ fn upstream_policy(state: &AppState) -> UpstreamPolicy {
     UpstreamPolicy {
         allow_loopback: state.cfg.allow_loopback_upstreams,
     }
+}
+
+/// A TLS-terminating stream must point at a certificate that actually exists,
+/// or the generator would emit a dangling `$acme_cert_<name>` reference.
+async fn check_cert_exists(state: &AppState, input: &StreamInput) -> ApiResult<()> {
+    if input.tls != StreamTls::Terminate {
+        return Ok(());
+    }
+    if let Some(cid) = input.certificate_id {
+        if repo::get_cert(&state.db, cid).await?.is_none() {
+            return Err(ApiError::not_found(format!("no certificate #{cid}")));
+        }
+    }
+    Ok(())
 }
 
 /// Reject an incoming port already taken by another enabled stream on an
@@ -91,6 +107,7 @@ pub async fn create(
     Json(raw): Json<StreamInput>,
 ) -> ApiResult<Json<Value>> {
     let input = model::validate_stream_input(raw, &upstream_policy(&state))?;
+    check_cert_exists(&state, &input).await?;
     check_port_free(&state, &input, 0).await?;
     let id = repo::insert_stream(&state.db, &input).await?;
     let s = repo::get_stream(&state.db, id)
@@ -106,6 +123,7 @@ pub async fn update(
     Json(raw): Json<StreamInput>,
 ) -> ApiResult<Json<Value>> {
     let input = model::validate_stream_input(raw, &upstream_policy(&state))?;
+    check_cert_exists(&state, &input).await?;
     check_port_free(&state, &input, id).await?;
     if !repo::update_stream(&state.db, id, &input).await? {
         return Err(ApiError::not_found(format!("no stream #{id}")));
@@ -159,6 +177,8 @@ async fn set_enabled(
                 forward_port: s.forward_port,
                 tcp: s.tcp,
                 udp: s.udp,
+                tls: s.tls,
+                certificate_id: s.certificate_id,
                 enabled: true,
             };
             check_port_free(&state, &intended, id).await?;

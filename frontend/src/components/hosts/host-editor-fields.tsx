@@ -25,16 +25,32 @@ interface ToggleRowProps {
   label: string
   checked: boolean
   onChange: (checked: boolean) => void
+  disabled?: boolean
 }
 
 /** A label + Switch row, matching the proxy host editor. */
-export function ToggleRow({ id, label, checked, onChange }: ToggleRowProps) {
+export function ToggleRow({
+  id,
+  label,
+  checked,
+  onChange,
+  disabled,
+}: ToggleRowProps) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <Label htmlFor={id} className="font-normal">
+      <Label
+        htmlFor={id}
+        className="font-normal data-[disabled=true]:opacity-50"
+        data-disabled={disabled}
+      >
         {label}
       </Label>
-      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+      <Switch
+        id={id}
+        checked={checked}
+        onCheckedChange={onChange}
+        disabled={disabled}
+      />
     </div>
   )
 }
