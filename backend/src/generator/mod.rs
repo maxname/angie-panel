@@ -754,6 +754,59 @@ fn emit_geo_guard(out: &mut String, input: &GeneratorInput) {
     }
 }
 
+// -------------------------------------------------------------- maintenance
+
+/// HTML-escape a value so it is safe both as HTML text and inside the
+/// double-quoted `return 503 "…"` string (`"` → entity removes the char that
+/// would close the string; `$`/`\` were already rejected by validation).
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The maintenance `location /`: serve a styled 503 page instead of proxying.
+/// Emitted in place of the normal locations when maintenance is active. The
+/// whole page is one `return 503 "…"` string — no file, no injection surface
+/// (title/message are validated then HTML-escaped; attributes use single quotes
+/// so they never close the double-quoted directive).
+fn emit_maintenance(out: &mut String, host: &ProxyHost) {
+    let m = &host.maintenance;
+    let title = if m.title.trim().is_empty() {
+        "Under maintenance".to_string()
+    } else {
+        html_escape(&m.title)
+    };
+    let message = if m.message.trim().is_empty() {
+        "This service is temporarily unavailable. Please try again later.".to_string()
+    } else {
+        html_escape(&m.message)
+    };
+    let page = format!(
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>\
+<meta name='viewport' content='width=device-width,initial-scale=1'><title>{title}</title>\
+</head><body style='font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;\
+background:#0b0f19;color:#e5e7eb;margin:0;min-height:100vh;display:flex;align-items:center;\
+justify-content:center;text-align:center'><main style='max-width:32rem;padding:2rem'>\
+<h1 style='font-size:1.5rem;margin:0 0 .75rem'>{title}</h1>\
+<p style='color:#9ca3af;line-height:1.6;margin:0'>{message}</p></main></body></html>"
+    );
+    let _ = writeln!(out, "    location / {{");
+    let _ = writeln!(out, "        default_type text/html;");
+    let _ = writeln!(out, "        add_header Retry-After \"3600\" always;");
+    let _ = writeln!(out, "        return 503 \"{page}\";");
+    let _ = writeln!(out, "    }}");
+}
+
 // -------------------------------------------------------------- 03-bans.conf
 
 /// Global IP blocklist as http-scope `deny` rules. Addresses were validated to
@@ -954,6 +1007,14 @@ fn host_features(
     // POST_READ, before the rewrite-phase `if` runs, and on the collector /
     // default server rather than these host blocks.
     emit_geo_guard(out, input);
+
+    // Maintenance mode: serve a 503 page instead of proxying. Short-circuits the
+    // rest of the server body (locations/auth/rate-limit) — the host is offline.
+    // Runs after the geo guard so blocked countries still get 403.
+    if host.maintenance.active() {
+        emit_maintenance(out, host);
+        return Ok(());
+    }
 
     // HSTS only makes sense over TLS.
     if tls && host.hsts {

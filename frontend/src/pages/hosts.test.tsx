@@ -49,6 +49,7 @@ const sampleHost: Host = {
     copy_headers: [],
   },
   custom_headers: [],
+  maintenance: { enabled: false, title: '', message: '' },
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,

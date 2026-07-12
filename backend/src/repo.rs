@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 use crate::db::now_epoch;
 use crate::model::{
     Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, ForwardAuth, KeyType,
-    Mtls, ProxyHost, ProxyHostInput, RateLimit, Scheme, Upstream,
+    Maintenance, Mtls, ProxyHost, ProxyHostInput, RateLimit, Scheme, Upstream,
 };
 
 // ------------------------------------------------------------------- rows
@@ -38,6 +38,7 @@ struct HostRow {
     mtls: Option<String>,
     forward_auth: Option<String>,
     custom_headers: Option<String>,
+    maintenance: Option<String>,
     enabled: i64,
     created_at: i64,
     updated_at: i64,
@@ -76,6 +77,7 @@ impl HostRow {
             mtls: mtls_from_json(self.mtls.as_deref())?,
             forward_auth: forward_auth_from_json(self.forward_auth.as_deref())?,
             custom_headers: custom_headers_from_json(self.custom_headers.as_deref())?,
+            maintenance: maintenance_from_json(self.maintenance.as_deref())?,
             enabled: self.enabled != 0,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -147,11 +149,23 @@ fn custom_headers_from_json(raw: Option<&str>) -> anyhow::Result<Vec<CustomHeade
     }
 }
 
+fn maintenance_json(m: &Maintenance) -> String {
+    serde_json::to_string(m).unwrap_or_else(|_| "{}".into())
+}
+
+/// Parse the stored maintenance JSON (NULL / absent = maintenance off).
+fn maintenance_from_json(raw: Option<&str>) -> anyhow::Result<Maintenance> {
+    match raw {
+        Some(s) if !s.trim().is_empty() => Ok(serde_json::from_str(s).context("maintenance json")?),
+        _ => Ok(Maintenance::default()),
+    }
+}
+
 const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_port, \
      websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
      hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-     advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, enabled, \
-     created_at, updated_at";
+     advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
+     enabled, created_at, updated_at";
 
 // -------------------------------------------------------------- host CRUD
 
@@ -189,9 +203,9 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
         "INSERT INTO proxy_hosts (domains, forward_scheme, forward_host, forward_port, \
          websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
          hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-         advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, enabled, \
-         created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
+         enabled, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -215,6 +229,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(mtls_json(&input.mtls))
     .bind(forward_auth_json(&input.forward_auth))
     .bind(custom_headers_json(&input.custom_headers))
+    .bind(maintenance_json(&input.maintenance))
     .bind(input.enabled as i64)
     .bind(now)
     .bind(now)
@@ -230,7 +245,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
          websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, http3=?, force_ssl=?, hsts=?, \
          hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
          locations=?, advanced_snippet=?, rate_limit=?, upstream=?, mtls=?, forward_auth=?, \
-         custom_headers=?, enabled=?, updated_at=? WHERE id=?",
+         custom_headers=?, maintenance=?, enabled=?, updated_at=? WHERE id=?",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -254,6 +269,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(mtls_json(&input.mtls))
     .bind(forward_auth_json(&input.forward_auth))
     .bind(custom_headers_json(&input.custom_headers))
+    .bind(maintenance_json(&input.maintenance))
     .bind(input.enabled as i64)
     .bind(now_epoch())
     .bind(id)
@@ -931,9 +947,9 @@ pub async fn import_replace(
             "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
              websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
              hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-             advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, enabled, \
-             created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, \
+             maintenance, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -958,6 +974,7 @@ pub async fn import_replace(
         .bind(mtls_json(&h.mtls))
         .bind(forward_auth_json(&h.forward_auth))
         .bind(custom_headers_json(&h.custom_headers))
+        .bind(maintenance_json(&h.maintenance))
         .bind(h.enabled as i64)
         .bind(now)
         .bind(now)

@@ -10,6 +10,7 @@ import {
   Server,
   Tags,
   Terminal,
+  Wrench,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -103,6 +104,9 @@ interface FormState {
   /** Identity headers as free text (comma/space/newline separated). */
   forward_auth_headers: string
   custom_headers: CustomHeader[]
+  maintenance_enabled: boolean
+  maintenance_title: string
+  maintenance_message: string
 }
 
 function initialState(host: Host | null): FormState {
@@ -142,6 +146,9 @@ function initialState(host: Host | null): FormState {
       forward_auth_sign_in_url: '',
       forward_auth_headers: '',
       custom_headers: [],
+      maintenance_enabled: false,
+      maintenance_title: '',
+      maintenance_message: '',
     }
   }
   const rl = host.rate_limit
@@ -193,6 +200,9 @@ function initialState(host: Host | null): FormState {
     forward_auth_sign_in_url: host.forward_auth.sign_in_url ?? '',
     forward_auth_headers: host.forward_auth.copy_headers.join(', '),
     custom_headers: host.custom_headers.map((h) => ({ ...h })),
+    maintenance_enabled: host.maintenance.enabled,
+    maintenance_title: host.maintenance.title,
+    maintenance_message: host.maintenance.message,
   }
 }
 
@@ -213,6 +223,7 @@ const EDITOR_SECTIONS: { key: string; Icon: LucideIcon }[] = [
   { key: 'upstreams', Icon: Server },
   { key: 'rateLimit', Icon: Gauge },
   { key: 'headers', Icon: Tags },
+  { key: 'maintenance', Icon: Wrench },
   { key: 'advanced', Icon: Terminal },
 ]
 
@@ -435,6 +446,11 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           value: h.value,
           direction: h.direction,
         })),
+      maintenance: {
+        enabled: form.maintenance_enabled,
+        title: form.maintenance_title.trim(),
+        message: form.maintenance_message.trim(),
+      },
       enabled: host === null ? true : host.enabled,
     }
 
@@ -1377,6 +1393,62 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             <Plus aria-hidden="true" />
             {t('hosts.editor.headers.add')}
           </Button>
+        </TabsContent>
+
+        <TabsContent value="maintenance" className="space-y-4">
+          <div className="space-y-1">
+            <span className="text-sm font-medium">
+              {t('hosts.editor.maintenance.title')}
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.maintenance.description')}
+            </p>
+          </div>
+          <ToggleRow
+            id="host-maintenance"
+            label={t('hosts.editor.maintenance.enable')}
+            checked={form.maintenance_enabled}
+            onChange={(checked) => patch({ maintenance_enabled: checked })}
+          />
+          {form.maintenance_enabled && (
+            <>
+              <Alert variant="warning">
+                <AlertDescription>
+                  {t('hosts.editor.maintenance.warning')}
+                </AlertDescription>
+              </Alert>
+              <div className="space-y-2">
+                <Label htmlFor="host-maintenance-title">
+                  {t('hosts.editor.maintenance.pageTitle')}
+                </Label>
+                <Input
+                  id="host-maintenance-title"
+                  placeholder={t('hosts.editor.maintenance.pageTitlePlaceholder')}
+                  value={form.maintenance_title}
+                  onChange={(event) =>
+                    patch({ maintenance_title: event.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="host-maintenance-message">
+                  {t('hosts.editor.maintenance.message')}
+                </Label>
+                <Textarea
+                  id="host-maintenance-message"
+                  className="min-h-20"
+                  placeholder={t('hosts.editor.maintenance.messagePlaceholder')}
+                  value={form.maintenance_message}
+                  onChange={(event) =>
+                    patch({ maintenance_message: event.target.value })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t('hosts.editor.maintenance.hint')}
+                </p>
+              </div>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4">

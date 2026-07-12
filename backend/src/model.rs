@@ -380,6 +380,58 @@ fn validate_header_value(raw: &str) -> Result<String, ApiError> {
     Ok(s.to_string())
 }
 
+/// Per-host maintenance mode. When enabled, the host stops proxying and serves a
+/// styled `503 Service Unavailable` page instead — a graceful way to take a
+/// service offline without deleting the host. `title` / `message` are plain text
+/// rendered (HTML-escaped) into a fixed template inside a `return 503 "…"`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Maintenance {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub message: String,
+}
+
+impl Maintenance {
+    pub fn active(&self) -> bool {
+        self.enabled
+    }
+}
+
+pub const MAX_MAINTENANCE_TITLE_LEN: usize = 100;
+pub const MAX_MAINTENANCE_MESSAGE_LEN: usize = 500;
+
+/// Validate + normalize a host's maintenance config. The text is HTML-escaped at
+/// generation time, which removes `<>&"'`; here we additionally reject the
+/// characters that could still break out of the `return 503 "…"` nginx string or
+/// inject a variable (`$`, `\`, and any control character incl. newlines).
+pub fn validate_maintenance(mut m: Maintenance) -> Result<Maintenance, ApiError> {
+    if !m.enabled {
+        return Ok(Maintenance::default());
+    }
+    m.title = validate_maintenance_text(&m.title, MAX_MAINTENANCE_TITLE_LEN)?;
+    m.message = validate_maintenance_text(&m.message, MAX_MAINTENANCE_MESSAGE_LEN)?;
+    Ok(m)
+}
+
+fn validate_maintenance_text(raw: &str, max: usize) -> Result<String, ApiError> {
+    let s = raw.trim();
+    if s.chars().count() > max {
+        return Err(bad("invalid_maintenance", "text is too long"));
+    }
+    if s.bytes()
+        .any(|b| b == b'$' || b == b'\\' || b.is_ascii_control())
+    {
+        return Err(bad(
+            "invalid_maintenance",
+            "text must not contain control characters, '$', or '\\'",
+        ));
+    }
+    Ok(s.to_string())
+}
+
 /// Load-balancing method for a host's upstream pool.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -571,6 +623,7 @@ pub struct ProxyHost {
     pub mtls: Mtls,
     pub forward_auth: ForwardAuth,
     pub custom_headers: Vec<CustomHeader>,
+    pub maintenance: Maintenance,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -619,6 +672,8 @@ pub struct ProxyHostInput {
     pub forward_auth: ForwardAuth,
     #[serde(default)]
     pub custom_headers: Vec<CustomHeader>,
+    #[serde(default)]
+    pub maintenance: Maintenance,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -870,6 +925,7 @@ pub fn validate_host_input(
     input.mtls = validate_mtls(input.mtls)?;
     input.forward_auth = validate_forward_auth(input.forward_auth, upstream_policy)?;
     input.custom_headers = validate_custom_headers(input.custom_headers)?;
+    input.maintenance = validate_maintenance(input.maintenance)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1845,6 +1901,7 @@ mod tests {
             mtls: Mtls::default(),
             forward_auth: ForwardAuth::default(),
             custom_headers: vec![],
+            maintenance: Maintenance::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -2054,6 +2111,50 @@ mod tests {
                 }])
                 .is_err(),
                 "should reject ({name:?}, {value:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn maintenance_validation() {
+        // Enabled with clean text is accepted and trimmed.
+        let ok = validate_maintenance(Maintenance {
+            enabled: true,
+            title: "  Be right back  ".into(),
+            message: "Scheduled maintenance — try again soon.".into(),
+        })
+        .unwrap();
+        assert_eq!(ok.title, "Be right back");
+        assert!(ok.active());
+
+        // Disabled → inert default.
+        assert!(!validate_maintenance(Maintenance {
+            enabled: false,
+            title: "x".into(),
+            message: "y".into(),
+        })
+        .unwrap()
+        .active());
+
+        // A quote is fine — it is HTML-escaped, not rejected.
+        assert!(validate_maintenance(Maintenance {
+            enabled: true,
+            title: "Say \"hi\"".into(),
+            message: String::new(),
+        })
+        .unwrap()
+        .active());
+
+        // Nginx-string / variable injection IS rejected ($, backslash, control).
+        for evil in ["$request_uri", "back\\slash", "line1\nline2"] {
+            assert!(
+                validate_maintenance(Maintenance {
+                    enabled: true,
+                    title: evil.into(),
+                    message: String::new(),
+                })
+                .is_err(),
+                "should reject {evil:?}"
             );
         }
     }

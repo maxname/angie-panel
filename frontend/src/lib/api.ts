@@ -146,6 +146,13 @@ export interface CustomHeader {
   direction: HeaderDirection
 }
 
+/** Per-host maintenance mode: serve a styled 503 page instead of proxying. */
+export interface Maintenance {
+  enabled: boolean
+  title: string
+  message: string
+}
+
 /** Forward authentication (SSO gateway) via Angie's auth_request. */
 export interface ForwardAuth {
   enabled: boolean
@@ -181,6 +188,7 @@ export interface Host {
   mtls: Mtls
   forward_auth: ForwardAuth
   custom_headers: CustomHeader[]
+  maintenance: Maintenance
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -212,6 +220,7 @@ export interface HostInput {
   mtls?: Mtls
   forward_auth?: ForwardAuth
   custom_headers?: CustomHeader[]
+  maintenance?: Maintenance
   enabled?: boolean
 }
 

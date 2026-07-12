@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use super::*;
 use crate::model::{
     BalanceMethod, CustomHeader, CustomLocation, DeadHost, ForwardAuth, GeoMode, GeoPolicy,
-    HeaderDirection, Mtls, ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme, Stream,
-    StreamTls, Upstream, UpstreamServer,
+    HeaderDirection, Maintenance, Mtls, ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme,
+    Stream, StreamTls, Upstream, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -56,6 +56,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         mtls: Mtls::default(),
         forward_auth: ForwardAuth::default(),
         custom_headers: vec![],
+        maintenance: Maintenance::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -566,6 +567,36 @@ fn golden_forward_auth() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-forward-auth.conf", body);
+}
+
+#[test]
+fn golden_maintenance() {
+    // Maintenance mode replaces the proxy locations with a single 503 page and
+    // skips upstreams/auth. Verified by angie -t (and a live 503 response) on
+    // real Angie. The `<` from the escaped title proves HTML-escaping.
+    let mut host = base_host(20, "app.example.com");
+    host.maintenance = Maintenance {
+        enabled: true,
+        title: "Back <soon>".into(),
+        message: "Upgrading the database.".into(),
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(body.contains("return 503"));
+    assert!(
+        body.contains("Back &lt;soon&gt;"),
+        "title must be HTML-escaped"
+    );
+    assert!(
+        !body.contains("proxy_pass"),
+        "maintenance host must not proxy"
+    );
+    assert_golden("20-host-maintenance.conf", body);
 }
 
 #[test]

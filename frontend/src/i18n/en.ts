@@ -175,7 +175,22 @@ export const en = {
         upstreams: 'Upstreams',
         rateLimit: 'Rate limit',
         headers: 'Headers',
+        maintenance: 'Maintenance',
         advanced: 'Advanced',
+      },
+      maintenance: {
+        title: 'Maintenance mode',
+        description:
+          'Take this host offline gracefully — it serves a styled 503 page instead of proxying, without deleting the host.',
+        enable: 'Enable maintenance mode',
+        warning:
+          'While on, every request to this host returns 503 — it stops proxying to the backend entirely.',
+        pageTitle: 'Heading',
+        pageTitlePlaceholder: 'Under maintenance',
+        message: 'Message',
+        messagePlaceholder:
+          'This service is temporarily unavailable. Please try again later.',
+        hint: 'Plain text only — it is HTML-escaped into the page.',
       },
       headers: {
         title: 'Custom headers',
