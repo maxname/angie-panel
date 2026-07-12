@@ -51,6 +51,10 @@ const sampleHost: Host = {
   custom_headers: [],
   maintenance: { enabled: false, title: '', message: '' },
   gzip: { enabled: false, comp_level: 0, min_length: 0, types: [] },
+  error_pages: {
+    not_found: { enabled: false, title: '', message: '' },
+    server_error: { enabled: false, title: '', message: '' },
+  },
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,

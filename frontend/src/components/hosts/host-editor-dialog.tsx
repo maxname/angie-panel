@@ -6,6 +6,7 @@ import {
   KeyRound,
   Loader2,
   Lock,
+  OctagonAlert,
   Plus,
   Route,
   Server,
@@ -113,6 +114,12 @@ interface FormState {
   gzip_min_length: string
   /** MIME types as free text (comma/space/newline separated). */
   gzip_types: string
+  error_404_enabled: boolean
+  error_404_title: string
+  error_404_message: string
+  error_5xx_enabled: boolean
+  error_5xx_title: string
+  error_5xx_message: string
 }
 
 function initialState(host: Host | null): FormState {
@@ -159,6 +166,12 @@ function initialState(host: Host | null): FormState {
       gzip_comp_level: '',
       gzip_min_length: '',
       gzip_types: '',
+      error_404_enabled: false,
+      error_404_title: '',
+      error_404_message: '',
+      error_5xx_enabled: false,
+      error_5xx_title: '',
+      error_5xx_message: '',
     }
   }
   const rl = host.rate_limit
@@ -217,6 +230,12 @@ function initialState(host: Host | null): FormState {
     gzip_comp_level: host.gzip.comp_level > 0 ? String(host.gzip.comp_level) : '',
     gzip_min_length: host.gzip.min_length > 0 ? String(host.gzip.min_length) : '',
     gzip_types: host.gzip.types.join(', '),
+    error_404_enabled: host.error_pages.not_found.enabled,
+    error_404_title: host.error_pages.not_found.title,
+    error_404_message: host.error_pages.not_found.message,
+    error_5xx_enabled: host.error_pages.server_error.enabled,
+    error_5xx_title: host.error_pages.server_error.title,
+    error_5xx_message: host.error_pages.server_error.message,
   }
 }
 
@@ -238,6 +257,7 @@ const EDITOR_SECTIONS: { key: string; Icon: LucideIcon }[] = [
   { key: 'rateLimit', Icon: Gauge },
   { key: 'headers', Icon: Tags },
   { key: 'gzip', Icon: FileArchive },
+  { key: 'errorPages', Icon: OctagonAlert },
   { key: 'maintenance', Icon: Wrench },
   { key: 'advanced', Icon: Terminal },
 ]
@@ -474,6 +494,18 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           .split(/[\s,]+/)
           .map((tt) => tt.trim())
           .filter(Boolean),
+      },
+      error_pages: {
+        not_found: {
+          enabled: form.error_404_enabled,
+          title: form.error_404_title.trim(),
+          message: form.error_404_message.trim(),
+        },
+        server_error: {
+          enabled: form.error_5xx_enabled,
+          title: form.error_5xx_title.trim(),
+          message: form.error_5xx_message.trim(),
+        },
       },
       enabled: host === null ? true : host.enabled,
     }
@@ -1494,6 +1526,103 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
               </div>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="errorPages" className="space-y-4">
+          <div className="space-y-1">
+            <span className="text-sm font-medium">
+              {t('hosts.editor.errorPages.title')}
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.errorPages.description')}
+            </p>
+          </div>
+
+          <div className="space-y-4 rounded-lg border p-4">
+            <ToggleRow
+              id="host-error-404"
+              label={t('hosts.editor.errorPages.notFound.enable')}
+              checked={form.error_404_enabled}
+              onChange={(checked) => patch({ error_404_enabled: checked })}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.errorPages.notFound.hint')}
+            </p>
+            {form.error_404_enabled && (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="host-error-404-title">
+                    {t('hosts.editor.errorPages.pageTitle')}
+                  </Label>
+                  <Input
+                    id="host-error-404-title"
+                    placeholder={t('hosts.editor.errorPages.notFound.titlePlaceholder')}
+                    value={form.error_404_title}
+                    onChange={(event) =>
+                      patch({ error_404_title: event.target.value })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="host-error-404-message">
+                    {t('hosts.editor.errorPages.message')}
+                  </Label>
+                  <Textarea
+                    id="host-error-404-message"
+                    className="min-h-20"
+                    placeholder={t('hosts.editor.errorPages.notFound.messagePlaceholder')}
+                    value={form.error_404_message}
+                    onChange={(event) =>
+                      patch({ error_404_message: event.target.value })
+                    }
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-4 rounded-lg border p-4">
+            <ToggleRow
+              id="host-error-5xx"
+              label={t('hosts.editor.errorPages.serverError.enable')}
+              checked={form.error_5xx_enabled}
+              onChange={(checked) => patch({ error_5xx_enabled: checked })}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.errorPages.serverError.hint')}
+            </p>
+            {form.error_5xx_enabled && (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="host-error-5xx-title">
+                    {t('hosts.editor.errorPages.pageTitle')}
+                  </Label>
+                  <Input
+                    id="host-error-5xx-title"
+                    placeholder={t('hosts.editor.errorPages.serverError.titlePlaceholder')}
+                    value={form.error_5xx_title}
+                    onChange={(event) =>
+                      patch({ error_5xx_title: event.target.value })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="host-error-5xx-message">
+                    {t('hosts.editor.errorPages.message')}
+                  </Label>
+                  <Textarea
+                    id="host-error-5xx-message"
+                    className="min-h-20"
+                    placeholder={t('hosts.editor.errorPages.serverError.messagePlaceholder')}
+                    value={form.error_5xx_message}
+                    onChange={(event) =>
+                      patch({ error_5xx_message: event.target.value })
+                    }
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="maintenance" className="space-y-4">

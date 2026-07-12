@@ -411,25 +411,91 @@ pub fn validate_maintenance(mut m: Maintenance) -> Result<Maintenance, ApiError>
     if !m.enabled {
         return Ok(Maintenance::default());
     }
-    m.title = validate_maintenance_text(&m.title, MAX_MAINTENANCE_TITLE_LEN)?;
-    m.message = validate_maintenance_text(&m.message, MAX_MAINTENANCE_MESSAGE_LEN)?;
+    m.title = validate_template_text(&m.title, MAX_MAINTENANCE_TITLE_LEN, "invalid_maintenance")?;
+    m.message = validate_template_text(
+        &m.message,
+        MAX_MAINTENANCE_MESSAGE_LEN,
+        "invalid_maintenance",
+    )?;
     Ok(m)
 }
 
-fn validate_maintenance_text(raw: &str, max: usize) -> Result<String, ApiError> {
+/// Shared text validator for anything rendered (HTML-escaped) into a
+/// `return <code> "…"` string — maintenance pages and custom error pages. The
+/// escape at generation time removes `<>&"'`; here we additionally reject the
+/// characters that could still break out of the nginx string or inject a
+/// variable (`$`, `\`, and any control character incl. newlines).
+fn validate_template_text(raw: &str, max: usize, code: &'static str) -> Result<String, ApiError> {
     let s = raw.trim();
     if s.chars().count() > max {
-        return Err(bad("invalid_maintenance", "text is too long"));
+        return Err(bad(code, "text is too long"));
     }
     if s.bytes()
         .any(|b| b == b'$' || b == b'\\' || b.is_ascii_control())
     {
         return Err(bad(
-            "invalid_maintenance",
+            code,
             "text must not contain control characters, '$', or '\\'",
         ));
     }
     Ok(s.to_string())
+}
+
+/// Per-host custom error pages. When a sub-page is enabled the generator emits
+/// `proxy_intercept_errors on` (so responses the upstream itself returns are
+/// caught, not just Angie-generated ones) plus an `error_page` mapping to a
+/// named location that serves a styled page via `return`. `not_found` covers
+/// upstream 404s and preserves the 404 status; `server_error` covers
+/// 500/502/503/504 and serves them all as 503 — the inline `return 503` sets the
+/// status, verified on real Angie.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorPages {
+    #[serde(default)]
+    pub not_found: ErrorPage,
+    #[serde(default)]
+    pub server_error: ErrorPage,
+}
+
+/// One custom error page: a plain-text title + message rendered (HTML-escaped)
+/// into a fixed template. Same injection defenses as [`Maintenance`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorPage {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub message: String,
+}
+
+impl ErrorPages {
+    /// Any sub-page enabled → the host needs `proxy_intercept_errors` + an
+    /// `error_page` mapping and the named error locations.
+    pub fn active(&self) -> bool {
+        self.not_found.enabled || self.server_error.enabled
+    }
+}
+
+pub const MAX_ERROR_PAGE_TITLE_LEN: usize = 100;
+pub const MAX_ERROR_PAGE_MESSAGE_LEN: usize = 500;
+
+/// Validate + normalize a host's custom error pages. Disabled sub-pages reset to
+/// default so stale text never lingers in the DB; enabled ones get the same
+/// template-text validation as maintenance.
+pub fn validate_error_pages(mut e: ErrorPages) -> Result<ErrorPages, ApiError> {
+    e.not_found = validate_error_page(e.not_found)?;
+    e.server_error = validate_error_page(e.server_error)?;
+    Ok(e)
+}
+
+fn validate_error_page(mut p: ErrorPage) -> Result<ErrorPage, ApiError> {
+    if !p.enabled {
+        return Ok(ErrorPage::default());
+    }
+    p.title = validate_template_text(&p.title, MAX_ERROR_PAGE_TITLE_LEN, "invalid_error_page")?;
+    p.message =
+        validate_template_text(&p.message, MAX_ERROR_PAGE_MESSAGE_LEN, "invalid_error_page")?;
+    Ok(p)
 }
 
 /// Per-host gzip response compression (`ngx_http_gzip_module`, core). When
@@ -701,6 +767,7 @@ pub struct ProxyHost {
     pub custom_headers: Vec<CustomHeader>,
     pub maintenance: Maintenance,
     pub gzip: Gzip,
+    pub error_pages: ErrorPages,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -753,6 +820,8 @@ pub struct ProxyHostInput {
     pub maintenance: Maintenance,
     #[serde(default)]
     pub gzip: Gzip,
+    #[serde(default)]
+    pub error_pages: ErrorPages,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -1006,6 +1075,7 @@ pub fn validate_host_input(
     input.custom_headers = validate_custom_headers(input.custom_headers)?;
     input.maintenance = validate_maintenance(input.maintenance)?;
     input.gzip = validate_gzip(input.gzip)?;
+    input.error_pages = validate_error_pages(input.error_pages)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1983,6 +2053,7 @@ mod tests {
             custom_headers: vec![],
             maintenance: Maintenance::default(),
             gzip: Gzip::default(),
+            error_pages: ErrorPages::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();

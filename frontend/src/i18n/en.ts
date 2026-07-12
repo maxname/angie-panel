@@ -203,6 +203,7 @@ export const en = {
         rateLimit: 'Rate limit',
         headers: 'Headers',
         gzip: 'Compression',
+        errorPages: 'Error pages',
         maintenance: 'Maintenance',
         advanced: 'Advanced',
       },
@@ -218,6 +219,26 @@ export const en = {
         types: 'MIME types',
         typesHint:
           'Types to compress beyond text/html, comma-separated. Blank uses a curated default set.',
+      },
+      errorPages: {
+        title: 'Custom error pages',
+        description:
+          'Replace the upstream’s error responses with your own styled pages. Only the codes you enable are intercepted; everything else passes through untouched.',
+        pageTitle: 'Heading',
+        message: 'Message',
+        notFound: {
+          enable: 'Custom 404 page',
+          hint: 'Shown when the upstream returns 404 Not Found. The 404 status is preserved.',
+          titlePlaceholder: 'Page not found',
+          messagePlaceholder: 'The page you are looking for could not be found.',
+        },
+        serverError: {
+          enable: 'Custom error page (5xx)',
+          hint: 'Shown for 500 / 502 / 503 / 504 — including when the backend is unreachable. Served as 503.',
+          titlePlaceholder: 'Something went wrong',
+          messagePlaceholder:
+            'The service is temporarily unable to handle your request. Please try again later.',
+        },
       },
       maintenance: {
         title: 'Maintenance mode',

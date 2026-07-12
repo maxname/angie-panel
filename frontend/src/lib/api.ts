@@ -176,6 +176,20 @@ export interface Gzip {
   types: string[]
 }
 
+/** One custom error page: a plain-text title + message rendered into a template. */
+export interface ErrorPage {
+  enabled: boolean
+  title: string
+  message: string
+}
+
+/** Per-host custom error pages. `not_found` covers upstream 404s (status kept);
+ *  `server_error` covers 500/502/503/504 (all served as 503). */
+export interface ErrorPages {
+  not_found: ErrorPage
+  server_error: ErrorPage
+}
+
 /** Forward authentication (SSO gateway) via Angie's auth_request. */
 export interface ForwardAuth {
   enabled: boolean
@@ -213,6 +227,7 @@ export interface Host {
   custom_headers: CustomHeader[]
   maintenance: Maintenance
   gzip: Gzip
+  error_pages: ErrorPages
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -246,6 +261,7 @@ export interface HostInput {
   custom_headers?: CustomHeader[]
   maintenance?: Maintenance
   gzip?: Gzip
+  error_pages?: ErrorPages
   enabled?: boolean
 }
 

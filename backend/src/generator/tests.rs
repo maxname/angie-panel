@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    BalanceMethod, CustomHeader, CustomLocation, DeadHost, ForwardAuth, GeoMode, GeoPolicy, Gzip,
-    HeaderDirection, Maintenance, Mtls, ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme,
-    Stream, StreamTls, Upstream, UpstreamServer,
+    BalanceMethod, CustomHeader, CustomLocation, DeadHost, ErrorPage, ErrorPages, ForwardAuth,
+    GeoMode, GeoPolicy, Gzip, HeaderDirection, Maintenance, Mtls, ProxyHost, RateLimit,
+    RedirectHost, RedirectScheme, Scheme, Stream, StreamTls, Upstream, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -58,6 +58,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         custom_headers: vec![],
         maintenance: Maintenance::default(),
         gzip: Gzip::default(),
+        error_pages: ErrorPages::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -641,6 +642,69 @@ fn golden_maintenance() {
         "maintenance host must not proxy"
     );
     assert_golden("20-host-maintenance.conf", body);
+}
+
+#[test]
+fn golden_error_pages() {
+    // Custom 404 + 5xx pages: proxy_intercept_errors on, an error_page mapping
+    // per enabled code, and a named location that returns the styled page. The
+    // 404 keeps its status; the 5xx page returns 503. Verified on real Angie
+    // (upstream 404 -> CUSTOM-404/404, upstream & dead 5xx -> CUSTOM-5XX/503).
+    let mut host = base_host(20, "app.example.com");
+    host.error_pages = ErrorPages {
+        not_found: ErrorPage {
+            enabled: true,
+            title: "Not <here>".into(),
+            message: "We couldn't find that page.".into(),
+        },
+        server_error: ErrorPage {
+            enabled: true,
+            title: "Oops".into(),
+            message: "The backend is having trouble.".into(),
+        },
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(body.contains("proxy_intercept_errors on;"));
+    assert!(body.contains("error_page 404 = @ap_err_404;"));
+    assert!(body.contains("error_page 500 502 503 504 = @ap_err_5xx;"));
+    assert!(body.contains("return 404 \""), "404 page keeps its status");
+    assert!(
+        body.contains("Not &lt;here&gt;"),
+        "title must be HTML-escaped"
+    );
+    // The host still proxies normally — error pages only intercept error codes.
+    assert!(body.contains("proxy_pass"), "error-page host still proxies");
+    assert_golden("20-host-error-pages.conf", body);
+}
+
+#[test]
+fn error_pages_only_not_found_omits_5xx() {
+    // Only the 404 sub-page enabled → no 5xx error_page / named location.
+    let mut host = base_host(23, "b.example.com");
+    host.error_pages = ErrorPages {
+        not_found: ErrorPage {
+            enabled: true,
+            ..Default::default()
+        },
+        server_error: ErrorPage::default(),
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(body.contains("@ap_err_404"));
+    assert!(!body.contains("@ap_err_5xx"), "5xx page must be absent");
+    // Blank title/message fall back to the built-in defaults.
+    assert!(body.contains("Page not found"));
 }
 
 #[test]

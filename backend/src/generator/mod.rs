@@ -819,24 +819,27 @@ fn html_escape(s: &str) -> String {
     out
 }
 
-/// The maintenance `location /`: serve a styled 503 page instead of proxying.
-/// Emitted in place of the normal locations when maintenance is active. The
-/// whole page is one `return 503 "…"` string — no file, no injection surface
-/// (title/message are validated then HTML-escaped; attributes use single quotes
-/// so they never close the double-quoted directive).
-fn emit_maintenance(out: &mut String, host: &ProxyHost) {
-    let m = &host.maintenance;
-    let title = if m.title.trim().is_empty() {
-        "Under maintenance".to_string()
+/// Build the styled error/maintenance HTML as one line, safe to embed in a
+/// `return <code> "…"` directive: `title`/`message` are HTML-escaped (removing
+/// `<>&"'`) and every attribute uses single quotes, so nothing can close the
+/// double-quoted nginx string. Falls back to `default_*` when text is blank.
+fn error_page_html(
+    title: &str,
+    message: &str,
+    default_title: &str,
+    default_message: &str,
+) -> String {
+    let title = if title.trim().is_empty() {
+        default_title.to_string()
     } else {
-        html_escape(&m.title)
+        html_escape(title)
     };
-    let message = if m.message.trim().is_empty() {
-        "This service is temporarily unavailable. Please try again later.".to_string()
+    let message = if message.trim().is_empty() {
+        default_message.to_string()
     } else {
-        html_escape(&m.message)
+        html_escape(message)
     };
-    let page = format!(
+    format!(
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>\
 <meta name='viewport' content='width=device-width,initial-scale=1'><title>{title}</title>\
 </head><body style='font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;\
@@ -844,12 +847,70 @@ background:#0b0f19;color:#e5e7eb;margin:0;min-height:100vh;display:flex;align-it
 justify-content:center;text-align:center'><main style='max-width:32rem;padding:2rem'>\
 <h1 style='font-size:1.5rem;margin:0 0 .75rem'>{title}</h1>\
 <p style='color:#9ca3af;line-height:1.6;margin:0'>{message}</p></main></body></html>"
+    )
+}
+
+/// The maintenance `location /`: serve a styled 503 page instead of proxying.
+/// Emitted in place of the normal locations when maintenance is active. The
+/// whole page is one `return 503 "…"` string — no file, no injection surface.
+fn emit_maintenance(out: &mut String, host: &ProxyHost) {
+    let m = &host.maintenance;
+    let page = error_page_html(
+        &m.title,
+        &m.message,
+        "Under maintenance",
+        "This service is temporarily unavailable. Please try again later.",
     );
     let _ = writeln!(out, "    location / {{");
     let _ = writeln!(out, "        default_type text/html;");
     let _ = writeln!(out, "        add_header Retry-After \"3600\" always;");
     let _ = writeln!(out, "        return 503 \"{page}\";");
     let _ = writeln!(out, "    }}");
+}
+
+/// Custom error pages: intercept upstream/Angie errors and serve a styled page.
+/// `proxy_intercept_errors on` is what lets `error_page` catch responses the
+/// upstream itself returns (e.g. a backend 404), not only Angie-generated ones —
+/// verified on real Angie. `not_found` keeps the 404 status; the 5xx page serves
+/// 500/502/503/504 all as 503 (the inline `return 503` sets the status). Only
+/// codes with a matching `error_page` are intercepted, so ordinary 2xx/3xx and
+/// undefined error codes pass through untouched. Emitted at server scope.
+fn emit_error_pages(out: &mut String, host: &ProxyHost) {
+    let e = &host.error_pages;
+    if !e.active() {
+        return;
+    }
+    let _ = writeln!(out, "    proxy_intercept_errors on;");
+    if e.not_found.enabled {
+        let _ = writeln!(out, "    error_page 404 = @ap_err_404;");
+    }
+    if e.server_error.enabled {
+        let _ = writeln!(out, "    error_page 500 502 503 504 = @ap_err_5xx;");
+    }
+    if e.not_found.enabled {
+        let page = error_page_html(
+            &e.not_found.title,
+            &e.not_found.message,
+            "Page not found",
+            "The page you are looking for could not be found.",
+        );
+        let _ = writeln!(out, "    location @ap_err_404 {{");
+        let _ = writeln!(out, "        default_type text/html;");
+        let _ = writeln!(out, "        return 404 \"{page}\";");
+        let _ = writeln!(out, "    }}");
+    }
+    if e.server_error.enabled {
+        let page = error_page_html(
+            &e.server_error.title,
+            &e.server_error.message,
+            "Something went wrong",
+            "The service is temporarily unable to handle your request. Please try again later.",
+        );
+        let _ = writeln!(out, "    location @ap_err_5xx {{");
+        let _ = writeln!(out, "        default_type text/html;");
+        let _ = writeln!(out, "        return 503 \"{page}\";");
+        let _ = writeln!(out, "    }}");
+    }
 }
 
 // -------------------------------------------------------------- 03-bans.conf
@@ -1117,6 +1178,11 @@ fn host_features(
 
     // gzip response compression (server scope → applies to every location).
     emit_gzip(out, host);
+
+    // Custom error pages (server scope): proxy_intercept_errors + error_page +
+    // named error locations. Not reachable for a maintenance host (that path
+    // returns early above). Emitted before the proxy locations it applies to.
+    emit_error_pages(out, host);
 
     // Forward auth (SSO gateway): the internal verify location + optional
     // sign-in redirect, at server scope. The per-location `auth_request` is
