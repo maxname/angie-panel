@@ -199,7 +199,7 @@ export function HostEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>
             {host === null ? t('hosts.editor.createTitle') : t('hosts.editor.editTitle')}
@@ -433,28 +433,37 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="details">{t('hosts.editor.tabs.details')}</TabsTrigger>
-          <TabsTrigger value="ssl">{t('hosts.editor.tabs.ssl')}</TabsTrigger>
-          <TabsTrigger value="sso">{t('hosts.editor.tabs.sso')}</TabsTrigger>
-          <TabsTrigger value="locations">
-            {t('hosts.editor.tabs.locations')}
-          </TabsTrigger>
-          <TabsTrigger value="upstreams">
-            {t('hosts.editor.tabs.upstreams')}
-          </TabsTrigger>
-          <TabsTrigger value="rateLimit">
-            {t('hosts.editor.tabs.rateLimit')}
-          </TabsTrigger>
-          <TabsTrigger value="headers">
-            {t('hosts.editor.tabs.headers')}
-          </TabsTrigger>
-          <TabsTrigger value="advanced">
-            {t('hosts.editor.tabs.advanced')}
-          </TabsTrigger>
+      <Tabs
+        value={tab}
+        onValueChange={setTab}
+        orientation="vertical"
+        className="flex-row items-start gap-5"
+      >
+        <TabsList className="h-auto w-40 shrink-0 flex-col items-stretch justify-start gap-0.5 bg-transparent p-0">
+          {(
+            [
+              'details',
+              'ssl',
+              'sso',
+              'locations',
+              'upstreams',
+              'rateLimit',
+              'headers',
+              'advanced',
+            ] as const
+          ).map((key) => (
+            <TabsTrigger
+              key={key}
+              value={key}
+              className="w-full justify-start data-[state=active]:bg-muted"
+            >
+              {t(`hosts.editor.tabs.${key}`)}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
+        {/* Panels scroll independently so the sidebar + footer stay put. */}
+        <div className="max-h-[60vh] min-w-0 flex-1 overflow-y-auto pr-1">
         <TabsContent value="details" className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="host-domain-input">{t('hosts.editor.domains')}</Label>
@@ -1354,6 +1363,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             />
           </div>
         </TabsContent>
+        </div>
       </Tabs>
 
       {formError !== null && (
