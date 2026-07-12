@@ -709,6 +709,51 @@ fn header_iter(
         .filter(move |h| h.direction == direction)
 }
 
+// ------------------------------------------------------------------- gzip
+
+/// Curated default `gzip_types` when the host specifies none. `text/html` is
+/// always compressed by Angie, so it is not listed.
+const DEFAULT_GZIP_TYPES: &[&str] = &[
+    "text/plain",
+    "text/css",
+    "text/xml",
+    "application/json",
+    "application/javascript",
+    "application/xml",
+    "application/rss+xml",
+    "application/atom+xml",
+    "image/svg+xml",
+    "font/ttf",
+    "font/otf",
+    "application/vnd.ms-fontobject",
+];
+
+/// Server-scope gzip directives. `gzip_proxied any` is essential — without it
+/// Angie does not compress proxied responses, which is all a proxy host serves.
+/// Level/min-length are omitted when 0 (Angie defaults). MIME types were
+/// validated to `type/subtype` tokens (or the curated default).
+fn emit_gzip(out: &mut String, host: &ProxyHost) {
+    let g = &host.gzip;
+    if !g.active() {
+        return;
+    }
+    let _ = writeln!(out, "    gzip on;");
+    let _ = writeln!(out, "    gzip_proxied any;");
+    let _ = writeln!(out, "    gzip_vary on;");
+    if g.comp_level > 0 {
+        let _ = writeln!(out, "    gzip_comp_level {};", g.comp_level);
+    }
+    if g.min_length > 0 {
+        let _ = writeln!(out, "    gzip_min_length {};", g.min_length);
+    }
+    let types: Vec<&str> = if g.types.is_empty() {
+        DEFAULT_GZIP_TYPES.to_vec()
+    } else {
+        g.types.iter().map(String::as_str).collect()
+    };
+    let _ = writeln!(out, "    gzip_types {};", types.join(" "));
+}
+
 // -------------------------------------------------------------- 12-geo.conf
 
 /// The variable the geo block sets and each proxy host tests (1 ⇒ 403).
@@ -1069,6 +1114,9 @@ fn host_features(
 
     // Rate limiting (server scope → applies to every location below).
     emit_rate_limit(out, host);
+
+    // gzip response compression (server scope → applies to every location).
+    emit_gzip(out, host);
 
     // Forward auth (SSO gateway): the internal verify location + optional
     // sign-in redirect, at server scope. The per-location `auth_request` is

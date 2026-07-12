@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    BalanceMethod, CustomHeader, CustomLocation, DeadHost, ForwardAuth, GeoMode, GeoPolicy,
+    BalanceMethod, CustomHeader, CustomLocation, DeadHost, ForwardAuth, GeoMode, GeoPolicy, Gzip,
     HeaderDirection, Maintenance, Mtls, ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme,
     Stream, StreamTls, Upstream, UpstreamServer,
 };
@@ -57,6 +57,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         forward_auth: ForwardAuth::default(),
         custom_headers: vec![],
         maintenance: Maintenance::default(),
+        gzip: Gzip::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -567,6 +568,49 @@ fn golden_forward_auth() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-forward-auth.conf", body);
+}
+
+#[test]
+fn golden_gzip() {
+    // gzip on + gzip_proxied any (so proxied responses compress) + tuning +
+    // a custom type list. Verified by angie -t (and a live gzipped response)
+    // on real Angie.
+    let mut host = base_host(21, "app.example.com");
+    host.gzip = Gzip {
+        enabled: true,
+        comp_level: 6,
+        min_length: 256,
+        types: vec!["text/css".into(), "application/json".into()],
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(body.contains("gzip_proxied any;"));
+    assert_golden("20-host-gzip.conf", body);
+}
+
+#[test]
+fn gzip_uses_default_types_when_empty() {
+    let mut host = base_host(22, "a.example.com");
+    host.gzip = Gzip {
+        enabled: true,
+        ..Default::default()
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    // Empty type list → curated default; level/min_length omitted at 0.
+    assert!(body.contains("image/svg+xml"));
+    assert!(!body.contains("gzip_comp_level"));
+    assert!(!body.contains("gzip_min_length"));
 }
 
 #[test]

@@ -7,8 +7,8 @@ use sqlx::SqlitePool;
 
 use crate::db::now_epoch;
 use crate::model::{
-    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, ForwardAuth, KeyType,
-    Maintenance, Mtls, ProxyHost, ProxyHostInput, RateLimit, Scheme, Upstream,
+    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, ForwardAuth, Gzip,
+    KeyType, Maintenance, Mtls, ProxyHost, ProxyHostInput, RateLimit, Scheme, Upstream,
 };
 
 // ------------------------------------------------------------------- rows
@@ -39,6 +39,7 @@ struct HostRow {
     forward_auth: Option<String>,
     custom_headers: Option<String>,
     maintenance: Option<String>,
+    gzip: Option<String>,
     enabled: i64,
     created_at: i64,
     updated_at: i64,
@@ -78,6 +79,7 @@ impl HostRow {
             forward_auth: forward_auth_from_json(self.forward_auth.as_deref())?,
             custom_headers: custom_headers_from_json(self.custom_headers.as_deref())?,
             maintenance: maintenance_from_json(self.maintenance.as_deref())?,
+            gzip: gzip_from_json(self.gzip.as_deref())?,
             enabled: self.enabled != 0,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -161,11 +163,23 @@ fn maintenance_from_json(raw: Option<&str>) -> anyhow::Result<Maintenance> {
     }
 }
 
+fn gzip_json(g: &Gzip) -> String {
+    serde_json::to_string(g).unwrap_or_else(|_| "{}".into())
+}
+
+/// Parse the stored gzip JSON (NULL / absent = gzip off).
+fn gzip_from_json(raw: Option<&str>) -> anyhow::Result<Gzip> {
+    match raw {
+        Some(s) if !s.trim().is_empty() => Ok(serde_json::from_str(s).context("gzip json")?),
+        _ => Ok(Gzip::default()),
+    }
+}
+
 const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_port, \
      websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
      hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
      advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
-     enabled, created_at, updated_at";
+     gzip, enabled, created_at, updated_at";
 
 // -------------------------------------------------------------- host CRUD
 
@@ -204,8 +218,8 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
          websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
          hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
          advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
-         enabled, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         gzip, enabled, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -230,6 +244,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(forward_auth_json(&input.forward_auth))
     .bind(custom_headers_json(&input.custom_headers))
     .bind(maintenance_json(&input.maintenance))
+    .bind(gzip_json(&input.gzip))
     .bind(input.enabled as i64)
     .bind(now)
     .bind(now)
@@ -245,7 +260,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
          websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, http3=?, force_ssl=?, hsts=?, \
          hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
          locations=?, advanced_snippet=?, rate_limit=?, upstream=?, mtls=?, forward_auth=?, \
-         custom_headers=?, maintenance=?, enabled=?, updated_at=? WHERE id=?",
+         custom_headers=?, maintenance=?, gzip=?, enabled=?, updated_at=? WHERE id=?",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -270,6 +285,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(forward_auth_json(&input.forward_auth))
     .bind(custom_headers_json(&input.custom_headers))
     .bind(maintenance_json(&input.maintenance))
+    .bind(gzip_json(&input.gzip))
     .bind(input.enabled as i64)
     .bind(now_epoch())
     .bind(id)
@@ -948,8 +964,8 @@ pub async fn import_replace(
              websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
              hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
              advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, \
-             maintenance, enabled, created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             maintenance, gzip, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -975,6 +991,7 @@ pub async fn import_replace(
         .bind(forward_auth_json(&h.forward_auth))
         .bind(custom_headers_json(&h.custom_headers))
         .bind(maintenance_json(&h.maintenance))
+        .bind(gzip_json(&h.gzip))
         .bind(h.enabled as i64)
         .bind(now)
         .bind(now)

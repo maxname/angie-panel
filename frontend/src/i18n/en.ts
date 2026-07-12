@@ -175,8 +175,22 @@ export const en = {
         upstreams: 'Upstreams',
         rateLimit: 'Rate limit',
         headers: 'Headers',
+        gzip: 'Compression',
         maintenance: 'Maintenance',
         advanced: 'Advanced',
+      },
+      gzip: {
+        title: 'gzip compression',
+        description:
+          'Compress responses before sending them to clients. Proxied responses are compressed too (gzip_proxied any).',
+        enable: 'Enable gzip',
+        level: 'Compression level',
+        levelHint: '1 (fastest) to 9 (smallest). Blank uses the default.',
+        minLength: 'Minimum length (bytes)',
+        minLengthHint: "Don't compress responses smaller than this. Blank = no minimum.",
+        types: 'MIME types',
+        typesHint:
+          'Types to compress beyond text/html, comma-separated. Blank uses a curated default set.',
       },
       maintenance: {
         title: 'Maintenance mode',

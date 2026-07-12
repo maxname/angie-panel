@@ -153,6 +153,17 @@ export interface Maintenance {
   message: string
 }
 
+/** Per-host gzip response compression. */
+export interface Gzip {
+  enabled: boolean
+  /** 1-9; 0 = omit (Angie default). */
+  comp_level: number
+  /** Minimum bytes to compress; 0 = omit. */
+  min_length: number
+  /** Extra MIME types to compress; empty = a curated default set. */
+  types: string[]
+}
+
 /** Forward authentication (SSO gateway) via Angie's auth_request. */
 export interface ForwardAuth {
   enabled: boolean
@@ -189,6 +200,7 @@ export interface Host {
   forward_auth: ForwardAuth
   custom_headers: CustomHeader[]
   maintenance: Maintenance
+  gzip: Gzip
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -221,6 +233,7 @@ export interface HostInput {
   forward_auth?: ForwardAuth
   custom_headers?: CustomHeader[]
   maintenance?: Maintenance
+  gzip?: Gzip
   enabled?: boolean
 }
 

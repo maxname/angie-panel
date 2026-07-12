@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  FileArchive,
   Gauge,
   Globe,
   KeyRound,
@@ -107,6 +108,11 @@ interface FormState {
   maintenance_enabled: boolean
   maintenance_title: string
   maintenance_message: string
+  gzip_enabled: boolean
+  gzip_comp_level: string
+  gzip_min_length: string
+  /** MIME types as free text (comma/space/newline separated). */
+  gzip_types: string
 }
 
 function initialState(host: Host | null): FormState {
@@ -149,6 +155,10 @@ function initialState(host: Host | null): FormState {
       maintenance_enabled: false,
       maintenance_title: '',
       maintenance_message: '',
+      gzip_enabled: false,
+      gzip_comp_level: '',
+      gzip_min_length: '',
+      gzip_types: '',
     }
   }
   const rl = host.rate_limit
@@ -203,6 +213,10 @@ function initialState(host: Host | null): FormState {
     maintenance_enabled: host.maintenance.enabled,
     maintenance_title: host.maintenance.title,
     maintenance_message: host.maintenance.message,
+    gzip_enabled: host.gzip.enabled,
+    gzip_comp_level: host.gzip.comp_level > 0 ? String(host.gzip.comp_level) : '',
+    gzip_min_length: host.gzip.min_length > 0 ? String(host.gzip.min_length) : '',
+    gzip_types: host.gzip.types.join(', '),
   }
 }
 
@@ -223,6 +237,7 @@ const EDITOR_SECTIONS: { key: string; Icon: LucideIcon }[] = [
   { key: 'upstreams', Icon: Server },
   { key: 'rateLimit', Icon: Gauge },
   { key: 'headers', Icon: Tags },
+  { key: 'gzip', Icon: FileArchive },
   { key: 'maintenance', Icon: Wrench },
   { key: 'advanced', Icon: Terminal },
 ]
@@ -450,6 +465,15 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
         enabled: form.maintenance_enabled,
         title: form.maintenance_title.trim(),
         message: form.maintenance_message.trim(),
+      },
+      gzip: {
+        enabled: form.gzip_enabled,
+        comp_level: Number.parseInt(form.gzip_comp_level, 10) || 0,
+        min_length: Number.parseInt(form.gzip_min_length, 10) || 0,
+        types: form.gzip_types
+          .split(/[\s,]+/)
+          .map((tt) => tt.trim())
+          .filter(Boolean),
       },
       enabled: host === null ? true : host.enabled,
     }
@@ -1393,6 +1417,83 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             <Plus aria-hidden="true" />
             {t('hosts.editor.headers.add')}
           </Button>
+        </TabsContent>
+
+        <TabsContent value="gzip" className="space-y-4">
+          <div className="space-y-1">
+            <span className="text-sm font-medium">
+              {t('hosts.editor.gzip.title')}
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.gzip.description')}
+            </p>
+          </div>
+          <ToggleRow
+            id="host-gzip"
+            label={t('hosts.editor.gzip.enable')}
+            checked={form.gzip_enabled}
+            onChange={(checked) => patch({ gzip_enabled: checked })}
+          />
+          {form.gzip_enabled && (
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="host-gzip-level">
+                    {t('hosts.editor.gzip.level')}
+                  </Label>
+                  <Input
+                    id="host-gzip-level"
+                    inputMode="numeric"
+                    placeholder="6"
+                    value={form.gzip_comp_level}
+                    onChange={(event) =>
+                      patch({
+                        gzip_comp_level: event.target.value.replace(/[^0-9]/g, ''),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('hosts.editor.gzip.levelHint')}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="host-gzip-min">
+                    {t('hosts.editor.gzip.minLength')}
+                  </Label>
+                  <Input
+                    id="host-gzip-min"
+                    inputMode="numeric"
+                    placeholder="256"
+                    value={form.gzip_min_length}
+                    onChange={(event) =>
+                      patch({
+                        gzip_min_length: event.target.value.replace(/[^0-9]/g, ''),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('hosts.editor.gzip.minLengthHint')}
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="host-gzip-types">
+                  {t('hosts.editor.gzip.types')}
+                </Label>
+                <Input
+                  id="host-gzip-types"
+                  className="font-mono text-xs"
+                  spellCheck={false}
+                  placeholder="text/css, application/json, application/javascript"
+                  value={form.gzip_types}
+                  onChange={(event) => patch({ gzip_types: event.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t('hosts.editor.gzip.typesHint')}
+                </p>
+              </div>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="maintenance" className="space-y-4">

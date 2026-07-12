@@ -432,6 +432,82 @@ fn validate_maintenance_text(raw: &str, max: usize) -> Result<String, ApiError> 
     Ok(s.to_string())
 }
 
+/// Per-host gzip response compression (`ngx_http_gzip_module`, core). When
+/// enabled the generator emits `gzip on` plus `gzip_proxied any` (so proxied
+/// responses are compressed), `gzip_vary on`, and the tuning below.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gzip {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Compression level 1-9. 0 = omit `gzip_comp_level` (Angie default is 1).
+    #[serde(default)]
+    pub comp_level: u32,
+    /// Minimum response size in bytes to compress. 0 = omit `gzip_min_length`.
+    #[serde(default)]
+    pub min_length: u32,
+    /// Extra MIME types to compress (text/html is always compressed). Empty ⇒
+    /// the generator uses a curated default set.
+    #[serde(default)]
+    pub types: Vec<String>,
+}
+
+impl Gzip {
+    pub fn active(&self) -> bool {
+        self.enabled
+    }
+}
+
+pub const MAX_GZIP_MIN_LENGTH: u32 = 10_000_000;
+pub const MAX_GZIP_TYPES: usize = 50;
+
+/// Validate + normalize a host's gzip config. Level clamps to 0-9; each MIME
+/// type is a strict `type/subtype` token (lower-cased, deduped) since it is
+/// interpolated into `gzip_types …;`.
+pub fn validate_gzip(mut g: Gzip) -> Result<Gzip, ApiError> {
+    if !g.enabled {
+        return Ok(Gzip::default());
+    }
+    if g.comp_level > 9 {
+        return Err(bad("invalid_gzip", "compression level must be 1-9"));
+    }
+    if g.min_length > MAX_GZIP_MIN_LENGTH {
+        return Err(bad("invalid_gzip", "minimum length is too large"));
+    }
+    if g.types.len() > MAX_GZIP_TYPES {
+        return Err(bad("invalid_gzip", "too many MIME types"));
+    }
+    let mut types = Vec::with_capacity(g.types.len());
+    for t in &g.types {
+        let mime = validate_mime_type(t)?;
+        if !types.contains(&mime) {
+            types.push(mime);
+        }
+    }
+    g.types = types;
+    Ok(g)
+}
+
+/// A MIME `type/subtype` token: each half starts alphanumeric then allows
+/// `. + -`. Case-insensitive → lower-cased. Rejects anything that could break
+/// out of the `gzip_types` directive.
+fn validate_mime_type(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim().to_ascii_lowercase();
+    let (t, sub) = s
+        .split_once('/')
+        .ok_or_else(|| bad("invalid_gzip", format!("'{raw}' is not a MIME type")))?;
+    let part_ok = |p: &str| {
+        let b = p.as_bytes();
+        !b.is_empty()
+            && b[0].is_ascii_alphanumeric()
+            && b.iter()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'+' | b'-'))
+    };
+    if !part_ok(t) || !part_ok(sub) {
+        return Err(bad("invalid_gzip", format!("'{raw}' is not a MIME type")));
+    }
+    Ok(s)
+}
+
 /// Load-balancing method for a host's upstream pool.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -624,6 +700,7 @@ pub struct ProxyHost {
     pub forward_auth: ForwardAuth,
     pub custom_headers: Vec<CustomHeader>,
     pub maintenance: Maintenance,
+    pub gzip: Gzip,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -674,6 +751,8 @@ pub struct ProxyHostInput {
     pub custom_headers: Vec<CustomHeader>,
     #[serde(default)]
     pub maintenance: Maintenance,
+    #[serde(default)]
+    pub gzip: Gzip,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -926,6 +1005,7 @@ pub fn validate_host_input(
     input.forward_auth = validate_forward_auth(input.forward_auth, upstream_policy)?;
     input.custom_headers = validate_custom_headers(input.custom_headers)?;
     input.maintenance = validate_maintenance(input.maintenance)?;
+    input.gzip = validate_gzip(input.gzip)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1902,6 +1982,7 @@ mod tests {
             forward_auth: ForwardAuth::default(),
             custom_headers: vec![],
             maintenance: Maintenance::default(),
+            gzip: Gzip::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -2111,6 +2192,54 @@ mod tests {
                 }])
                 .is_err(),
                 "should reject ({name:?}, {value:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn gzip_validation() {
+        // Valid config: types lower-cased + deduped.
+        let ok = validate_gzip(Gzip {
+            enabled: true,
+            comp_level: 6,
+            min_length: 256,
+            types: vec![
+                "text/CSS".into(),
+                "text/css".into(),
+                "application/json".into(),
+            ],
+        })
+        .unwrap();
+        assert_eq!(ok.types, vec!["text/css", "application/json"]);
+        assert!(ok.active());
+
+        // Disabled → inert default.
+        assert!(!validate_gzip(Gzip {
+            enabled: false,
+            comp_level: 9,
+            ..Default::default()
+        })
+        .unwrap()
+        .active());
+
+        // Level out of range rejected.
+        assert!(validate_gzip(Gzip {
+            enabled: true,
+            comp_level: 10,
+            ..Default::default()
+        })
+        .is_err());
+
+        // Bad MIME tokens rejected.
+        for bad_mime in ["notamime", "text/", "/css", "text/css;x", "text/css evil"] {
+            assert!(
+                validate_gzip(Gzip {
+                    enabled: true,
+                    types: vec![bad_mime.into()],
+                    ..Default::default()
+                })
+                .is_err(),
+                "should reject {bad_mime:?}"
             );
         }
     }

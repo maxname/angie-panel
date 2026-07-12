@@ -175,6 +175,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         forward_auth: h.forward_auth.clone(),
         custom_headers: h.custom_headers.clone(),
         maintenance: h.maintenance.clone(),
+        gzip: h.gzip.clone(),
         enabled,
     }
 }

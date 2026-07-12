@@ -324,6 +324,44 @@ describe('host editor rate limiting', () => {
     })
   })
 
+  it('submits gzip settings from the compression tab', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'Compression' }))
+    await user.click(screen.getByLabelText('Enable gzip'))
+    await user.type(screen.getByLabelText('Compression level'), '6')
+    await user.type(screen.getByLabelText('Minimum length (bytes)'), '256')
+    await user.type(screen.getByLabelText('MIME types'), 'text/css, application/json')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.gzip).toEqual({
+      enabled: true,
+      comp_level: 6,
+      min_length: 256,
+      types: ['text/css', 'application/json'],
+    })
+  })
+
   it('adds a backend server and submits the upstream pool', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {
