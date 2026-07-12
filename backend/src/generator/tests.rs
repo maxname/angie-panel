@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    BalanceMethod, CustomHeader, CustomLocation, DeadHost, ForwardAuth, HeaderDirection, Mtls,
-    ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme, Stream, StreamTls, Upstream,
-    UpstreamServer,
+    BalanceMethod, CustomHeader, CustomLocation, DeadHost, ForwardAuth, GeoMode, GeoPolicy,
+    HeaderDirection, Mtls, ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme, Stream,
+    StreamTls, Upstream, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -90,6 +90,8 @@ fn input_acl(
         dead_hosts: vec![],
         streams: vec![],
         bans: vec![],
+        geo_policy: GeoPolicy::default(),
+        geo_cidrs: vec![],
     }
 }
 
@@ -564,6 +566,62 @@ fn golden_forward_auth() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-forward-auth.conf", body);
+}
+
+#[test]
+fn golden_geo_deny() {
+    // Deny mode: the geo block defaults 0 and flags blocked CIDRs 1; each proxy
+    // host gets `if ($ap_geo_deny) return 403`. Verified by angie -t on real Angie.
+    let host = base_host(17, "app.example.com");
+    let mut inp = input(vec![host], vec![], settings(DefaultSite::NotFound, false));
+    inp.geo_policy = GeoPolicy {
+        mode: GeoMode::Deny,
+        countries: vec!["RU".into(), "CN".into()],
+    };
+    inp.geo_cidrs = vec![
+        "1.2.3.0/24".into(),
+        "5.6.0.0/16".into(),
+        "2001:db8::/32".into(),
+    ];
+    let files = generate(&inp).unwrap();
+    assert_golden("12-geo-deny.conf", &files["12-geo.conf"]);
+    let (_, body) = only_host_file(&files);
+    assert!(body.contains("if ($ap_geo_deny) { return 403; }"));
+}
+
+#[test]
+fn geo_allow_defaults_inverted_and_inert_without_cidrs() {
+    // Allow mode inverts the geo default (deny everyone, allow the listed CIDRs).
+    let mut inp = input(
+        vec![base_host(18, "a.example.com")],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    );
+    inp.geo_policy = GeoPolicy {
+        mode: GeoMode::Allow,
+        countries: vec!["DE".into()],
+    };
+    inp.geo_cidrs = vec!["9.10.0.0/16".into()];
+    let files = generate(&inp).unwrap();
+    assert!(files["12-geo.conf"].contains("default 1;"));
+    assert!(files["12-geo.conf"].contains("9.10.0.0/16 0;"));
+
+    // A policy with NO resolved CIDRs (missing dataset) is inert — no geo file,
+    // no guard — so an allow-list can never lock every visitor out.
+    let mut inert = input(
+        vec![base_host(19, "b.example.com")],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    );
+    inert.geo_policy = GeoPolicy {
+        mode: GeoMode::Allow,
+        countries: vec!["DE".into()],
+    };
+    inert.geo_cidrs = vec![];
+    let files = generate(&inert).unwrap();
+    assert!(!files.contains_key("12-geo.conf"));
+    let (_, body) = only_host_file(&files);
+    assert!(!body.contains("ap_geo_deny"));
 }
 
 #[test]

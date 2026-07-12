@@ -85,6 +85,12 @@ jobs:
       - name: Install cargo-zigbuild and cargo-deb
         run: cargo install --locked cargo-zigbuild cargo-deb
 
+      # Replace the committed dev fixture with the full public-domain country
+      # dataset so the .deb ships real geo data. Best-effort: on a download
+      # failure the fixture ships and geo blocking is simply narrow (never broken).
+      - name: Build GeoIP dataset
+        run: ./scripts/build-geoip-data.sh backend/data/geoip-countries.csv || echo "geoip build failed; shipping fixture"
+
       - name: Build release binary (cargo-zigbuild)
         working-directory: backend
         run: cargo zigbuild --release --target ${{ matrix.target }}

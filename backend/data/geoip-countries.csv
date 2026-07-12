@@ -1,0 +1,19 @@
+# Country -> CIDR dataset for geo blocking (format: country_code,cidr).
+#
+# THIS IS A SMALL DEV/STARTER FIXTURE, not authoritative geolocation data.
+# The real per-country ranges are (re)built at package time from the public
+# domain sapics/ip-location-db dataset by scripts/build-geoip-data.sh, which
+# overwrites this file with the full set (tens of thousands of CIDRs).
+#
+# Sample ranges below are illustrative only.
+US,3.0.0.0/9
+US,23.0.0.0/12
+DE,5.9.0.0/16
+DE,46.4.0.0/16
+RU,5.8.0.0/19
+RU,31.13.144.0/21
+RU,95.24.0.0/13
+CN,1.24.0.0/13
+CN,36.96.0.0/11
+CN,120.192.0.0/10
+NL,2001:1c00::/22

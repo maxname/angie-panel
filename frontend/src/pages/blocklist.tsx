@@ -1,13 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus } from 'lucide-react'
+import { Loader2, Plus, X } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -16,7 +24,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api, ApiError, type Ban } from '@/lib/api'
+import { api, ApiError, type Ban, type GeoMode, type GeoPolicy } from '@/lib/api'
+import { COUNTRIES, countryName } from '@/lib/countries'
 import { toast } from '@/lib/toast'
 
 export function BlocklistPage() {
@@ -105,6 +114,8 @@ export function BlocklistPage() {
         </CardContent>
       </Card>
 
+      <CountryPolicyCard />
+
       {bansQuery.isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -150,6 +161,144 @@ export function BlocklistPage() {
         </Card>
       )}
     </div>
+  )
+}
+
+/** Global country allow/deny policy (GeoIP). One policy for the whole panel. */
+function CountryPolicyCard() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const geoQuery = useQuery({ queryKey: ['geo'], queryFn: () => api.getGeo() })
+
+  const [draft, setDraft] = useState<{ mode: GeoMode; countries: string[] }>({
+    mode: 'off',
+    countries: [],
+  })
+  const [seededFrom, setSeededFrom] = useState<GeoPolicy | undefined>(undefined)
+  const [error, setError] = useState<string | null>(null)
+
+  // Seed the editable draft from the loaded policy without an effect (the
+  // React "adjust state during render" idiom; defensive against partial data).
+  if (geoQuery.data && geoQuery.data !== seededFrom) {
+    setSeededFrom(geoQuery.data)
+    setDraft({
+      mode: geoQuery.data.mode ?? 'off',
+      countries: geoQuery.data.countries ?? [],
+    })
+  }
+  const { mode, countries } = draft
+  const setMode = (m: GeoMode) => setDraft((d) => ({ ...d, mode: m }))
+
+  const saveMutation = useMutation({
+    mutationFn: () => api.putGeo({ mode, countries }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['geo'] })
+      setError(null)
+      toast({
+        title: t('blocklist.unappliedTitle'),
+        description: t('blocklist.unappliedBody'),
+      })
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : t('common.error')),
+  })
+
+  const addCountry = (code: string) => {
+    if (code && !countries.includes(code)) {
+      setDraft((d) => ({ ...d, countries: [...d.countries, code] }))
+    }
+  }
+  const removeCountry = (code: string) =>
+    setDraft((d) => ({ ...d, countries: d.countries.filter((c) => c !== code) }))
+
+  const available = COUNTRIES.filter((c) => !countries.includes(c.code))
+
+  return (
+    <Card>
+      <CardContent className="space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-sm font-medium">{t('blocklist.geo.title')}</h2>
+          <p className="text-xs text-muted-foreground">
+            {t('blocklist.geo.description')}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-2">
+            <Label htmlFor="geo-mode">{t('blocklist.geo.mode')}</Label>
+            <Select value={mode} onValueChange={(v) => setMode(v as GeoMode)}>
+              <SelectTrigger id="geo-mode" className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">{t('blocklist.geo.modeOff')}</SelectItem>
+                <SelectItem value="deny">{t('blocklist.geo.modeDeny')}</SelectItem>
+                <SelectItem value="allow">{t('blocklist.geo.modeAllow')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {mode !== 'off' && (
+            <div className="space-y-2">
+              <Label htmlFor="geo-add-country">
+                {t('blocklist.geo.addCountry')}
+              </Label>
+              {/* Empty controlled value so the picker resets after each pick. */}
+              <Select value="" onValueChange={addCountry}>
+                <SelectTrigger id="geo-add-country" className="w-64">
+                  <SelectValue placeholder={t('blocklist.geo.addCountry')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {available.map((c) => (
+                    <SelectItem key={c.code} value={c.code}>
+                      {c.name} ({c.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+            {saveMutation.isPending && (
+              <Loader2 className="animate-spin" aria-hidden="true" />
+            )}
+            {t('common.save')}
+          </Button>
+        </div>
+
+        {mode !== 'off' && (
+          <div className="flex flex-wrap gap-2">
+            {countries.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {t('blocklist.geo.noCountries')}
+              </p>
+            ) : (
+              countries.map((code) => (
+                <Badge key={code} variant="secondary" className="gap-1">
+                  {countryName(code)} ({code})
+                  <button
+                    type="button"
+                    aria-label={t('blocklist.geo.remove', { country: code })}
+                    onClick={() => removeCountry(code)}
+                    className="ml-0.5 rounded-sm hover:text-destructive"
+                  >
+                    <X className="size-3" aria-hidden="true" />
+                  </button>
+                </Badge>
+              ))
+            )}
+          </div>
+        )}
+
+        {error !== null && (
+          <Alert variant="destructive">
+            <AlertTitle>{t('blocklist.geo.saveFailed')}</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <p className="text-xs text-muted-foreground">{t('blocklist.geo.hint')}</p>
+      </CardContent>
+    </Card>
   )
 }
 

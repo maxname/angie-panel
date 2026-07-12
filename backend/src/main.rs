@@ -12,6 +12,7 @@ mod db;
 mod error;
 mod export_import;
 mod generator;
+mod geo;
 mod helper;
 mod hosts;
 mod model;

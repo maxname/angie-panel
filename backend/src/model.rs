@@ -1208,6 +1208,82 @@ pub fn validate_ban(mut input: BanInput) -> Result<BanInput, ApiError> {
     Ok(input)
 }
 
+// ============================================================ geo policy (v2)
+
+/// Global country-based access mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GeoMode {
+    /// No country filtering.
+    #[default]
+    Off,
+    /// Block the listed countries; everyone else is allowed.
+    Deny,
+    /// Allow ONLY the listed countries; everyone else is blocked.
+    Allow,
+}
+
+impl GeoMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GeoMode::Off => "off",
+            GeoMode::Deny => "deny",
+            GeoMode::Allow => "allow",
+        }
+    }
+
+    pub fn from_stored(s: &str) -> Self {
+        match s {
+            "deny" => GeoMode::Deny,
+            "allow" => GeoMode::Allow,
+            _ => GeoMode::Off,
+        }
+    }
+}
+
+/// Global country policy: a mode plus the ISO 3166-1 alpha-2 country codes it
+/// applies to. Resolved to CIDR ranges (from the bundled dataset) and enforced
+/// with a `geo` map + a per-host `if (…) return 403` (see the generator).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeoPolicy {
+    #[serde(default)]
+    pub mode: GeoMode,
+    #[serde(default)]
+    pub countries: Vec<String>,
+}
+
+impl GeoPolicy {
+    pub fn active(&self) -> bool {
+        self.mode != GeoMode::Off && !self.countries.is_empty()
+    }
+}
+
+pub const MAX_GEO_COUNTRIES: usize = 250;
+
+/// Validate + normalize a geo policy: each country is a 2-letter ISO code
+/// (upper-cased, deduped). Codes only feed a dataset lookup, never the config
+/// directly, but we keep them strict anyway.
+pub fn validate_geo_policy(mut policy: GeoPolicy) -> Result<GeoPolicy, ApiError> {
+    if policy.countries.len() > MAX_GEO_COUNTRIES {
+        return Err(bad("invalid_country", "too many countries"));
+    }
+    let mut codes = Vec::with_capacity(policy.countries.len());
+    for c in &policy.countries {
+        let code = c.trim().to_uppercase();
+        if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_uppercase()) {
+            return Err(bad(
+                "invalid_country",
+                format!("'{c}' is not a 2-letter country code"),
+            ));
+        }
+        if !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    policy.countries = codes;
+    Ok(policy)
+}
+
 /// Validate a bcrypt hash coming from an UNTRUSTED import. The hash is written
 /// verbatim into an htpasswd line (`username:hash`), so a malformed value could
 /// inject extra lines or break parsing — accept only the canonical bcrypt shape
@@ -1978,6 +2054,41 @@ mod tests {
                 }])
                 .is_err(),
                 "should reject ({name:?}, {value:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn geo_policy_validation() {
+        // Codes are upper-cased and deduped; mode preserved.
+        let ok = validate_geo_policy(GeoPolicy {
+            mode: GeoMode::Deny,
+            countries: vec!["ru".into(), "RU".into(), "cn".into()],
+        })
+        .unwrap();
+        assert_eq!(ok.mode, GeoMode::Deny);
+        assert_eq!(ok.countries, vec!["RU", "CN"]);
+        assert!(ok.active());
+
+        // Off with no countries is inactive.
+        assert!(!GeoPolicy::default().active());
+        // A mode with no countries is inactive (no-op, never locks out).
+        assert!(!validate_geo_policy(GeoPolicy {
+            mode: GeoMode::Allow,
+            countries: vec![],
+        })
+        .unwrap()
+        .active());
+
+        // Bad codes rejected.
+        for bad_code in ["RUS", "R", "R1", "".to_string().as_str(), "россия"] {
+            assert!(
+                validate_geo_policy(GeoPolicy {
+                    mode: GeoMode::Deny,
+                    countries: vec![bad_code.into()],
+                })
+                .is_err(),
+                "should reject {bad_code:?}"
             );
         }
     }

@@ -22,6 +22,16 @@ const ban: Ban = {
   created_at: 1751700000,
 }
 
+/** Path-aware fetch: /api/geo returns the policy, /api/bans returns the bans. */
+function routedFetch(bans: Ban[], geo = { mode: 'off', countries: [] }) {
+  return vi.fn((input: string) => {
+    if (input === '/api/geo') {
+      return Promise.resolve(jsonResponse(geo))
+    }
+    return Promise.resolve(jsonResponse({ bans }))
+  })
+}
+
 beforeAll(async () => {
   await i18n.changeLanguage('en')
 })
@@ -35,7 +45,7 @@ function makeClient() {
 
 describe('blocklist page', () => {
   it('lists blocked addresses', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ bans: [ban] })))
+    vi.stubGlobal('fetch', routedFetch([ban]))
 
     render(
       <QueryClientProvider client={makeClient()}>
@@ -48,7 +58,7 @@ describe('blocklist page', () => {
   })
 
   it('shows an empty state', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ bans: [] })))
+    vi.stubGlobal('fetch', routedFetch([]))
 
     render(
       <QueryClientProvider client={makeClient()}>
@@ -69,6 +79,9 @@ describe('blocklist page', () => {
             409,
           ),
         )
+      }
+      if (input === '/api/geo') {
+        return Promise.resolve(jsonResponse({ mode: 'off', countries: [] }))
       }
       return Promise.resolve(jsonResponse({ bans: [] }))
     })
@@ -91,5 +104,43 @@ describe('blocklist page', () => {
       '/api/bans',
       expect.objectContaining({ method: 'POST' }),
     )
+  })
+
+  it('saves a country deny policy via PUT /api/geo', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/geo' && init?.method === 'PUT') {
+        return Promise.resolve(jsonResponse({ mode: 'deny', countries: ['RU'] }))
+      }
+      if (input === '/api/geo') {
+        return Promise.resolve(jsonResponse({ mode: 'off', countries: [] }))
+      }
+      return Promise.resolve(jsonResponse({ bans: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <BlocklistPage />
+      </QueryClientProvider>,
+    )
+
+    // Set mode → "Block listed countries" (the first combobox is the geo mode).
+    await user.click(await screen.findByLabelText('Mode'))
+    await user.click(
+      await screen.findByRole('option', { name: 'Block listed countries' }),
+    )
+    // Add Russia via the country picker.
+    await user.click(screen.getByLabelText('Add country'))
+    await user.click(await screen.findByRole('option', { name: 'Russia (RU)' }))
+    // Save (the geo card's Save button).
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const put = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/geo' && init?.method === 'PUT',
+    )
+    expect(put).toBeTruthy()
+    const body = JSON.parse(String((put![1] as RequestInit).body))
+    expect(body).toEqual({ mode: 'deny', countries: ['RU'] })
   })
 })

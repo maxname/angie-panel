@@ -119,6 +119,15 @@ export interface Ban {
   created_at: number
 }
 
+/** Global country access mode. */
+export type GeoMode = 'off' | 'deny' | 'allow'
+
+/** Global country policy: mode + ISO 3166-1 alpha-2 country codes. */
+export interface GeoPolicy {
+  mode: GeoMode
+  countries: string[]
+}
+
 /** Mutual TLS: require/verify client certificates against a CA bundle. */
 export interface Mtls {
   /** CA bundle (PEM) that verifies presented client certs. null = mTLS off. */
@@ -767,6 +776,10 @@ export const api = {
     request<Ban>('POST', '/api/bans', body),
 
   deleteBan: (id: number) => request<OkResponse>('DELETE', `/api/bans/${id}`),
+
+  getGeo: () => request<GeoPolicy>('GET', '/api/geo'),
+
+  putGeo: (body: GeoPolicy) => request<GeoPolicy>('PUT', '/api/geo', body),
 
   listStreams: () => request<{ streams: Stream[] }>('GET', '/api/streams'),
 

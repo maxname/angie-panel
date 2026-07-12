@@ -59,6 +59,10 @@ pub struct AngieConfig {
     /// helper before reload). A runtime tmpfs path is ideal.
     #[serde(default = "default_acme_socket_dir")]
     pub acme_socket_dir: PathBuf,
+    /// Country → CIDR dataset (CSV `country_code,cidr`) backing geo blocking.
+    /// Shipped by the package; (re)built by scripts/build-geoip-data.sh.
+    #[serde(default = "default_geoip_data")]
+    pub geoip_data: PathBuf,
 }
 
 impl Default for AngieConfig {
@@ -71,12 +75,16 @@ impl Default for AngieConfig {
             status_api_url: default_status_api_url(),
             snippets_dir: default_snippets_dir(),
             acme_socket_dir: default_acme_socket_dir(),
+            geoip_data: default_geoip_data(),
         }
     }
 }
 
 fn default_snippets_dir() -> PathBuf {
     "/usr/share/angie-panel/snippets".into()
+}
+fn default_geoip_data() -> PathBuf {
+    "/usr/share/angie-panel/geoip-countries.csv".into()
 }
 fn default_acme_socket_dir() -> PathBuf {
     "/run/angie-panel".into()

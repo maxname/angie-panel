@@ -65,5 +65,9 @@ assets = [
     ["../packaging/polkit/10-angie-panel.rules", "usr/share/polkit-1/rules.d/", "644"],
     ["../packaging/snippets/block-exploits.conf", "usr/share/angie-panel/snippets/", "644"],
     ["../packaging/snippets/cache-assets.conf", "usr/share/angie-panel/snippets/", "644"],
+    # Country -> CIDR dataset for geo blocking. The committed file is a small
+    # dev fixture; release.yml runs scripts/build-geoip-data.sh to replace it
+    # with the full public-domain dataset before cargo-deb packages it.
+    ["data/geoip-countries.csv", "usr/share/angie-panel/geoip-countries.csv", "644"],
     ["../packaging/tmpfiles/angie-panel.conf", "usr/lib/tmpfiles.d/", "644"],
 ]

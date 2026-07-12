@@ -686,6 +686,20 @@ export const en = {
     unappliedTitle: 'You have unapplied changes',
     unappliedBody: 'Go to Apply to write and reload the configuration.',
     table: { address: 'IP / CIDR', reason: 'Reason', actions: 'Actions' },
+    geo: {
+      title: 'Country blocking (GeoIP)',
+      description:
+        'Deny or allow visitors by country, matched against a bundled IP-to-country dataset. Applies to all proxy hosts.',
+      mode: 'Mode',
+      modeOff: 'Off',
+      modeDeny: 'Block listed countries',
+      modeAllow: 'Allow only listed countries',
+      addCountry: 'Add country',
+      noCountries: 'No countries selected yet.',
+      remove: 'Remove {{country}}',
+      saveFailed: 'Could not save the country policy',
+      hint: 'The IP-to-country data is a bundled snapshot and may lag reality. Country lookups are approximate — do not rely on this alone for security.',
+    },
   },
   users: {
     title: 'Users',

@@ -30,8 +30,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Ban, CustomHeader, CustomLocation, DeadHost, HeaderDirection, ProxyHost, RateLimit,
-    RedirectHost, Scheme, Stream, StreamTls,
+    Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy, HeaderDirection, ProxyHost,
+    RateLimit, RedirectHost, Scheme, Stream, StreamTls,
 };
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
@@ -73,6 +73,11 @@ pub struct GeneratorInput {
     pub streams: Vec<Stream>,
     /// Blocked IPs/CIDRs — emitted as http-scope `deny` rules (03-bans.conf).
     pub bans: Vec<Ban>,
+    /// Global country access policy (off / deny-listed / allow-listed).
+    pub geo_policy: GeoPolicy,
+    /// CIDR ranges of the policy's countries, resolved from the bundled dataset.
+    /// Empty ⇒ geo filtering is inert (never locks a host out on missing data).
+    pub geo_cidrs: Vec<String>,
 }
 
 /// An access list reduced to what the generator needs. Usernames carry their
@@ -160,6 +165,11 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
     }
     files.insert("05-default.conf".to_string(), gen_default(input)?);
     files.insert("10-acme.conf".to_string(), gen_acme(input));
+    // Country access policy: one http-scope `geo` block mapping the client IP to
+    // `$ap_geo_deny`; each proxy host enforces it with `if (…) return 403`.
+    if let Some(body) = gen_geo(input) {
+        files.insert("12-geo.conf".to_string(), body);
+    }
     // Rate-limit zones: emitted before 20-host-* so the zones exist in http
     // context before any server block references them.
     if let Some(body) = gen_rate_limits(input) {
@@ -699,6 +709,51 @@ fn header_iter(
         .filter(move |h| h.direction == direction)
 }
 
+// -------------------------------------------------------------- 12-geo.conf
+
+/// The variable the geo block sets and each proxy host tests (1 ⇒ 403).
+const GEO_VAR: &str = "$ap_geo_deny";
+
+/// Whether country filtering is live: an active policy AND at least one resolved
+/// CIDR. An empty CIDR set (missing/stale dataset) disables it — we never lock a
+/// host out on bad data (an allow-list with zero CIDRs would deny everyone).
+fn geo_active(input: &GeneratorInput) -> bool {
+    input.geo_policy.active() && !input.geo_cidrs.is_empty()
+}
+
+/// The http-scope `geo` block mapping the client IP to `$ap_geo_deny`.
+///
+/// deny mode: `default 0`, each selected (blocked) CIDR ⇒ 1.
+/// allow mode: `default 1`, each selected (allowed) CIDR ⇒ 0.
+/// Either way `$ap_geo_deny == 1` means "reject", so the per-host enforcement is
+/// a single `if ($ap_geo_deny) return 403`. CIDRs came from the dataset (never
+/// user free-text); they are still bare IP/CIDR tokens.
+fn gen_geo(input: &GeneratorInput) -> Option<String> {
+    if !geo_active(input) {
+        return None;
+    }
+    let (default, hit) = match input.geo_policy.mode {
+        GeoMode::Deny => (0, 1),
+        GeoMode::Allow => (1, 0),
+        GeoMode::Off => return None,
+    };
+    let mut out = String::new();
+    let _ = writeln!(out, "geo {GEO_VAR} {{");
+    let _ = writeln!(out, "    default {default};");
+    for cidr in &input.geo_cidrs {
+        let _ = writeln!(out, "    {cidr} {hit};");
+    }
+    let _ = writeln!(out, "}}");
+    Some(out)
+}
+
+/// Per-server geo enforcement, emitted inside each proxy host's server block.
+fn emit_geo_guard(out: &mut String, input: &GeneratorInput) {
+    if geo_active(input) {
+        let _ = writeln!(out, "    if ({GEO_VAR}) {{ return 403; }}");
+    }
+}
+
 // -------------------------------------------------------------- 03-bans.conf
 
 /// Global IP blocklist as http-scope `deny` rules. Addresses were validated to
@@ -894,6 +949,12 @@ fn host_features(
     input: &GeneratorInput,
     tls: bool,
 ) -> anyhow::Result<()> {
+    // Country access policy: reject early (before anything else in the server).
+    // The ACME http-01 challenge is unaffected — the ACME module answers it at
+    // POST_READ, before the rewrite-phase `if` runs, and on the collector /
+    // default server rather than these host blocks.
+    emit_geo_guard(out, input);
+
     // HSTS only makes sense over TLS.
     if tls && host.hsts {
         let mut value = String::from("max-age=63072000");

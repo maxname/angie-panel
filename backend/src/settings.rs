@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::error::{ApiError, ApiResult};
 use crate::generator::{self, DefaultSite, EffectiveSettings, FileSet, GeneratorInput};
+use crate::model::{GeoMode, GeoPolicy};
 use crate::repo;
 use crate::state::AppState;
 
@@ -15,6 +16,8 @@ pub const KEY_DEFAULT_SITE_REDIRECT: &str = "default_site_redirect_url";
 pub const KEY_IPV6_ENABLED: &str = "ipv6_enabled"; // "1"/"0"
 pub const KEY_RESOLVER_OVERRIDE: &str = "resolver_override"; // space/comma list
 pub const KEY_ACME_EMAIL: &str = "acme_email";
+pub const KEY_GEO_MODE: &str = "geo_mode"; // off|deny|allow
+pub const KEY_GEO_COUNTRIES: &str = "geo_countries"; // JSON array of ISO codes
 /// hosts_revision that is currently live (set after each successful apply).
 /// Lets the reconciler distinguish external cert-readiness changes from
 /// pending user edits. Not user-editable.
@@ -133,12 +136,69 @@ pub async fn acme_ready_map(state: &AppState) -> std::collections::HashMap<Strin
     map
 }
 
+/// Read the global geo policy from the settings table.
+pub async fn geo_policy(state: &AppState) -> ApiResult<GeoPolicy> {
+    let map = repo::all_settings(&state.db).await?;
+    let mode = GeoMode::from_stored(map.get(KEY_GEO_MODE).map(String::as_str).unwrap_or("off"));
+    let countries = map
+        .get(KEY_GEO_COUNTRIES)
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_default();
+    Ok(GeoPolicy { mode, countries })
+}
+
+/// Persist the global geo policy (already validated) to the settings table.
+pub async fn set_geo_policy(state: &AppState, policy: &GeoPolicy) -> ApiResult<()> {
+    repo::set_setting(&state.db, KEY_GEO_MODE, policy.mode.as_str())
+        .await
+        .map_err(ApiError::internal)?;
+    let countries = serde_json::to_string(&policy.countries).unwrap_or_else(|_| "[]".into());
+    repo::set_setting(&state.db, KEY_GEO_COUNTRIES, &countries)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(())
+}
+
+/// Resolve the policy's country codes to CIDR ranges using the bundled dataset
+/// (CSV `country_code,cidr`). Returns the CIDRs of the selected countries, in
+/// file order. A missing dataset (or no matches) yields an empty list, which the
+/// generator treats as "geo inactive" — it never locks a host out on bad data.
+pub fn load_geo_cidrs(path: &std::path::Path, policy: &GeoPolicy) -> Vec<String> {
+    if !policy.active() {
+        return Vec::new();
+    }
+    let wanted: std::collections::HashSet<&str> =
+        policy.countries.iter().map(String::as_str).collect();
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(?path, %e, "geo dataset unavailable; country filtering disabled");
+            return Vec::new();
+        }
+    };
+    let mut cidrs = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((code, cidr)) = line.split_once(',') {
+            if wanted.contains(code.trim()) {
+                cidrs.push(cidr.trim().to_string());
+            }
+        }
+    }
+    cidrs
+}
+
 /// Assemble the generator input from the current DB state.
 pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput> {
     let hosts = repo::list_hosts(&state.db).await?;
     let settings = effective_settings(state).await?;
     let db_certs = repo::list_certs(&state.db).await?;
     let ready = acme_ready_map(state).await;
+    let geo = geo_policy(state).await?;
+    let geo_cidrs = load_geo_cidrs(&state.cfg.angie.geoip_data, &geo);
 
     let certificates = db_certs
         .into_iter()
@@ -191,6 +251,8 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         dead_hosts: repo::list_dead(&state.db).await?,
         streams: repo::list_streams(&state.db).await?,
         bans: repo::list_bans(&state.db).await?,
+        geo_policy: geo,
+        geo_cidrs,
     })
 }
 

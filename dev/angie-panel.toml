@@ -12,3 +12,6 @@ bin = "/usr/sbin/angie"
 http_d_dir = "/etc/angie/http.d"
 angie_conf = "/etc/angie/angie.conf"
 status_api_url = "http://127.0.0.1:8100/status"
+# Dev fixture dataset (relative to the backend/ cwd). The package ships the full
+# set at /usr/share/angie-panel/geoip-countries.csv.
+geoip_data = "data/geoip-countries.csv"

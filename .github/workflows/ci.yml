@@ -115,7 +115,7 @@ jobs:
       - name: shellcheck shell scripts
         run: |
           shopt -s nullglob globstar
-          files=(packaging/**/*.sh e2e/*.sh)
+          files=(packaging/**/*.sh e2e/*.sh scripts/*.sh)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No shell scripts yet — nothing to check."
             exit 0
