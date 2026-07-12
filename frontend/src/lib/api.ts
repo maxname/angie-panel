@@ -127,6 +127,16 @@ export interface Mtls {
   optional: boolean
 }
 
+/** Where a custom header is applied. */
+export type HeaderDirection = 'request' | 'response'
+
+/** A user-defined header added to responses (add_header) or requests (proxy_set_header). */
+export interface CustomHeader {
+  name: string
+  value: string
+  direction: HeaderDirection
+}
+
 /** Forward authentication (SSO gateway) via Angie's auth_request. */
 export interface ForwardAuth {
   enabled: boolean
@@ -161,6 +171,7 @@ export interface Host {
   upstream: Upstream
   mtls: Mtls
   forward_auth: ForwardAuth
+  custom_headers: CustomHeader[]
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -191,6 +202,7 @@ export interface HostInput {
   upstream?: Upstream
   mtls?: Mtls
   forward_auth?: ForwardAuth
+  custom_headers?: CustomHeader[]
   enabled?: boolean
 }
 

@@ -30,7 +30,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Ban, CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, Scheme, Stream, StreamTls,
+    Ban, CustomHeader, CustomLocation, DeadHost, HeaderDirection, ProxyHost, RateLimit,
+    RedirectHost, Scheme, Stream, StreamTls,
 };
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
@@ -667,6 +668,37 @@ fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
     }
 }
 
+// --------------------------------------------------------- custom headers
+
+/// Custom response headers (`add_header … always`), server scope. Emitted next
+/// to HSTS; locations define no `add_header` of their own, so they inherit
+/// these. Name is an HTTP token, value is bounded printable ASCII with quote /
+/// backslash / `$` rejected (see `model::validate_custom_headers`).
+fn emit_response_headers(out: &mut String, host: &ProxyHost) {
+    for h in header_iter(host, HeaderDirection::Response) {
+        let _ = writeln!(out, "    add_header {} \"{}\" always;", h.name, h.value);
+    }
+}
+
+/// Custom request headers (`proxy_set_header`), per proxy location. Emitted
+/// AFTER the standard proxy headers so a user rule can deliberately override
+/// them (last `proxy_set_header` for a name wins). An empty value strips the
+/// header from the upstream request.
+fn emit_request_headers(out: &mut String, host: &ProxyHost, indent: &str) {
+    for h in header_iter(host, HeaderDirection::Request) {
+        let _ = writeln!(out, "{indent}proxy_set_header {} \"{}\";", h.name, h.value);
+    }
+}
+
+fn header_iter(
+    host: &ProxyHost,
+    direction: HeaderDirection,
+) -> impl Iterator<Item = &CustomHeader> {
+    host.custom_headers
+        .iter()
+        .filter(move |h| h.direction == direction)
+}
+
 // -------------------------------------------------------------- 03-bans.conf
 
 /// Global IP blocklist as http-scope `deny` rules. Addresses were validated to
@@ -876,6 +908,9 @@ fn host_features(
         );
     }
 
+    // Custom response headers (server scope; inherited by every location).
+    emit_response_headers(out, host);
+
     // block-exploits.conf is a package-owned snippet of server-level
     // `if (...) { return 444; }` rules; it is included at SERVER scope. The
     // linter verifies the path stays under snippets_dir.
@@ -931,6 +966,7 @@ fn host_features(
         host,
         input,
     );
+    emit_request_headers(out, host, "        ");
     if host.cache_assets {
         let p = snippet_path(&input.snippets_dir, "cache-assets.conf")?;
         let _ = writeln!(out, "        include {p};");
@@ -954,6 +990,7 @@ fn host_features(
             host,
             input,
         );
+        emit_request_headers(out, host, "        ");
         // Per-location snippet (validated + gated upstream; re-linted on output).
         if let Some(snip) = &loc.snippet {
             emit_snippet(out, snip, "        ");

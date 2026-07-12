@@ -185,7 +185,7 @@ pub fn validate_forward_auth(
     }
     let mut headers = Vec::new();
     for h in &fa.copy_headers {
-        let name = validate_header_name(h)?;
+        let name = validate_header_name(h, "invalid_forward_auth")?;
         if !headers.contains(&name) {
             headers.push(name);
         }
@@ -300,13 +300,13 @@ fn validate_url_path(path: &str) -> Result<(), ApiError> {
 
 /// An HTTP header name (RFC 7230 token, simplified): starts alphanumeric, then
 /// alphanumerics and hyphens. Case is preserved for `proxy_set_header`.
-fn validate_header_name(raw: &str) -> Result<String, ApiError> {
+fn validate_header_name(raw: &str, code: &'static str) -> Result<String, ApiError> {
     let s = raw.trim();
     if s.is_empty() {
-        return Err(bad("invalid_forward_auth", "empty header name"));
+        return Err(bad(code, "empty header name"));
     }
     if s.len() > 64 {
-        return Err(bad("invalid_forward_auth", "header name is too long"));
+        return Err(bad(code, "header name is too long"));
     }
     let bytes = s.as_bytes();
     let ok = bytes[0].is_ascii_alphanumeric()
@@ -314,9 +314,67 @@ fn validate_header_name(raw: &str) -> Result<String, ApiError> {
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || *b == b'-');
     if !ok {
+        return Err(bad(code, format!("'{raw}' is not a valid header name")));
+    }
+    Ok(s.to_string())
+}
+
+/// Direction of a custom header rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeaderDirection {
+    /// Added to the response sent to the client (`add_header … always`).
+    Response,
+    /// Added to the request sent to the upstream (`proxy_set_header`).
+    Request,
+}
+
+/// A user-defined header added to a host's responses or upstream requests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomHeader {
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+    pub direction: HeaderDirection,
+}
+
+pub const MAX_CUSTOM_HEADERS: usize = 30;
+const MAX_HEADER_VALUE_LEN: usize = 1024;
+
+/// Validate a host's custom headers. Each name is an HTTP token; each value is
+/// bounded printable ASCII with the characters that could terminate the quoted
+/// directive value or inject an nginx variable (`"`, `\`, `$`, control/CR-LF)
+/// rejected. An empty value is allowed — for a request header that strips the
+/// header from the upstream request.
+pub fn validate_custom_headers(headers: Vec<CustomHeader>) -> Result<Vec<CustomHeader>, ApiError> {
+    if headers.len() > MAX_CUSTOM_HEADERS {
+        return Err(bad("invalid_header", "too many custom headers"));
+    }
+    let mut out = Vec::with_capacity(headers.len());
+    for h in headers {
+        let name = validate_header_name(&h.name, "invalid_header")?;
+        let value = validate_header_value(&h.value)?;
+        out.push(CustomHeader {
+            name,
+            value,
+            direction: h.direction,
+        });
+    }
+    Ok(out)
+}
+
+fn validate_header_value(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim();
+    if s.len() > MAX_HEADER_VALUE_LEN {
+        return Err(bad("invalid_header", "header value is too long"));
+    }
+    let ok = s
+        .bytes()
+        .all(|b| (0x20..=0x7e).contains(&b) && !matches!(b, b'"' | b'\\' | b'$'));
+    if !ok {
         return Err(bad(
-            "invalid_forward_auth",
-            format!("'{raw}' is not a valid header name"),
+            "invalid_header",
+            "header value contains invalid characters (no quotes, backslash, $, or control characters)",
         ));
     }
     Ok(s.to_string())
@@ -512,6 +570,7 @@ pub struct ProxyHost {
     pub upstream: Upstream,
     pub mtls: Mtls,
     pub forward_auth: ForwardAuth,
+    pub custom_headers: Vec<CustomHeader>,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -558,6 +617,8 @@ pub struct ProxyHostInput {
     pub mtls: Mtls,
     #[serde(default)]
     pub forward_auth: ForwardAuth,
+    #[serde(default)]
+    pub custom_headers: Vec<CustomHeader>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -808,6 +869,7 @@ pub fn validate_host_input(
     input.upstream = validate_upstream(input.upstream, upstream_policy)?;
     input.mtls = validate_mtls(input.mtls)?;
     input.forward_auth = validate_forward_auth(input.forward_auth, upstream_policy)?;
+    input.custom_headers = validate_custom_headers(input.custom_headers)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1706,6 +1768,7 @@ mod tests {
             upstream: Upstream::default(),
             mtls: Mtls::default(),
             forward_auth: ForwardAuth::default(),
+            custom_headers: vec![],
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -1870,6 +1933,51 @@ mod tests {
                 )
                 .is_err(),
                 "should reject header {bad_header:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_headers_validation() {
+        // Valid request + response headers pass and keep their direction; the
+        // value is trimmed. CSP-style punctuation is allowed.
+        let ok = validate_custom_headers(vec![
+            CustomHeader {
+                name: "X-Frame-Options".into(),
+                value: "  SAMEORIGIN  ".into(),
+                direction: HeaderDirection::Response,
+            },
+            CustomHeader {
+                name: "Content-Security-Policy".into(),
+                value: "default-src 'self'; img-src 'self' data:".into(),
+                direction: HeaderDirection::Response,
+            },
+            CustomHeader {
+                name: "X-Tenant".into(),
+                value: "".into(),
+                direction: HeaderDirection::Request,
+            },
+        ])
+        .unwrap();
+        assert_eq!(ok[0].value, "SAMEORIGIN");
+        assert_eq!(ok[2].direction, HeaderDirection::Request);
+
+        // Injection in the name or value is rejected.
+        for (name, value) in [
+            ("X Frame", "ok"),
+            ("X-Evil", "a\"; add_header Evil 1"),
+            ("X-Evil", "back\\slash"),
+            ("X-Var", "$request_uri"),
+            ("X-Nl", "line1\nline2"),
+        ] {
+            assert!(
+                validate_custom_headers(vec![CustomHeader {
+                    name: name.into(),
+                    value: value.into(),
+                    direction: HeaderDirection::Response,
+                }])
+                .is_err(),
+                "should reject ({name:?}, {value:?})"
             );
         }
     }

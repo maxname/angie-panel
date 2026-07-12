@@ -48,6 +48,7 @@ const sampleHost: Host = {
     sign_in_url: null,
     copy_headers: [],
   },
+  custom_headers: [],
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,

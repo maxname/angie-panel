@@ -29,7 +29,9 @@ import {
   api,
   ApiError,
   type BalanceMethod,
+  type CustomHeader,
   type ForwardScheme,
+  type HeaderDirection,
   type Host,
   type HostInput,
 } from '@/lib/api'
@@ -87,6 +89,7 @@ interface FormState {
   forward_auth_sign_in_url: string
   /** Identity headers as free text (comma/space/newline separated). */
   forward_auth_headers: string
+  custom_headers: CustomHeader[]
 }
 
 function initialState(host: Host | null): FormState {
@@ -125,6 +128,7 @@ function initialState(host: Host | null): FormState {
       forward_auth_verify_url: '',
       forward_auth_sign_in_url: '',
       forward_auth_headers: '',
+      custom_headers: [],
     }
   }
   const rl = host.rate_limit
@@ -175,6 +179,7 @@ function initialState(host: Host | null): FormState {
     forward_auth_verify_url: host.forward_auth.verify_url,
     forward_auth_sign_in_url: host.forward_auth.sign_in_url ?? '',
     forward_auth_headers: host.forward_auth.copy_headers.join(', '),
+    custom_headers: host.custom_headers.map((h) => ({ ...h })),
   }
 }
 
@@ -395,11 +400,36 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           .map((h) => h.trim())
           .filter(Boolean),
       },
+      custom_headers: form.custom_headers
+        .filter((h) => h.name.trim() !== '')
+        .map((h) => ({
+          name: h.name.trim(),
+          value: h.value,
+          direction: h.direction,
+        })),
       enabled: host === null ? true : host.enabled,
     }
 
     mutation.mutate(input)
   }
+
+  const addHeader = () =>
+    patch({
+      custom_headers: [
+        ...form.custom_headers,
+        { name: '', value: '', direction: 'response' },
+      ],
+    })
+  const updateHeader = (index: number, partial: Partial<CustomHeader>) =>
+    patch({
+      custom_headers: form.custom_headers.map((h, i) =>
+        i === index ? { ...h, ...partial } : h,
+      ),
+    })
+  const removeHeader = (index: number) =>
+    patch({
+      custom_headers: form.custom_headers.filter((_, i) => i !== index),
+    })
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
@@ -416,6 +446,9 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           </TabsTrigger>
           <TabsTrigger value="rateLimit">
             {t('hosts.editor.tabs.rateLimit')}
+          </TabsTrigger>
+          <TabsTrigger value="headers">
+            {t('hosts.editor.tabs.headers')}
           </TabsTrigger>
           <TabsTrigger value="advanced">
             {t('hosts.editor.tabs.advanced')}
@@ -1207,6 +1240,98 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
               </p>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="headers" className="space-y-4">
+          <div className="space-y-1">
+            <span className="text-sm font-medium">
+              {t('hosts.editor.headers.title')}
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.headers.description')}
+            </p>
+          </div>
+          {form.custom_headers.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t('hosts.editor.headers.empty')}
+            </p>
+          )}
+          {form.custom_headers.map((header, index) => (
+            <div
+              key={index}
+              className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-end"
+            >
+              <div className="flex-1 space-y-1">
+                <Label htmlFor={`host-header-name-${index}`}>
+                  {t('hosts.editor.headers.name')}
+                </Label>
+                <Input
+                  id={`host-header-name-${index}`}
+                  className="font-mono text-xs"
+                  spellCheck={false}
+                  placeholder="X-Frame-Options"
+                  value={header.name}
+                  onChange={(event) =>
+                    updateHeader(index, { name: event.target.value })
+                  }
+                />
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label htmlFor={`host-header-value-${index}`}>
+                  {t('hosts.editor.headers.value')}
+                </Label>
+                <Input
+                  id={`host-header-value-${index}`}
+                  className="font-mono text-xs"
+                  spellCheck={false}
+                  placeholder="SAMEORIGIN"
+                  value={header.value}
+                  onChange={(event) =>
+                    updateHeader(index, { value: event.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor={`host-header-dir-${index}`}>
+                  {t('hosts.editor.headers.direction')}
+                </Label>
+                <Select
+                  value={header.direction}
+                  onValueChange={(value) =>
+                    updateHeader(index, { direction: value as HeaderDirection })
+                  }
+                >
+                  <SelectTrigger
+                    id={`host-header-dir-${index}`}
+                    className="w-full sm:w-40"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="response">
+                      {t('hosts.editor.headers.response')}
+                    </SelectItem>
+                    <SelectItem value="request">
+                      {t('hosts.editor.headers.request')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t('hosts.editor.headers.remove')}
+                onClick={() => removeHeader(index)}
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </div>
+          ))}
+          <Button type="button" variant="outline" size="sm" onClick={addHeader}>
+            <Plus aria-hidden="true" />
+            {t('hosts.editor.headers.add')}
+          </Button>
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4">

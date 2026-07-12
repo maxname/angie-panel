@@ -253,6 +253,41 @@ describe('host editor rate limiting', () => {
     })
   })
 
+  it('submits custom headers from the headers tab', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'Headers' }))
+    await user.click(screen.getByRole('button', { name: 'Add header' }))
+    await user.type(screen.getByLabelText('Name'), 'X-Frame-Options')
+    await user.type(screen.getByLabelText('Value'), 'SAMEORIGIN')
+    // Direction defaults to Response; leave it.
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.custom_headers).toEqual([
+      { name: 'X-Frame-Options', value: 'SAMEORIGIN', direction: 'response' },
+    ])
+  })
+
   it('adds a backend server and submits the upstream pool', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {

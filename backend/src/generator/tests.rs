@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    BalanceMethod, CustomLocation, DeadHost, ForwardAuth, Mtls, ProxyHost, RateLimit, RedirectHost,
-    RedirectScheme, Scheme, Stream, StreamTls, Upstream, UpstreamServer,
+    BalanceMethod, CustomHeader, CustomLocation, DeadHost, ForwardAuth, HeaderDirection, Mtls,
+    ProxyHost, RateLimit, RedirectHost, RedirectScheme, Scheme, Stream, StreamTls, Upstream,
+    UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -54,6 +55,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         upstream: Upstream::default(),
         mtls: Mtls::default(),
         forward_auth: ForwardAuth::default(),
+        custom_headers: vec![],
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -562,6 +564,39 @@ fn golden_forward_auth() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-forward-auth.conf", body);
+}
+
+#[test]
+fn golden_custom_headers() {
+    // Response headers → add_header at server scope; request headers →
+    // proxy_set_header inside the location, after the standard ones. Verified
+    // by angie -t on real Angie.
+    let mut host = base_host(16, "app.example.com");
+    host.custom_headers = vec![
+        CustomHeader {
+            name: "X-Frame-Options".into(),
+            value: "SAMEORIGIN".into(),
+            direction: HeaderDirection::Response,
+        },
+        CustomHeader {
+            name: "Content-Security-Policy".into(),
+            value: "default-src 'self'; img-src 'self' data:".into(),
+            direction: HeaderDirection::Response,
+        },
+        CustomHeader {
+            name: "X-Tenant".into(),
+            value: "acme-corp".into(),
+            direction: HeaderDirection::Request,
+        },
+    ];
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-custom-headers.conf", body);
 }
 
 #[test]
