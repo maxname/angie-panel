@@ -1,5 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, X } from 'lucide-react'
+import {
+  Gauge,
+  Globe,
+  KeyRound,
+  Loader2,
+  Lock,
+  Plus,
+  Route,
+  Server,
+  Tags,
+  Terminal,
+  X,
+  type LucideIcon,
+} from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -190,19 +203,34 @@ interface HostEditorDialogProps {
   host: Host | null
 }
 
+/** The editor's sections, in sidebar order. `key` is both the tab value and the
+ * i18n suffix under `hosts.editor.tabs`. */
+const EDITOR_SECTIONS: { key: string; Icon: LucideIcon }[] = [
+  { key: 'details', Icon: Globe },
+  { key: 'ssl', Icon: Lock },
+  { key: 'sso', Icon: KeyRound },
+  { key: 'locations', Icon: Route },
+  { key: 'upstreams', Icon: Server },
+  { key: 'rateLimit', Icon: Gauge },
+  { key: 'headers', Icon: Tags },
+  { key: 'advanced', Icon: Terminal },
+]
+
 export function HostEditorDialog({
   open,
   onOpenChange,
   host,
 }: HostEditorDialogProps) {
   const { t } = useTranslation()
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        {/* Accessible title for the dialog; the visible one is in the form. */}
+        <DialogHeader className="sr-only">
           <DialogTitle>
-            {host === null ? t('hosts.editor.createTitle') : t('hosts.editor.editTitle')}
+            {host === null
+              ? t('hosts.editor.createTitle')
+              : t('hosts.editor.editTitle')}
           </DialogTitle>
           <DialogDescription>{t('hosts.editor.description')}</DialogDescription>
         </DialogHeader>
@@ -432,38 +460,46 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
     })
 
   return (
-    <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
+    <form
+      className="flex max-h-[85vh] flex-col overflow-hidden"
+      onSubmit={handleSubmit}
+      noValidate
+    >
       <Tabs
         value={tab}
         onValueChange={setTab}
         orientation="vertical"
-        className="flex-row items-start gap-5"
+        className="flex min-h-0 flex-1 flex-row items-stretch gap-0"
       >
-        <TabsList className="h-auto w-40 shrink-0 flex-col items-stretch justify-start gap-0.5 bg-transparent p-0">
-          {(
-            [
-              'details',
-              'ssl',
-              'sso',
-              'locations',
-              'upstreams',
-              'rateLimit',
-              'headers',
-              'advanced',
-            ] as const
-          ).map((key) => (
+        {/* Sidebar navigation. */}
+        <TabsList className="h-auto w-52 shrink-0 flex-col items-stretch justify-start gap-1 rounded-none border-r bg-muted/30 p-3">
+          {EDITOR_SECTIONS.map(({ key, Icon }) => (
             <TabsTrigger
               key={key}
               value={key}
-              className="w-full justify-start data-[state=active]:bg-muted"
+              className="h-9 justify-start gap-2.5 rounded-md px-3 font-normal text-muted-foreground hover:bg-muted hover:text-foreground data-[state=active]:bg-background data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-sm"
             >
+              <Icon className="size-4 shrink-0" aria-hidden="true" />
               {t(`hosts.editor.tabs.${key}`)}
             </TabsTrigger>
           ))}
         </TabsList>
 
-        {/* Panels scroll independently so the sidebar + footer stay put. */}
-        <div className="max-h-[60vh] min-w-0 flex-1 overflow-y-auto pr-1">
+        {/* Right column: header + the scrolling panel. The visible title is a
+            plain heading so the form renders outside a Dialog (in tests); the
+            accessible DialogTitle lives in the parent. */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="px-6 pt-6 pb-4">
+            <h2 className="font-heading text-base leading-none font-medium">
+              {host === null
+                ? t('hosts.editor.createTitle')
+                : t('hosts.editor.editTitle')}
+            </h2>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              {t('hosts.editor.description')}
+            </p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
         <TabsContent value="details" className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="host-domain-input">{t('hosts.editor.domains')}</Label>
@@ -1363,37 +1399,39 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             />
           </div>
         </TabsContent>
+          </div>
         </div>
       </Tabs>
 
-      {formError !== null && (
-        <p role="alert" className="text-sm text-destructive">
-          {formError}
-        </p>
-      )}
-      {serverError !== null && (
-        <Alert variant="destructive">
-          <AlertTitle>{t('hosts.editor.saveFailed')}</AlertTitle>
-          <AlertDescription>{serverError.message}</AlertDescription>
-        </Alert>
-      )}
-
-      <DialogFooter>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onDone}
-          disabled={mutation.isPending}
-        >
-          {t('common.cancel')}
-        </Button>
-        <Button type="submit" disabled={mutation.isPending}>
-          {mutation.isPending && (
-            <Loader2 className="animate-spin" aria-hidden="true" />
-          )}
-          {t('common.save')}
-        </Button>
-      </DialogFooter>
+      <div className="space-y-3 border-t px-6 py-4">
+        {formError !== null && (
+          <p role="alert" className="text-sm text-destructive">
+            {formError}
+          </p>
+        )}
+        {serverError !== null && (
+          <Alert variant="destructive">
+            <AlertTitle>{t('hosts.editor.saveFailed')}</AlertTitle>
+            <AlertDescription>{serverError.message}</AlertDescription>
+          </Alert>
+        )}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onDone}
+            disabled={mutation.isPending}
+          >
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" disabled={mutation.isPending}>
+            {mutation.isPending && (
+              <Loader2 className="animate-spin" aria-hidden="true" />
+            )}
+            {t('common.save')}
+          </Button>
+        </DialogFooter>
+      </div>
     </form>
   )
 }
