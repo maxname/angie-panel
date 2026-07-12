@@ -80,6 +80,8 @@ interface FormState {
   max_fails: string
   fail_timeout_secs: string
   servers: ServerDraft[]
+  mtls_ca_pem: string
+  mtls_optional: boolean
 }
 
 function initialState(host: Host | null): FormState {
@@ -112,6 +114,8 @@ function initialState(host: Host | null): FormState {
       max_fails: '1',
       fail_timeout_secs: '10',
       servers: [],
+      mtls_ca_pem: '',
+      mtls_optional: false,
     }
   }
   const rl = host.rate_limit
@@ -156,6 +160,8 @@ function initialState(host: Host | null): FormState {
       backup: s.backup,
       down: s.down,
     })),
+    mtls_ca_pem: host.mtls.ca_pem ?? '',
+    mtls_optional: host.mtls.optional,
   }
 }
 
@@ -359,6 +365,10 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           backup: s.backup,
           down: s.down,
         })),
+      },
+      mtls: {
+        ca_pem: form.mtls_ca_pem.trim() === '' ? null : form.mtls_ca_pem,
+        optional: form.mtls_optional,
       },
       enabled: host === null ? true : host.enabled,
     }
@@ -613,6 +623,37 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
               checked={form.trust_forwarded_proto}
               onChange={(checked) => patch({ trust_forwarded_proto: checked })}
             />
+          </div>
+
+          {/* Mutual TLS: require client certificates verified against a CA. */}
+          <div className="space-y-3 rounded-lg border p-3">
+            <div className="space-y-1">
+              <span className="text-sm font-medium">
+                {t('hosts.editor.mtls.title')}
+              </span>
+              <p className="text-xs text-muted-foreground">
+                {t('hosts.editor.mtls.description')}
+              </p>
+            </div>
+            <Textarea
+              id="host-mtls-ca"
+              className="min-h-28 font-mono text-xs"
+              spellCheck={false}
+              placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----"
+              value={form.mtls_ca_pem}
+              onChange={(event) => patch({ mtls_ca_pem: event.target.value })}
+            />
+            {form.mtls_ca_pem.trim() !== '' && (
+              <ToggleRow
+                id="host-mtls-optional"
+                label={t('hosts.editor.mtls.optional')}
+                checked={form.mtls_optional}
+                onChange={(checked) => patch({ mtls_optional: checked })}
+              />
+            )}
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.mtls.hint')}
+            </p>
           </div>
         </TabsContent>
 

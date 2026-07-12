@@ -67,6 +67,65 @@ pub const MAX_RATE_RPS: u32 = 1_000_000;
 pub const MAX_RATE_BURST: u32 = 100_000;
 pub const MAX_RATE_CONN: u32 = 100_000;
 
+/// Mutual TLS (client certificate) requirement for a host. The `ca_pem` is the
+/// CA bundle that verifies presented client certs; when set, the generator
+/// emits `ssl_client_certificate` + `ssl_verify_client` on the HTTPS server.
+/// `optional` requests a cert but does not reject clients that omit one (the
+/// result is passed upstream via `$ssl_client_verify`); the default requires it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mtls {
+    #[serde(default)]
+    pub ca_pem: Option<String>,
+    #[serde(default)]
+    pub optional: bool,
+}
+
+impl Mtls {
+    /// mTLS is active only when a CA bundle is present.
+    pub fn active(&self) -> bool {
+        self.ca_pem.as_ref().is_some_and(|p| !p.trim().is_empty())
+    }
+}
+
+/// Max CA bundle size — a generous ceiling for a chain of a few certs.
+pub const MAX_CA_PEM_LEN: usize = 64 * 1024;
+
+/// Validate + normalize a host's mTLS config. The CA bundle must look like PEM
+/// certificate(s): at least one BEGIN/END CERTIFICATE block and only
+/// PEM-safe characters. It is written to a file (never a directive), and
+/// `angie -t` is the final gate on a structurally-valid but broken cert.
+pub fn validate_mtls(mut mtls: Mtls) -> Result<Mtls, ApiError> {
+    let pem = match mtls.ca_pem.map(|p| p.trim().to_string()) {
+        Some(p) if !p.is_empty() => p,
+        _ => return Ok(Mtls::default()),
+    };
+    if pem.len() > MAX_CA_PEM_LEN {
+        return Err(bad("invalid_ca", "the CA bundle is too large"));
+    }
+    let begins = pem.matches("-----BEGIN CERTIFICATE-----").count();
+    let ends = pem.matches("-----END CERTIFICATE-----").count();
+    if begins == 0 || begins != ends {
+        return Err(bad(
+            "invalid_ca",
+            "expected one or more PEM CERTIFICATE blocks",
+        ));
+    }
+    // Only characters that legitimately appear in a PEM file (base64 + the
+    // header/footer punctuation + whitespace). Rejects anything that could be
+    // smuggled in — though the value only ever lands in a file, not a directive.
+    let pem_ok = pem.bytes().all(|b| {
+        b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b' ' | b'\n' | b'\r')
+    });
+    if !pem_ok {
+        return Err(bad(
+            "invalid_ca",
+            "the CA bundle contains invalid characters",
+        ));
+    }
+    mtls.ca_pem = Some(pem);
+    Ok(mtls)
+}
+
 /// Load-balancing method for a host's upstream pool.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -255,6 +314,7 @@ pub struct ProxyHost {
     pub advanced_snippet: Option<String>,
     pub rate_limit: RateLimit,
     pub upstream: Upstream,
+    pub mtls: Mtls,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -297,6 +357,8 @@ pub struct ProxyHostInput {
     pub rate_limit: RateLimit,
     #[serde(default)]
     pub upstream: Upstream,
+    #[serde(default)]
+    pub mtls: Mtls,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -545,6 +607,7 @@ pub fn validate_host_input(
 
     input.rate_limit = validate_rate_limit(input.rate_limit)?;
     input.upstream = validate_upstream(input.upstream, upstream_policy)?;
+    input.mtls = validate_mtls(input.mtls)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1313,6 +1376,7 @@ mod tests {
             advanced_snippet: Some("client_max_body_size 100m;".into()),
             rate_limit: RateLimit::default(),
             upstream: Upstream::default(),
+            mtls: Mtls::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -1343,6 +1407,43 @@ mod tests {
             "a".repeat(33).as_str(),
         ] {
             assert!(validate_cert_name(evil).is_err(), "should reject {evil:?}");
+        }
+    }
+
+    #[test]
+    fn mtls_validation() {
+        let ca = "-----BEGIN CERTIFICATE-----\nMIIBdata==\n-----END CERTIFICATE-----";
+        // A structurally valid PEM is accepted and trimmed.
+        let ok = validate_mtls(Mtls {
+            ca_pem: Some(format!("  {ca}  ")),
+            optional: true,
+        })
+        .unwrap();
+        assert_eq!(ok.ca_pem.as_deref(), Some(ca));
+        assert!(ok.active());
+
+        // Empty / absent → inactive default.
+        assert!(!validate_mtls(Mtls {
+            ca_pem: Some("   ".into()),
+            optional: false,
+        })
+        .unwrap()
+        .active());
+
+        // Not a certificate block, or mismatched markers, or junk chars → rejected.
+        for bad_pem in [
+            "not a cert",
+            "-----BEGIN CERTIFICATE-----\nonly a begin",
+            "-----BEGIN CERTIFICATE-----\n<script>\n-----END CERTIFICATE-----",
+        ] {
+            assert!(
+                validate_mtls(Mtls {
+                    ca_pem: Some(bad_pem.into()),
+                    optional: false,
+                })
+                .is_err(),
+                "should reject {bad_pem:?}"
+            );
         }
     }
 

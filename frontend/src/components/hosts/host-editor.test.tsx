@@ -144,6 +144,67 @@ describe('host editor rate limiting', () => {
     expect(body.http3).toBe(true)
   })
 
+  it('submits the mTLS CA bundle from the SSL tab', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    // No newlines/braces so userEvent types it verbatim.
+    const ca = '-----BEGIN CERTIFICATE-----MIIByjExampleCAdata==-----END CERTIFICATE-----'
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'SSL' }))
+    await user.type(screen.getByPlaceholderText(/BEGIN CERTIFICATE/), ca)
+    // The "optional" toggle only appears once a CA is present.
+    await user.click(screen.getByLabelText(/Optional/))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.mtls).toEqual({ ca_pem: ca, optional: true })
+  })
+
+  it('omits mTLS when no CA is entered', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.mtls).toEqual({ ca_pem: null, optional: false })
+  })
+
   it('adds a backend server and submits the upstream pool', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {

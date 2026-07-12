@@ -41,6 +41,7 @@ const sampleHost: Host = {
     max_fails: 1,
     fail_timeout_secs: 10,
   },
+  mtls: { ca_pem: null, optional: false },
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,

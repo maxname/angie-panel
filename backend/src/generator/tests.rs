@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    BalanceMethod, CustomLocation, DeadHost, ProxyHost, RateLimit, RedirectHost, RedirectScheme,
-    Scheme, Stream, Upstream, UpstreamServer,
+    BalanceMethod, CustomLocation, DeadHost, Mtls, ProxyHost, RateLimit, RedirectHost,
+    RedirectScheme, Scheme, Stream, Upstream, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -52,6 +52,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         advanced_snippet: None,
         rate_limit: RateLimit::default(),
         upstream: Upstream::default(),
+        mtls: Mtls::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -455,6 +456,52 @@ fn golden_https_host_http3() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-http3.conf", body);
+}
+
+#[test]
+fn golden_https_host_mtls() {
+    // Client-cert verification: the :443 block gets ssl_client_certificate (a
+    // RELATIVE http.d path) + ssl_verify_client, and the CA is materialized as
+    // a managed file. Verified valid by angie -t on real Angie.
+    let mut host = base_host(11, "mtls.example.com");
+    host.certificate_id = Some(1);
+    host.mtls = Mtls {
+        ca_pem: Some(
+            "-----BEGIN CERTIFICATE-----\nMIIBdummyCAdata==\n-----END CERTIFICATE-----".into(),
+        ),
+        optional: false,
+    };
+    let cert = ready_cert(1, "mtls", &["mtls.example.com"]);
+    let files = generate(&input(
+        vec![host],
+        vec![cert],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    // The CA bundle is emitted as a managed file.
+    assert!(files["client-ca-host-11.pem"].contains("BEGIN CERTIFICATE"));
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-mtls.conf", body);
+}
+
+#[test]
+fn mtls_only_over_tls_and_omitted_when_inactive() {
+    // A plain-HTTP host (no ready cert) never emits client-cert directives or
+    // the CA file — mTLS is TLS-only.
+    let mut host = base_host(12, "plain.example.com");
+    host.mtls = Mtls {
+        ca_pem: Some("-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----".into()),
+        optional: false,
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert!(!files.contains_key("client-ca-host-12.pem"));
+    let (_, body) = only_host_file(&files);
+    assert!(!body.contains("ssl_verify_client"));
 }
 
 #[test]

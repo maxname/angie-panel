@@ -208,6 +208,13 @@ export const en = {
         activeNote:
           'HTTPS activates once the certificate is issued; until then this host serves HTTP.',
       },
+      mtls: {
+        title: 'Client certificates (mTLS)',
+        description:
+          'Require visitors to present a client certificate signed by this CA before they can reach the host. Paste the CA (or chain) in PEM format; leave empty to disable.',
+        optional: 'Optional (allow requests without a certificate)',
+        hint: 'Only takes effect over HTTPS — attach a certificate above.',
+      },
       locations: {
         empty: 'No custom locations. The whole host forwards to the target above.',
         item: 'Location {{index}}',

@@ -183,6 +183,15 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
         let cert = host.certificate_id.and_then(|cid| certs.get(&cid).copied());
         let (filename, body) = gen_host(host, cert, input)?;
         files.insert(filename, body);
+        // Materialize the mTLS client-CA bundle — but only when the host is
+        // actually serving HTTPS (a ready cert produced a :443 block that
+        // references it). QUIC/TLS-only, like every other 443 feature.
+        let https = matches!(cert, Some(c) if c.ready);
+        if https && host.mtls.active() {
+            if let Some(pem) = &host.mtls.ca_pem {
+                files.insert(client_ca_name(host.id), pem.clone());
+            }
+        }
     }
 
     // Redirection hosts (30-*) and 404 hosts (40-*). Disabled ones emit no
@@ -616,6 +625,11 @@ fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
 
 // -------------------------------------------------- 20-host-<id>-<slug>.conf
 
+/// FileSet key for a host's materialized client-CA bundle (mTLS).
+fn client_ca_name(host_id: i64) -> String {
+    format!("client-ca-host-{host_id}.pem")
+}
+
 /// Render one proxy-host file. Returns (filename, body).
 fn gen_host(
     host: &ProxyHost,
@@ -685,6 +699,23 @@ fn gen_host(
         // filesystem path — the linter enforces that).
         let _ = writeln!(out, "    ssl_certificate     $acme_cert_{};", cert.name);
         let _ = writeln!(out, "    ssl_certificate_key $acme_cert_key_{};", cert.name);
+        // Mutual TLS: verify client certs against the host's CA. The CA bundle
+        // is a managed http.d file (see the generate() loop). Referenced
+        // RELATIVE to the main config dir (`http.d/…`) on purpose:
+        // ssl_client_certificate is loaded EAGERLY at `angie -t` (unlike the
+        // lazy auth_basic_user_file), so it must exist at validation time. A
+        // relative path resolves to the staged CA (test conf lives beside the
+        // staged http.d) during validation and the live CA after sync — one
+        // string, correct in both. Assumes the standard /etc/angie/http.d layout.
+        if host.mtls.active() {
+            let _ = writeln!(
+                out,
+                "    ssl_client_certificate http.d/{};",
+                client_ca_name(host.id)
+            );
+            let verify = if host.mtls.optional { "optional" } else { "on" };
+            let _ = writeln!(out, "    ssl_verify_client {verify};");
+        }
         // Advertise h3 so clients upgrade to QUIC on their next connection.
         if host.http3 {
             let _ = writeln!(

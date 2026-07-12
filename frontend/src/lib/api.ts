@@ -119,6 +119,14 @@ export interface Ban {
   created_at: number
 }
 
+/** Mutual TLS: require/verify client certificates against a CA bundle. */
+export interface Mtls {
+  /** CA bundle (PEM) that verifies presented client certs. null = mTLS off. */
+  ca_pem: string | null
+  /** Request a cert but don't reject clients that omit one (pass result upstream). */
+  optional: boolean
+}
+
 export interface Host {
   id: number
   domains: string[]
@@ -140,6 +148,7 @@ export interface Host {
   advanced_snippet: string | null
   rate_limit: RateLimit
   upstream: Upstream
+  mtls: Mtls
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -168,6 +177,7 @@ export interface HostInput {
   advanced_snippet?: string | null
   rate_limit?: RateLimit
   upstream?: Upstream
+  mtls?: Mtls
   enabled?: boolean
 }
 

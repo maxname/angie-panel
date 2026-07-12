@@ -7,8 +7,8 @@ use sqlx::SqlitePool;
 
 use crate::db::now_epoch;
 use crate::model::{
-    Certificate, CertificateInput, Challenge, CustomLocation, KeyType, ProxyHost, ProxyHostInput,
-    RateLimit, Scheme, Upstream,
+    Certificate, CertificateInput, Challenge, CustomLocation, KeyType, Mtls, ProxyHost,
+    ProxyHostInput, RateLimit, Scheme, Upstream,
 };
 
 // ------------------------------------------------------------------- rows
@@ -35,6 +35,7 @@ struct HostRow {
     advanced_snippet: Option<String>,
     rate_limit: Option<String>,
     upstream: Option<String>,
+    mtls: Option<String>,
     enabled: i64,
     created_at: i64,
     updated_at: i64,
@@ -70,6 +71,7 @@ impl HostRow {
             advanced_snippet: self.advanced_snippet,
             rate_limit: rate_limit_from_json(self.rate_limit.as_deref())?,
             upstream: upstream_from_json(self.upstream.as_deref())?,
+            mtls: mtls_from_json(self.mtls.as_deref())?,
             enabled: self.enabled != 0,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -101,10 +103,22 @@ fn upstream_from_json(raw: Option<&str>) -> anyhow::Result<Upstream> {
     }
 }
 
+fn mtls_json(m: &Mtls) -> String {
+    serde_json::to_string(m).unwrap_or_else(|_| "{}".into())
+}
+
+/// Parse the stored mtls JSON (NULL / absent = no client-cert requirement).
+fn mtls_from_json(raw: Option<&str>) -> anyhow::Result<Mtls> {
+    match raw {
+        Some(s) if !s.trim().is_empty() => Ok(serde_json::from_str(s).context("mtls json")?),
+        _ => Ok(Mtls::default()),
+    }
+}
+
 const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_port, \
      websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
      hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-     advanced_snippet, rate_limit, upstream, enabled, created_at, updated_at";
+     advanced_snippet, rate_limit, upstream, mtls, enabled, created_at, updated_at";
 
 // -------------------------------------------------------------- host CRUD
 
@@ -142,8 +156,8 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
         "INSERT INTO proxy_hosts (domains, forward_scheme, forward_host, forward_port, \
          websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
          hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-         advanced_snippet, rate_limit, upstream, enabled, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         advanced_snippet, rate_limit, upstream, mtls, enabled, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -164,6 +178,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(input.advanced_snippet.as_deref())
     .bind(rate_limit_json(&input.rate_limit))
     .bind(upstream_json(&input.upstream))
+    .bind(mtls_json(&input.mtls))
     .bind(input.enabled as i64)
     .bind(now)
     .bind(now)
@@ -178,7 +193,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
         "UPDATE proxy_hosts SET domains=?, forward_scheme=?, forward_host=?, forward_port=?, \
          websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, http3=?, force_ssl=?, hsts=?, \
          hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
-         locations=?, advanced_snippet=?, rate_limit=?, upstream=?, enabled=?, updated_at=? WHERE id=?",
+         locations=?, advanced_snippet=?, rate_limit=?, upstream=?, mtls=?, enabled=?, updated_at=? WHERE id=?",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -199,6 +214,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(input.advanced_snippet.as_deref())
     .bind(rate_limit_json(&input.rate_limit))
     .bind(upstream_json(&input.upstream))
+    .bind(mtls_json(&input.mtls))
     .bind(input.enabled as i64)
     .bind(now_epoch())
     .bind(id)
@@ -868,8 +884,8 @@ pub async fn import_replace(
             "INSERT INTO proxy_hosts (id, domains, forward_scheme, forward_host, forward_port, \
              websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
              hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
-             advanced_snippet, rate_limit, upstream, enabled, created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             advanced_snippet, rate_limit, upstream, mtls, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -891,6 +907,7 @@ pub async fn import_replace(
         .bind(h.advanced_snippet.as_deref())
         .bind(rate_limit_json(&h.rate_limit))
         .bind(upstream_json(&h.upstream))
+        .bind(mtls_json(&h.mtls))
         .bind(h.enabled as i64)
         .bind(now)
         .bind(now)
