@@ -82,6 +82,11 @@ interface FormState {
   servers: ServerDraft[]
   mtls_ca_pem: string
   mtls_optional: boolean
+  forward_auth_enabled: boolean
+  forward_auth_verify_url: string
+  forward_auth_sign_in_url: string
+  /** Identity headers as free text (comma/space/newline separated). */
+  forward_auth_headers: string
 }
 
 function initialState(host: Host | null): FormState {
@@ -116,6 +121,10 @@ function initialState(host: Host | null): FormState {
       servers: [],
       mtls_ca_pem: '',
       mtls_optional: false,
+      forward_auth_enabled: false,
+      forward_auth_verify_url: '',
+      forward_auth_sign_in_url: '',
+      forward_auth_headers: '',
     }
   }
   const rl = host.rate_limit
@@ -162,6 +171,10 @@ function initialState(host: Host | null): FormState {
     })),
     mtls_ca_pem: host.mtls.ca_pem ?? '',
     mtls_optional: host.mtls.optional,
+    forward_auth_enabled: host.forward_auth.enabled,
+    forward_auth_verify_url: host.forward_auth.verify_url,
+    forward_auth_sign_in_url: host.forward_auth.sign_in_url ?? '',
+    forward_auth_headers: host.forward_auth.copy_headers.join(', '),
   }
 }
 
@@ -370,6 +383,18 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
         ca_pem: form.mtls_ca_pem.trim() === '' ? null : form.mtls_ca_pem,
         optional: form.mtls_optional,
       },
+      forward_auth: {
+        enabled: form.forward_auth_enabled,
+        verify_url: form.forward_auth_verify_url.trim(),
+        sign_in_url:
+          form.forward_auth_sign_in_url.trim() === ''
+            ? null
+            : form.forward_auth_sign_in_url.trim(),
+        copy_headers: form.forward_auth_headers
+          .split(/[\s,]+/)
+          .map((h) => h.trim())
+          .filter(Boolean),
+      },
       enabled: host === null ? true : host.enabled,
     }
 
@@ -543,6 +568,82 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             <p className="text-sm text-muted-foreground">
               {t('hosts.editor.accessListHelp')}
             </p>
+          </div>
+
+          {/* Forward auth (SSO gateway) via auth_request. */}
+          <div className="space-y-3 rounded-lg border p-3">
+            <div className="space-y-1">
+              <span className="text-sm font-medium">
+                {t('hosts.editor.forwardAuth.title')}
+              </span>
+              <p className="text-xs text-muted-foreground">
+                {t('hosts.editor.forwardAuth.description')}
+              </p>
+            </div>
+            <ToggleRow
+              id="host-forward-auth"
+              label={t('hosts.editor.forwardAuth.enable')}
+              checked={form.forward_auth_enabled}
+              onChange={(checked) => patch({ forward_auth_enabled: checked })}
+            />
+            {form.forward_auth_enabled && (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="host-fa-verify">
+                    {t('hosts.editor.forwardAuth.verifyUrl')}
+                  </Label>
+                  <Input
+                    id="host-fa-verify"
+                    className="font-mono text-xs"
+                    spellCheck={false}
+                    placeholder="http://10.0.0.9:9091/api/verify"
+                    value={form.forward_auth_verify_url}
+                    onChange={(event) =>
+                      patch({ forward_auth_verify_url: event.target.value })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('hosts.editor.forwardAuth.verifyUrlHint')}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="host-fa-signin">
+                    {t('hosts.editor.forwardAuth.signInUrl')}
+                  </Label>
+                  <Input
+                    id="host-fa-signin"
+                    className="font-mono text-xs"
+                    spellCheck={false}
+                    placeholder="https://auth.example.com"
+                    value={form.forward_auth_sign_in_url}
+                    onChange={(event) =>
+                      patch({ forward_auth_sign_in_url: event.target.value })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('hosts.editor.forwardAuth.signInUrlHint')}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="host-fa-headers">
+                    {t('hosts.editor.forwardAuth.headers')}
+                  </Label>
+                  <Input
+                    id="host-fa-headers"
+                    className="font-mono text-xs"
+                    spellCheck={false}
+                    placeholder="Remote-User, Remote-Groups, Remote-Email"
+                    value={form.forward_auth_headers}
+                    onChange={(event) =>
+                      patch({ forward_auth_headers: event.target.value })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('hosts.editor.forwardAuth.headersHint')}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </TabsContent>
 

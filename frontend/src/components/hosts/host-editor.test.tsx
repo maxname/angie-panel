@@ -205,6 +205,53 @@ describe('host editor rate limiting', () => {
     expect(body.mtls).toEqual({ ca_pem: null, optional: false })
   })
 
+  it('submits the forward-auth config from the details tab', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    // Forward-auth lives on the details tab (shown by default).
+    await user.click(screen.getByLabelText('Enable forward auth'))
+    await user.type(
+      screen.getByLabelText('Verify endpoint'),
+      'http://10.0.0.9:9091/api/verify',
+    )
+    await user.type(
+      screen.getByLabelText('Sign-in URL (optional)'),
+      'https://auth.example.com',
+    )
+    await user.type(
+      screen.getByLabelText('Copy identity headers (optional)'),
+      'Remote-User, Remote-Groups',
+    )
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.forward_auth).toEqual({
+      enabled: true,
+      verify_url: 'http://10.0.0.9:9091/api/verify',
+      sign_in_url: 'https://auth.example.com',
+      copy_headers: ['Remote-User', 'Remote-Groups'],
+    })
+  })
+
   it('adds a backend server and submits the upstream pool', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {

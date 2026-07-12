@@ -588,6 +588,85 @@ fn emit_rate_limit(out: &mut String, host: &ProxyHost) {
     }
 }
 
+// ----------------------------------------------------------- forward auth
+
+/// Internal (never client-facing) location that runs the auth subrequest.
+const FORWARD_AUTH_LOCATION: &str = "/_forward_auth";
+/// Named location that redirects unauthenticated browsers to the SSO sign-in.
+const FORWARD_AUTH_SIGNIN: &str = "@forward_auth_signin";
+
+/// Server-scope forward-auth wiring: the internal verify location, an optional
+/// 401 → sign-in redirect (inherited by every proxy location), and the named
+/// redirect location. All values were strictly validated (URL split into
+/// scheme/host/port/path, SSRF-guarded verify host) in `model::validate_forward_auth`.
+fn emit_forward_auth_server(out: &mut String, host: &ProxyHost) {
+    let fa = &host.forward_auth;
+    if !fa.active() {
+        return;
+    }
+    // error_page at server scope is inherited by the proxy locations. The
+    // internal verify + signin locations carry no `auth_request`, so no loop.
+    if fa.sign_in_url.is_some() {
+        let _ = writeln!(out, "    error_page 401 = {FORWARD_AUTH_SIGNIN};");
+    }
+    let _ = writeln!(out, "    location = {FORWARD_AUTH_LOCATION} {{");
+    let _ = writeln!(out, "        internal;");
+    let _ = writeln!(out, "        proxy_pass {};", fa.verify_url);
+    // The auth service only needs the request metadata, never the body.
+    let _ = writeln!(out, "        proxy_pass_request_body off;");
+    let _ = writeln!(out, "        proxy_set_header Content-Length \"\";");
+    let _ = writeln!(
+        out,
+        "        proxy_set_header X-Original-URL $scheme://$http_host$request_uri;"
+    );
+    let _ = writeln!(
+        out,
+        "        proxy_set_header X-Original-Method $request_method;"
+    );
+    let _ = writeln!(
+        out,
+        "        proxy_set_header X-Forwarded-Method $request_method;"
+    );
+    let _ = writeln!(out, "        proxy_set_header X-Forwarded-Proto $scheme;");
+    let _ = writeln!(out, "        proxy_set_header X-Forwarded-Host $http_host;");
+    let _ = writeln!(
+        out,
+        "        proxy_set_header X-Forwarded-Uri $request_uri;"
+    );
+    let _ = writeln!(
+        out,
+        "        proxy_set_header X-Forwarded-For $remote_addr;"
+    );
+    let _ = writeln!(out, "    }}");
+
+    if let Some(url) = &fa.sign_in_url {
+        // rd carries the original URL so the SSO can send the user back.
+        let _ = writeln!(out, "    location {FORWARD_AUTH_SIGNIN} {{");
+        let _ = writeln!(
+            out,
+            "        return 302 {url}?rd=$scheme://$http_host$request_uri;"
+        );
+        let _ = writeln!(out, "    }}");
+    }
+}
+
+/// Per-location `auth_request` + identity-header copy. Emitted inside each proxy
+/// location so the whole host is gated. Header names were validated to an HTTP
+/// token; `$upstream_http_<name>` is the name lowercased with dashes→underscores.
+fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
+    let fa = &host.forward_auth;
+    if !fa.active() {
+        return;
+    }
+    let _ = writeln!(out, "{indent}auth_request {FORWARD_AUTH_LOCATION};");
+    for (i, header) in fa.copy_headers.iter().enumerate() {
+        let var = format!("$fa_{i}");
+        let upstream_var = format!("$upstream_http_{}", header.to_lowercase().replace('-', "_"));
+        let _ = writeln!(out, "{indent}auth_request_set {var} {upstream_var};");
+        let _ = writeln!(out, "{indent}proxy_set_header {header} {var};");
+    }
+}
+
 // -------------------------------------------------------------- 03-bans.conf
 
 /// Global IP blocklist as http-scope `deny` rules. Addresses were validated to
@@ -834,10 +913,17 @@ fn host_features(
     // Rate limiting (server scope → applies to every location below).
     emit_rate_limit(out, host);
 
+    // Forward auth (SSO gateway): the internal verify location + optional
+    // sign-in redirect, at server scope. The per-location `auth_request` is
+    // emitted inside each proxy location below (NOT at server scope — that would
+    // make the internal verify location require auth and loop forever).
+    emit_forward_auth_server(out, host);
+
     // Main location. cache-assets.conf is directives-only (proxy_cache*, no
     // location/proxy_pass) and MUST be included inside this location, next to
     // proxy_pass — so it is emitted here rather than at server scope.
     let _ = writeln!(out, "    location / {{");
+    emit_auth_request(out, host, "        ");
     proxy_body(
         out,
         host.forward_scheme,
@@ -860,6 +946,7 @@ fn host_features(
             // `break` = stop rewrite processing and use the rewritten URI.
             let _ = writeln!(out, "        rewrite ^ {rewrite} break;");
         }
+        emit_auth_request(out, host, "        ");
         proxy_body(
             out,
             loc.forward_scheme,

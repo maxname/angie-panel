@@ -215,6 +215,21 @@ export const en = {
         optional: 'Optional (allow requests without a certificate)',
         hint: 'Only takes effect over HTTPS — attach a certificate above.',
       },
+      forwardAuth: {
+        title: 'Forward authentication (SSO)',
+        description:
+          'Gate every request behind an external auth service (oauth2-proxy, Authelia, Authentik) via auth_request.',
+        enable: 'Enable forward auth',
+        verifyUrl: 'Verify endpoint',
+        verifyUrlHint:
+          "The auth service's verification URL. Must be reachable from Angie (a LAN address, not loopback).",
+        signInUrl: 'Sign-in URL (optional)',
+        signInUrlHint:
+          'Where to send unauthenticated visitors. The original URL is appended as ?rd=. Leave empty to just return 401.',
+        headers: 'Copy identity headers (optional)',
+        headersHint:
+          'Headers from the auth response to pass to the app, comma-separated (e.g. Remote-User, Remote-Groups).',
+      },
       locations: {
         empty: 'No custom locations. The whole host forwards to the target above.',
         item: 'Location {{index}}',

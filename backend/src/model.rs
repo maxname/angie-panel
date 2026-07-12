@@ -126,6 +126,202 @@ pub fn validate_mtls(mut mtls: Mtls) -> Result<Mtls, ApiError> {
     Ok(mtls)
 }
 
+/// Forward authentication (SSO gateway) via Angie's `auth_request`. Every
+/// request to the host is sub-verified against an external auth service
+/// (oauth2-proxy / Authelia / Authentik). On a 2xx the request proceeds; a 401
+/// either returns 401 or (if `sign_in_url` is set) redirects the browser to the
+/// SSO login. Selected identity headers from the auth response are copied to the
+/// upstream so the app knows who the user is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardAuth {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Internal verification endpoint. A server-side subrequest target, so it is
+    /// SSRF-guarded exactly like an upstream (e.g. `http://10.0.0.5:9091/api/verify`).
+    #[serde(default)]
+    pub verify_url: String,
+    /// Optional browser redirect target on 401 — the SSO sign-in page. The
+    /// original URL is appended as `?rd=`, so this must carry no query of its own.
+    #[serde(default)]
+    pub sign_in_url: Option<String>,
+    /// Identity headers from the auth response to forward to the upstream
+    /// (e.g. `Remote-User`, `Remote-Groups`, `Remote-Email`).
+    #[serde(default)]
+    pub copy_headers: Vec<String>,
+}
+
+impl ForwardAuth {
+    /// Active only when enabled AND a verification endpoint is set.
+    pub fn active(&self) -> bool {
+        self.enabled && !self.verify_url.trim().is_empty()
+    }
+}
+
+pub const MAX_FORWARD_AUTH_HEADERS: usize = 20;
+const MAX_URL_LEN: usize = 512;
+
+/// Validate + normalize a host's forward-auth config. Every field is interpolated
+/// into a directive (`proxy_pass`, `return 302`, `auth_request_set`,
+/// `proxy_set_header`), so allowlist-and-reject: split each URL into
+/// scheme/host/port/path and admit only characters that cannot break out of a
+/// directive.
+pub fn validate_forward_auth(
+    mut fa: ForwardAuth,
+    upstream_policy: &UpstreamPolicy,
+) -> Result<ForwardAuth, ApiError> {
+    if !fa.enabled {
+        return Ok(ForwardAuth::default());
+    }
+    // The verify endpoint is fetched by Angie itself → SSRF-guarded host.
+    fa.verify_url = validate_http_url(&fa.verify_url, Some(upstream_policy))?;
+    // The sign-in URL is only ever handed to the browser in a redirect, so it is
+    // not an SSRF vector; still charset-validated to prevent config injection.
+    fa.sign_in_url = match fa.sign_in_url.map(|s| s.trim().to_string()) {
+        Some(s) if !s.is_empty() => Some(validate_http_url(&s, None)?),
+        _ => None,
+    };
+    if fa.copy_headers.len() > MAX_FORWARD_AUTH_HEADERS {
+        return Err(bad("invalid_forward_auth", "too many identity headers"));
+    }
+    let mut headers = Vec::new();
+    for h in &fa.copy_headers {
+        let name = validate_header_name(h)?;
+        if !headers.contains(&name) {
+            headers.push(name);
+        }
+    }
+    fa.copy_headers = headers;
+    Ok(fa)
+}
+
+/// Parse + validate an `http(s)://host[:port][/path]` URL. When `ssrf` is set,
+/// the host is checked against the upstream policy (loopback/link-local block);
+/// otherwise only its format is validated (a browser-redirect target).
+fn validate_http_url(raw: &str, ssrf: Option<&UpstreamPolicy>) -> Result<String, ApiError> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(bad("invalid_forward_auth", "empty URL"));
+    }
+    if s.len() > MAX_URL_LEN {
+        return Err(bad("invalid_forward_auth", "URL is too long"));
+    }
+    let (scheme, rest) = s.split_once("://").ok_or_else(|| {
+        bad(
+            "invalid_forward_auth",
+            "URL must start with http:// or https://",
+        )
+    })?;
+    let scheme = scheme.to_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return Err(bad(
+            "invalid_forward_auth",
+            "URL scheme must be http or https",
+        ));
+    }
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    if authority.is_empty() {
+        return Err(bad("invalid_forward_auth", "URL is missing a host"));
+    }
+    if authority.contains('@') {
+        return Err(bad(
+            "invalid_forward_auth",
+            "URL must not embed credentials",
+        ));
+    }
+    let (host, port) = split_host_port(authority)?;
+    // SSRF-guarded when a policy is given; a permissive policy just validates the
+    // host format (used for the browser-facing sign-in URL).
+    let permissive = UpstreamPolicy {
+        allow_loopback: true,
+    };
+    let host_norm = validate_forward_host(&host, ssrf.unwrap_or(&permissive))?;
+    if !path.is_empty() {
+        validate_url_path(path)?;
+    }
+    let mut out = format!("{scheme}://{host_norm}");
+    if let Some(p) = port {
+        out.push_str(&format!(":{p}"));
+    }
+    out.push_str(path);
+    Ok(out)
+}
+
+/// Split a URL authority into (host, port). IPv6 literals must be bracketed
+/// (`[::1]:9091`); a bare hostname/IPv4 splits on the last colon.
+fn split_host_port(authority: &str) -> Result<(String, Option<u16>), ApiError> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, after) = rest
+            .split_once(']')
+            .ok_or_else(|| bad("invalid_forward_auth", "unterminated IPv6 literal in URL"))?;
+        let port = if after.is_empty() {
+            None
+        } else if let Some(p) = after.strip_prefix(':') {
+            Some(parse_port(p)?)
+        } else {
+            return Err(bad(
+                "invalid_forward_auth",
+                "malformed IPv6 authority in URL",
+            ));
+        };
+        return Ok((host.to_string(), port));
+    }
+    match authority.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => {
+            Ok((h.to_string(), Some(parse_port(p)?)))
+        }
+        _ => Ok((authority.to_string(), None)),
+    }
+}
+
+fn parse_port(s: &str) -> Result<u16, ApiError> {
+    s.parse::<u16>()
+        .ok()
+        .filter(|&p| p > 0)
+        .ok_or_else(|| bad("invalid_forward_auth", "invalid port in URL"))
+}
+
+/// A URL path (no query/fragment): a conservative charset that cannot terminate
+/// or extend a directive, plus a traversal guard.
+fn validate_url_path(path: &str) -> Result<(), ApiError> {
+    let ok = path
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.'));
+    if !ok || path.contains("..") {
+        return Err(bad(
+            "invalid_forward_auth",
+            "URL path contains invalid characters (no query, spaces, or '..')",
+        ));
+    }
+    Ok(())
+}
+
+/// An HTTP header name (RFC 7230 token, simplified): starts alphanumeric, then
+/// alphanumerics and hyphens. Case is preserved for `proxy_set_header`.
+fn validate_header_name(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(bad("invalid_forward_auth", "empty header name"));
+    }
+    if s.len() > 64 {
+        return Err(bad("invalid_forward_auth", "header name is too long"));
+    }
+    let bytes = s.as_bytes();
+    let ok = bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'-');
+    if !ok {
+        return Err(bad(
+            "invalid_forward_auth",
+            format!("'{raw}' is not a valid header name"),
+        ));
+    }
+    Ok(s.to_string())
+}
+
 /// Load-balancing method for a host's upstream pool.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -315,6 +511,7 @@ pub struct ProxyHost {
     pub rate_limit: RateLimit,
     pub upstream: Upstream,
     pub mtls: Mtls,
+    pub forward_auth: ForwardAuth,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -359,6 +556,8 @@ pub struct ProxyHostInput {
     pub upstream: Upstream,
     #[serde(default)]
     pub mtls: Mtls,
+    #[serde(default)]
+    pub forward_auth: ForwardAuth,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -608,6 +807,7 @@ pub fn validate_host_input(
     input.rate_limit = validate_rate_limit(input.rate_limit)?;
     input.upstream = validate_upstream(input.upstream, upstream_policy)?;
     input.mtls = validate_mtls(input.mtls)?;
+    input.forward_auth = validate_forward_auth(input.forward_auth, upstream_policy)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -1505,6 +1705,7 @@ mod tests {
             rate_limit: RateLimit::default(),
             upstream: Upstream::default(),
             mtls: Mtls::default(),
+            forward_auth: ForwardAuth::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -1571,6 +1772,104 @@ mod tests {
                 })
                 .is_err(),
                 "should reject {bad_pem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn forward_auth_validation() {
+        // A full config is accepted and normalized (host lowercased, deduped headers).
+        let ok = validate_forward_auth(
+            ForwardAuth {
+                enabled: true,
+                verify_url: "http://10.0.0.5:9091/api/verify".into(),
+                sign_in_url: Some("https://auth.example.com".into()),
+                copy_headers: vec![
+                    "Remote-User".into(),
+                    "Remote-User".into(),
+                    "Remote-Groups".into(),
+                ],
+            },
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!(ok.verify_url, "http://10.0.0.5:9091/api/verify");
+        assert_eq!(ok.sign_in_url.as_deref(), Some("https://auth.example.com"));
+        assert_eq!(ok.copy_headers, vec!["Remote-User", "Remote-Groups"]);
+        assert!(ok.active());
+
+        // Disabled → inactive default regardless of the other fields.
+        assert!(!validate_forward_auth(
+            ForwardAuth {
+                enabled: false,
+                verify_url: "http://10.0.0.5:9091/verify".into(),
+                ..Default::default()
+            },
+            &policy(),
+        )
+        .unwrap()
+        .active());
+
+        // Enabled needs a verify URL.
+        assert!(validate_forward_auth(
+            ForwardAuth {
+                enabled: true,
+                ..Default::default()
+            },
+            &policy(),
+        )
+        .is_err());
+
+        // The verify endpoint is SSRF-guarded (loopback blocked by default).
+        assert_eq!(
+            validate_forward_auth(
+                ForwardAuth {
+                    enabled: true,
+                    verify_url: "http://127.0.0.1:9091/verify".into(),
+                    ..Default::default()
+                },
+                &policy(),
+            )
+            .unwrap_err()
+            .code,
+            "forbidden_forward_host"
+        );
+
+        // Injection / malformed URLs and header names are rejected.
+        for evil in [
+            "http://10.0.0.5:9091/verify;return 200",
+            "http://10.0.0.5:9091/ver ify",
+            "ftp://10.0.0.5/verify",
+            "http://10.0.0.5:9091/a/../b",
+            "10.0.0.5/verify",
+            "http://10.0.0.5:99999/verify",
+        ] {
+            assert!(
+                validate_forward_auth(
+                    ForwardAuth {
+                        enabled: true,
+                        verify_url: evil.into(),
+                        ..Default::default()
+                    },
+                    &policy(),
+                )
+                .is_err(),
+                "should reject verify_url {evil:?}"
+            );
+        }
+        for bad_header in ["Remote User", "Remote:User", "-bad", "x$y"] {
+            assert!(
+                validate_forward_auth(
+                    ForwardAuth {
+                        enabled: true,
+                        verify_url: "http://10.0.0.5:9091/verify".into(),
+                        copy_headers: vec![bad_header.into()],
+                        ..Default::default()
+                    },
+                    &policy(),
+                )
+                .is_err(),
+                "should reject header {bad_header:?}"
             );
         }
     }

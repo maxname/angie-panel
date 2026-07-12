@@ -127,6 +127,17 @@ export interface Mtls {
   optional: boolean
 }
 
+/** Forward authentication (SSO gateway) via Angie's auth_request. */
+export interface ForwardAuth {
+  enabled: boolean
+  /** Internal verification endpoint (the SSO service's auth check). */
+  verify_url: string
+  /** Optional 401 redirect target — the SSO sign-in page. null = return 401. */
+  sign_in_url: string | null
+  /** Identity headers from the auth response to forward to the upstream. */
+  copy_headers: string[]
+}
+
 export interface Host {
   id: number
   domains: string[]
@@ -149,6 +160,7 @@ export interface Host {
   rate_limit: RateLimit
   upstream: Upstream
   mtls: Mtls
+  forward_auth: ForwardAuth
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -178,6 +190,7 @@ export interface HostInput {
   rate_limit?: RateLimit
   upstream?: Upstream
   mtls?: Mtls
+  forward_auth?: ForwardAuth
   enabled?: boolean
 }
 

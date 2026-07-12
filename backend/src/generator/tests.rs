@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::model::{
-    BalanceMethod, CustomLocation, DeadHost, Mtls, ProxyHost, RateLimit, RedirectHost,
+    BalanceMethod, CustomLocation, DeadHost, ForwardAuth, Mtls, ProxyHost, RateLimit, RedirectHost,
     RedirectScheme, Scheme, Stream, StreamTls, Upstream, UpstreamServer,
 };
 
@@ -53,6 +53,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         rate_limit: RateLimit::default(),
         upstream: Upstream::default(),
         mtls: Mtls::default(),
+        forward_auth: ForwardAuth::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -539,6 +540,43 @@ fn mtls_only_over_tls_and_omitted_when_inactive() {
     assert!(!files.contains_key("client-ca-host-12.pem"));
     let (_, body) = only_host_file(&files);
     assert!(!body.contains("ssl_verify_client"));
+}
+
+#[test]
+fn golden_forward_auth() {
+    // Forward auth: the internal verify location, a 401 → sign-in redirect, and
+    // per-location auth_request + identity-header copy. Verified by angie -t
+    // (and runtime: deny→401/redirect, allow→backend) on real Angie.
+    let mut host = base_host(14, "app.example.com");
+    host.forward_auth = ForwardAuth {
+        enabled: true,
+        verify_url: "http://10.0.0.9:9091/api/verify".into(),
+        sign_in_url: Some("https://auth.example.com".into()),
+        copy_headers: vec!["Remote-User".into(), "Remote-Groups".into()],
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert_golden("20-host-forward-auth.conf", body);
+}
+
+#[test]
+fn forward_auth_omitted_when_disabled() {
+    // A host without forward auth emits no auth_request / verify location.
+    let host = base_host(15, "plain.example.com");
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(!body.contains("auth_request"));
+    assert!(!body.contains("_forward_auth"));
 }
 
 #[test]

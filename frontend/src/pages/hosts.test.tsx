@@ -42,6 +42,12 @@ const sampleHost: Host = {
     fail_timeout_secs: 10,
   },
   mtls: { ca_pem: null, optional: false },
+  forward_auth: {
+    enabled: false,
+    verify_url: '',
+    sign_in_url: null,
+    copy_headers: [],
+  },
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,

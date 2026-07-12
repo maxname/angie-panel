@@ -172,6 +172,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         rate_limit: h.rate_limit.clone(),
         upstream: h.upstream.clone(),
         mtls: h.mtls.clone(),
+        forward_auth: h.forward_auth.clone(),
         enabled,
     }
 }
