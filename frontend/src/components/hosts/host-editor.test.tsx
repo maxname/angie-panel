@@ -223,7 +223,8 @@ describe('host editor rate limiting', () => {
     renderForm()
 
     await fillValidBasics(user)
-    // Forward-auth lives on the details tab (shown by default).
+    // Forward-auth lives on its own SSO tab.
+    await user.click(screen.getByRole('tab', { name: 'SSO' }))
     await user.click(screen.getByLabelText('Enable forward auth'))
     await user.type(
       screen.getByLabelText('Verify endpoint'),

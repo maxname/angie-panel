@@ -170,6 +170,7 @@ export const en = {
       tabs: {
         details: 'Details',
         ssl: 'SSL',
+        sso: 'SSO',
         locations: 'Locations',
         upstreams: 'Upstreams',
         rateLimit: 'Rate limit',

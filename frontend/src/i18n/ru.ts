@@ -170,6 +170,7 @@ export const ru: typeof en = {
       tabs: {
         details: 'Основное',
         ssl: 'SSL',
+        sso: 'SSO',
         locations: 'Локации',
         upstreams: 'Апстримы',
         rateLimit: 'Лимиты',
