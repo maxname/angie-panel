@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  ScrollText,
   ShieldBan,
   Moon,
   Network,
@@ -39,6 +40,7 @@ const NAV_ITEMS = [
   { to: '/blocklist', labelKey: 'nav.blocklist', icon: ShieldBan, exact: false },
   { to: '/apply', labelKey: 'nav.apply', icon: Rocket, exact: false },
   { to: '/users', labelKey: 'nav.users', icon: Users, exact: false, adminOnly: true },
+  { to: '/audit', labelKey: 'nav.audit', icon: ScrollText, exact: false, adminOnly: true },
   { to: '/settings', labelKey: 'nav.settings', icon: Settings, exact: false },
 ] as const
 

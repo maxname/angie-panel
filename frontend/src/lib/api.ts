@@ -119,6 +119,18 @@ export interface Ban {
   created_at: number
 }
 
+/** One audited mutation (who did what, and the outcome). */
+export interface AuditEntry {
+  id: number
+  /** null for unauthenticated requests (e.g. a login attempt). */
+  user_email: string | null
+  method: string
+  path: string
+  status: number
+  /** Unix timestamp, seconds. */
+  created_at: number
+}
+
 /** Global country access mode. */
 export type GeoMode = 'off' | 'deny' | 'allow'
 
@@ -802,6 +814,8 @@ export const api = {
   getGeo: () => request<GeoPolicy>('GET', '/api/geo'),
 
   putGeo: (body: GeoPolicy) => request<GeoPolicy>('PUT', '/api/geo', body),
+
+  listAudit: () => request<{ entries: AuditEntry[] }>('GET', '/api/audit'),
 
   listStreams: () => request<{ streams: Stream[] }>('GET', '/api/streams'),
 

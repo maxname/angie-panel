@@ -11,6 +11,7 @@ import { RouterError, RouterPending } from '@/components/router-fallbacks'
 import { api } from '@/lib/api'
 import { AccessListsPage } from '@/pages/access-lists'
 import { ApplyPage } from '@/pages/apply'
+import { AuditLogPage } from '@/pages/audit'
 import { BlocklistPage } from '@/pages/blocklist'
 import { CertificatesPage } from '@/pages/certificates'
 import { DashboardPage } from '@/pages/dashboard'
@@ -130,6 +131,12 @@ const usersRoute = createRoute({
   component: UsersPage,
 })
 
+const auditRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/audit',
+  component: AuditLogPage,
+})
+
 const settingsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings',
@@ -150,6 +157,7 @@ const routeTree = rootRoute.addChildren([
     blocklistRoute,
     applyRoute,
     usersRoute,
+    auditRoute,
     settingsRoute,
   ]),
 ])

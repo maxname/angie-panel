@@ -1594,3 +1594,60 @@ pub async fn delete_ban(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
         .await?;
     Ok(rows.rows_affected() > 0)
 }
+
+// ------------------------------------------------------------- audit log
+
+/// Keep at most this many audit rows — the table is pruned to the newest on
+/// each insert so a long-running panel can't grow it without bound.
+const AUDIT_KEEP: i64 = 2000;
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct AuditEntry {
+    pub id: i64,
+    pub user_email: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub status: i64,
+    pub created_at: i64,
+}
+
+/// Record one audited action, then prune to the newest [`AUDIT_KEEP`] rows.
+pub async fn insert_audit(
+    db: &SqlitePool,
+    user_email: Option<&str>,
+    method: &str,
+    path: &str,
+    status: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO audit_log (user_email, method, path, status, created_at) \
+         VALUES (?,?,?,?,?)",
+    )
+    .bind(user_email)
+    .bind(method)
+    .bind(path)
+    .bind(status)
+    .bind(now_epoch())
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "DELETE FROM audit_log WHERE id NOT IN \
+         (SELECT id FROM audit_log ORDER BY id DESC LIMIT ?)",
+    )
+    .bind(AUDIT_KEEP)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// The most recent audit entries, newest first (bounded by `limit`).
+pub async fn list_audit(db: &SqlitePool, limit: i64) -> anyhow::Result<Vec<AuditEntry>> {
+    let rows: Vec<AuditEntry> = sqlx::query_as(
+        "SELECT id, user_email, method, path, status, created_at \
+         FROM audit_log ORDER BY id DESC LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}

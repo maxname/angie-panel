@@ -115,7 +115,31 @@ pub async fn security_layer(
     }
 
     let is_api = req.uri().path().starts_with("/api/");
+
+    // Audit context: capture who + what for mutating API requests that pass the
+    // checks above (req is moved into next.run below). The row is written after,
+    // once we know the outcome status.
+    let audit = if mutating && is_api {
+        Some((
+            crate::auth::session_email(&state, req.headers()).await,
+            req.method().to_string(),
+            req.uri().path().to_string(),
+        ))
+    } else {
+        None
+    };
+
     let mut res = next.run(req).await;
+
+    if let Some((email, method, path)) = audit {
+        let status = i64::from(res.status().as_u16());
+        // Best-effort: a failed audit write must never break the request.
+        if let Err(e) =
+            crate::repo::insert_audit(&state.db, email.as_deref(), &method, &path, status).await
+        {
+            tracing::warn!(%e, "failed to write audit log entry");
+        }
+    }
 
     // 3. Security headers. No CORS headers are ever emitted: the API is
     //    strictly same-origin (lesson from NPM's CVE-2025-50579).

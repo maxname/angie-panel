@@ -275,6 +275,13 @@ pub async fn session_role(state: &AppState, headers: &HeaderMap) -> Option<Role>
     session_user(state, &jar).await.map(|u| u.role)
 }
 
+/// The session's user email from raw headers, for the audit log. `None` = no
+/// (or invalid) session — e.g. an unauthenticated login request.
+pub async fn session_email(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    let jar = CookieJar::from_headers(headers);
+    session_user(state, &jar).await.map(|u| u.email)
+}
+
 impl FromRequestParts<Arc<AppState>> for AuthUser {
     type Rejection = ApiError;
 

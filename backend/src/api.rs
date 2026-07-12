@@ -6,8 +6,8 @@ use axum::Router;
 
 use crate::state::AppState;
 use crate::{
-    access_lists, apply_api, assets, auth, bans, certs, dashboard, export_import, geo, hosts,
-    other_hosts, security, streams, system, users,
+    access_lists, apply_api, assets, audit, auth, bans, certs, dashboard, export_import, geo,
+    hosts, other_hosts, security, streams, system, users,
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -92,6 +92,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/bans", get(bans::list).post(bans::create))
         .route("/bans/{id}", axum::routing::delete(bans::delete))
         .route("/geo", get(geo::get).put(geo::put))
+        .route("/audit", get(audit::list))
         .route("/apply/preview", get(apply_api::preview))
         .route("/apply", post(apply_api::apply_now))
         .route("/apply/history", get(apply_api::history))

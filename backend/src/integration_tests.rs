@@ -1214,3 +1214,53 @@ async fn host_and_api_fallback() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
     assert_eq!(body_json(res).await["error"]["code"], json!("not_found"));
 }
+
+#[tokio::test]
+async fn audit_log_records_mutations_and_is_admin_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // A mutation to be audited.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains": ["app.example.com"],
+                "forward_scheme": "http",
+                "forward_host": "10.0.0.5",
+                "forward_port": 8080
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // The admin sees the audit trail; the newest entry is the host creation.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/audit", None, Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let entries = body_json(res).await;
+    let first = &entries["entries"][0];
+    assert_eq!(first["method"], json!("POST"));
+    assert_eq!(first["path"], json!("/api/hosts"));
+    assert_eq!(first["status"], json!(200));
+    assert_eq!(first["user_email"], json!("a@b.c"));
+    // The setup call earlier was also audited (its session had no user yet).
+    let all = entries["entries"].as_array().unwrap();
+    assert!(all.iter().any(|e| e["path"] == json!("/api/auth/setup")));
+
+    // GET is not covered by the mutation role gate, so the handler enforces
+    // admin: an unauthenticated caller is rejected.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/audit", None, None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}

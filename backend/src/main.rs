@@ -3,6 +3,7 @@ mod api;
 mod apply;
 mod apply_api;
 mod assets;
+mod audit;
 mod auth;
 mod bans;
 mod certs;
