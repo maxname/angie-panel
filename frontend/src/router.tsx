@@ -14,6 +14,7 @@ import { ApplyPage } from '@/pages/apply'
 import { AuditLogPage } from '@/pages/audit'
 import { BlocklistPage } from '@/pages/blocklist'
 import { CertificatesPage } from '@/pages/certificates'
+import { DnsProvidersPage } from '@/pages/dns-providers'
 import { DashboardPage } from '@/pages/dashboard'
 import { DeadHostsPage } from '@/pages/dead-hosts'
 import { HostsPage } from '@/pages/hosts'
@@ -114,6 +115,12 @@ const certificatesRoute = createRoute({
   component: CertificatesPage,
 })
 
+const dnsProvidersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/dns-providers',
+  component: DnsProvidersPage,
+})
+
 const accessListsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/access-lists',
@@ -161,6 +168,7 @@ const routeTree = rootRoute.addChildren([
     streamsRoute,
     sniRoutersRoute,
     certificatesRoute,
+    dnsProvidersRoute,
     accessListsRoute,
     blocklistRoute,
     applyRoute,

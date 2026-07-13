@@ -24,6 +24,7 @@ export const en = {
     streams: 'Streams',
     sniRouters: 'SNI Routers',
     certificates: 'Certificates',
+    dnsProviders: 'DNS Providers',
     accessLists: 'Access Lists',
     blocklist: 'Blocked IPs',
     apply: 'Apply',
@@ -479,16 +480,25 @@ export const en = {
         'Imported {{hosts}} hosts, {{streams}} streams, {{certs}} certificates, {{lists}} access lists',
       goToApply: 'Go to Apply to activate the imported configuration',
     },
-    dnsProviders: {
-      title: 'DNS providers',
-      configured: 'configured',
-      none: 'No DNS providers available.',
-      description:
-        'API credentials for automatic DNS-01 wildcard certificates. Pick your provider and enter its API credentials — the panel creates the _acme-challenge TXT record via that provider (acme.sh under the hood), so no NS delegation and no UDP/53.',
-      provider: 'Provider',
-      hint: 'Credentials are stored write-only — never shown again or included in backups. Enable API access with your provider first.',
-      save: 'Save credentials',
-      disconnect: 'Disconnect',
+  },
+  dnsProviders: {
+    title: 'DNS Providers',
+    subtitle:
+      'API credentials for automatic DNS-01 wildcard certificates. Configure one or more providers — the panel creates the _acme-challenge TXT record via the provider’s API (acme.sh under the hood), so no NS delegation and no UDP/53. Pick a provider per certificate in the certificate wizard.',
+    summary: 'Configured providers: {{count}}',
+    loadFailed: 'Failed to load DNS providers',
+    table: { provider: 'Provider', status: 'Status', actions: 'Actions' },
+    status: { configured: 'Configured', notConfigured: 'Not configured' },
+    configure: 'Configure',
+    edit: 'Edit',
+    disconnect: 'Disconnect',
+    saved: 'Credentials saved',
+    editor: {
+      title: '{{provider}} credentials',
+      hint: 'Enter this provider’s API credentials. Enable API access with your provider first.',
+      secretNote:
+        'Stored write-only — never shown again or included in backups.',
+      save: 'Save',
     },
   },
   certificates: {

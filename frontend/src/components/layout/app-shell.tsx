@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useRouter } from '@tanstack/react-router'
 import {
+  Cloud,
   CornerUpRight,
   FileQuestion,
   Globe,
@@ -38,6 +39,7 @@ const NAV_ITEMS = [
   { to: '/streams', labelKey: 'nav.streams', icon: Network, exact: false },
   { to: '/sni-routers', labelKey: 'nav.sniRouters', icon: Split, exact: false },
   { to: '/certificates', labelKey: 'nav.certificates', icon: ShieldCheck, exact: false },
+  { to: '/dns-providers', labelKey: 'nav.dnsProviders', icon: Cloud, exact: false },
   { to: '/access-lists', labelKey: 'nav.accessLists', icon: ListChecks, exact: false },
   { to: '/blocklist', labelKey: 'nav.blocklist', icon: ShieldBan, exact: false },
   { to: '/apply', labelKey: 'nav.apply', icon: Rocket, exact: false },
