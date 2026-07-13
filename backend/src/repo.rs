@@ -989,6 +989,21 @@ pub async fn cert_name_exists(db: &SqlitePool, name: &str) -> anyhow::Result<boo
     Ok(n > 0)
 }
 
+/// Like [`cert_name_exists`] but ignores one row — used when updating a
+/// certificate, so keeping its own name doesn't count as a clash.
+pub async fn cert_name_exists_except(
+    db: &SqlitePool,
+    name: &str,
+    except_id: i64,
+) -> anyhow::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM certificates WHERE name = ? AND id <> ?")
+        .bind(name)
+        .bind(except_id)
+        .fetch_one(db)
+        .await?;
+    Ok(n > 0)
+}
+
 pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::Result<i64> {
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO certificates (name, domains, challenge, key_type, email, staging, \
@@ -1005,6 +1020,32 @@ pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::R
     .fetch_one(db)
     .await?;
     Ok(id)
+}
+
+/// Update a certificate in place, keeping its `id` (and therefore every host's
+/// `certificate_id` binding) and `created_at`. Changing name/domains/challenge
+/// makes Angie re-issue on the next apply — the row is the source of truth, the
+/// generator reads it fresh. Returns false if no row had that id.
+pub async fn update_cert(
+    db: &SqlitePool,
+    id: i64,
+    input: &CertificateInput,
+) -> anyhow::Result<bool> {
+    let rows = sqlx::query(
+        "UPDATE certificates SET name = ?, domains = ?, challenge = ?, key_type = ?, \
+         email = ?, staging = ?, dns_provider = ? WHERE id = ?",
+    )
+    .bind(&input.name)
+    .bind(domains_json(&input.domains))
+    .bind(input.challenge.as_str())
+    .bind(input.key_type.as_str())
+    .bind(input.email.as_deref())
+    .bind(input.staging as i64)
+    .bind(input.dns_provider.as_deref())
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(rows.rows_affected() > 0)
 }
 
 pub async fn delete_cert(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {

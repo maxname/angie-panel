@@ -49,7 +49,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/certificates", get(certs::list).post(certs::create))
         .route(
             "/certificates/{id}",
-            get(certs::get_one).delete(certs::delete),
+            get(certs::get_one).put(certs::update).delete(certs::delete),
         )
         .route("/certificates/{id}/precheck", post(certs::precheck))
         .route(

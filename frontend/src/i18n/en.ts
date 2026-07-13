@@ -556,6 +556,7 @@ export const en = {
       pending: 'Pending',
     },
     actions: {
+      edit: 'Edit',
       delete: 'Delete',
     },
     delete: {
@@ -567,9 +568,14 @@ export const en = {
       title: 'Add certificate',
       description:
         'Angie requests this certificate over ACME once you attach it to a proxy host and Apply.',
+      editTitle: 'Edit certificate',
+      editDescription:
+        'Changes take effect on the next Apply. Any host using this certificate stays attached.',
+      editNote:
+        'Editing the domains, challenge, or key type makes Angie re-issue the certificate on the next Apply. Hosts already using it stay attached.',
       name: 'Name',
       nameHelp:
-        'Identifier: lowercase letters, digits, underscore; used in the config and cannot be changed later.',
+        'Identifier: lowercase letters, digits, underscore; used in the config.',
       domains: 'Domains',
       domainPlaceholder: 'example.com',
       addDomain: 'Add',
@@ -602,10 +608,13 @@ export const en = {
       stagingNote:
         'Let’s Encrypt staging CA — certificates are UNTRUSTED; use only for testing.',
       submit: 'Create certificate',
+      saveEdit: 'Save changes',
       createFailed: 'Could not create certificate',
       createdToastTitle: 'Certificate created',
       createdToastBody:
         'Attach it to a proxy host and Apply to start issuance.',
+      updatedToastTitle: 'Certificate updated',
+      updatedToastBody: 'Apply to write the change and re-issue if needed.',
     },
     precheck: {
       title: 'DNS-01 delegation required',

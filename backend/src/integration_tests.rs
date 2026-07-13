@@ -941,6 +941,124 @@ async fn dns_credential_profiles_crud() {
     assert!(!raw.keys().any(|k| k.starts_with("dns_cred:")));
 }
 
+/// Editing a certificate updates it in place (same id) so a host that references
+/// it stays bound — even though the cert is in use and could not be deleted.
+#[tokio::test]
+async fn certificate_edit_keeps_host_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // A cert, and a host that references it.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/certificates",
+            Some(json!({"name":"web","domains":["app.example.com"],"challenge":"http"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let cert_id = body_json(res).await["id"].as_i64().unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["app.example.com"],"forward_scheme":"http",
+                "forward_host":"192.168.1.10","forward_port":8123,
+                "certificate_id":cert_id
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Rename it and change the SAN set — an in-place edit, not delete+create.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/certificates/{cert_id}"),
+            Some(
+                json!({"name":"web_v2","domains":["app.example.com","www.example.com"],
+                "challenge":"http","key_type":"rsa"}),
+            ),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let updated = body_json(res).await;
+    assert_eq!(updated["name"], json!("web_v2"));
+    assert_eq!(updated["key_type"], json!("rsa"));
+    assert_eq!(updated["domains"].as_array().unwrap().len(), 2);
+
+    // The host still points at the same cert id — the binding survived the edit.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/hosts", None, Some(&cookie)))
+        .await
+        .unwrap();
+    let hosts = body_json(res).await;
+    assert_eq!(hosts["hosts"][0]["certificate_id"], json!(cert_id));
+
+    // A second cert; renaming the first onto its name is a 409 clash.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/certificates",
+            Some(json!({"name":"other","domains":["b.example.com"],"challenge":"http"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/certificates/{cert_id}"),
+            Some(json!({"name":"other","domains":["app.example.com"],"challenge":"http"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Editing to reference a non-existent DNS profile is rejected.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/certificates/{cert_id}"),
+            Some(json!({"name":"web_v2","domains":["*.example.com"],
+                "challenge":"dns","dns_provider":"9999"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Editing a cert that does not exist is a 404.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/certificates/99999",
+            Some(json!({"name":"ghost","domains":["g.example.com"],"challenge":"http"})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn sni_router_crud_conflict_and_preview() {
     let dir = tempfile::tempdir().unwrap();

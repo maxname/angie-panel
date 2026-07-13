@@ -989,6 +989,9 @@ export const api = {
   createCertificate: (body: CertInput) =>
     request<Cert>('POST', '/api/certificates', body),
 
+  updateCertificate: (id: number, body: CertInput) =>
+    request<Cert>('PUT', `/api/certificates/${id}`, body),
+
   deleteCertificate: (id: number) =>
     request<OkResponse>('DELETE', `/api/certificates/${id}`),
 

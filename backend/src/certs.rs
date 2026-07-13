@@ -64,7 +64,47 @@ pub async fn create(
     Json(raw): Json<model::CertificateInput>,
 ) -> ApiResult<Json<Value>> {
     let input = model::validate_cert_input(raw)?;
-    // A DNS-01 provider reference must point at an existing credential profile.
+    ensure_dns_provider_exists(&state, &input).await?;
+    // Name is the acme_client identifier and the $acme_cert_<name> variable —
+    // globally unique.
+    if repo::cert_name_exists(&state.db, &input.name).await? {
+        return Err(name_taken(&input.name));
+    }
+    let id = repo::insert_cert(&state.db, &input).await?;
+    let cert = repo::get_cert(&state.db, id).await?.expect("just inserted");
+    Ok(Json(cert_json(&cert)))
+}
+
+/// Replace a certificate's definition in place. Editing keeps the same row id,
+/// so every host that references this cert stays bound (hosts reference by
+/// `certificate_id`) — even an in-use cert can be edited without detaching it.
+/// Changing name/domains/challenge/key makes Angie re-issue on the next apply;
+/// there is no separate issuance state in the DB to reset (status is read live
+/// from Angie). It behaves like a recreate that preserves the binding.
+pub async fn update(
+    _u: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(raw): Json<model::CertificateInput>,
+) -> ApiResult<Json<Value>> {
+    if repo::get_cert(&state.db, id).await?.is_none() {
+        return Err(ApiError::not_found(format!("no certificate #{id}")));
+    }
+    let input = model::validate_cert_input(raw)?;
+    ensure_dns_provider_exists(&state, &input).await?;
+    if repo::cert_name_exists_except(&state.db, &input.name, id).await? {
+        return Err(name_taken(&input.name));
+    }
+    repo::update_cert(&state.db, id, &input).await?;
+    let cert = repo::get_cert(&state.db, id).await?.expect("just updated");
+    Ok(Json(cert_json(&cert)))
+}
+
+/// A DNS-01 provider reference must point at an existing credential profile.
+async fn ensure_dns_provider_exists(
+    state: &AppState,
+    input: &model::CertificateInput,
+) -> ApiResult<()> {
     if let Some(pid) = &input.dns_provider {
         let exists = match pid.parse::<i64>() {
             Ok(id) => repo::get_dns_credential(&state.db, id).await?.is_some(),
@@ -77,18 +117,15 @@ pub async fn create(
             ));
         }
     }
-    // Name is the acme_client identifier and the $acme_cert_<name> variable —
-    // globally unique, immutable after creation.
-    if repo::cert_name_exists(&state.db, &input.name).await? {
-        return Err(ApiError::new(
-            axum::http::StatusCode::CONFLICT,
-            "cert_name_taken",
-            format!("certificate name '{}' is already in use", input.name),
-        ));
-    }
-    let id = repo::insert_cert(&state.db, &input).await?;
-    let cert = repo::get_cert(&state.db, id).await?.expect("just inserted");
-    Ok(Json(cert_json(&cert)))
+    Ok(())
+}
+
+fn name_taken(name: &str) -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::CONFLICT,
+        "cert_name_taken",
+        format!("certificate name '{name}' is already in use"),
+    )
 }
 
 pub async fn delete(

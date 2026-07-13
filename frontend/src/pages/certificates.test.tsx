@@ -159,4 +159,65 @@ describe('certificate wizard', () => {
     expect(provider).toBeChecked()
     expect(await screen.findByText(/CF work.*has no credentials/i)).toBeInTheDocument()
   })
+
+  it('edits an existing certificate — prefills the fields and PUTs the update', async () => {
+    const user = userEvent.setup()
+    const editCert: Cert = {
+      id: 7,
+      name: 'live_site',
+      domains: ['example.com', 'www.example.com'],
+      challenge: 'http',
+      key_type: 'ecdsa',
+      email: 'admin@example.com',
+      staging: false,
+      dns_provider: null,
+      created_at: 1751700000,
+      status: null,
+    }
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/dns-credentials') {
+        return Promise.resolve(jsonResponse({ credentials: [] }))
+      }
+      if (url === '/api/certificates/7' && init?.method === 'PUT') {
+        // Echo back the edited cert (still http → wizard just closes).
+        return Promise.resolve(
+          jsonResponse({ ...editCert, name: 'live_site_v2' }),
+        )
+      }
+      return Promise.reject(new Error(`unexpected ${init?.method ?? 'GET'} ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const onDone = vi.fn()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CertWizardForm cert={editCert} onDone={onDone} />
+      </QueryClientProvider>,
+    )
+
+    // Existing values are prefilled, and the re-issue note is shown.
+    const nameInput = screen.getByLabelText('Name') as HTMLInputElement
+    expect(nameInput.value).toBe('live_site')
+    expect(screen.getByText('example.com')).toBeInTheDocument()
+    expect(screen.getByText(/re-issue the certificate/i)).toBeInTheDocument()
+
+    // Rename and save → PUT to the cert's id, then onDone.
+    await user.clear(nameInput)
+    await user.type(nameInput, 'live_site_v2')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled())
+    const putCall = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+    )
+    expect(putCall?.[0]).toBe('/api/certificates/7')
+    expect(JSON.parse((putCall?.[1] as RequestInit).body as string)).toMatchObject({
+      name: 'live_site_v2',
+      domains: ['example.com', 'www.example.com'],
+      challenge: 'http',
+    })
+  })
 })

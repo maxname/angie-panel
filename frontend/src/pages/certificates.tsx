@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
-import { Info, Loader2, Plus, Trash2, X } from 'lucide-react'
+import { Info, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -53,9 +53,12 @@ import {
 import { isValidDomain } from '@/lib/domain'
 import { toast } from '@/lib/toast'
 
+/** Create a fresh cert, or edit an existing one, through the same wizard. */
+type WizardTarget = { mode: 'create' } | { mode: 'edit'; cert: Cert }
+
 export function CertificatesPage() {
   const { t } = useTranslation()
-  const [wizardOpen, setWizardOpen] = useState(false)
+  const [wizard, setWizard] = useState<WizardTarget | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Cert | null>(null)
 
   const certsQuery = useQuery({
@@ -69,7 +72,7 @@ export function CertificatesPage() {
         <h1 className="text-2xl font-semibold tracking-tight">
           {t('certificates.title')}
         </h1>
-        <Button onClick={() => setWizardOpen(true)}>
+        <Button onClick={() => setWizard({ mode: 'create' })}>
           <Plus aria-hidden="true" />
           {t('certificates.add')}
         </Button>
@@ -126,6 +129,7 @@ export function CertificatesPage() {
                   <CertRow
                     key={cert.id}
                     cert={cert}
+                    onEdit={() => setWizard({ mode: 'edit', cert })}
                     onDelete={() => setDeleteTarget(cert)}
                   />
                 ))}
@@ -135,7 +139,14 @@ export function CertificatesPage() {
         </Card>
       )}
 
-      <CertWizardDialog open={wizardOpen} onOpenChange={setWizardOpen} />
+      <CertWizardDialog
+        target={wizard}
+        onOpenChange={(open) => {
+          if (!open) {
+            setWizard(null)
+          }
+        }}
+      />
       <DeleteCertDialog
         cert={deleteTarget}
         onOpenChange={(open) => {
@@ -150,10 +161,11 @@ export function CertificatesPage() {
 
 interface CertRowProps {
   cert: Cert
+  onEdit: () => void
   onDelete: () => void
 }
 
-function CertRow({ cert, onDelete }: CertRowProps) {
+function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
   const { t, i18n } = useTranslation()
   const created = new Intl.DateTimeFormat(i18n.language, {
     dateStyle: 'medium',
@@ -197,14 +209,24 @@ function CertRow({ cert, onDelete }: CertRowProps) {
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">{created}</TableCell>
       <TableCell className="text-right">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={onDelete}
-          aria-label={t('certificates.actions.delete')}
-        >
-          <Trash2 aria-hidden="true" />
-        </Button>
+        <div className="flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onEdit}
+            aria-label={t('certificates.actions.edit')}
+          >
+            <Pencil aria-hidden="true" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onDelete}
+            aria-label={t('certificates.actions.delete')}
+          >
+            <Trash2 aria-hidden="true" />
+          </Button>
+        </div>
       </TableCell>
     </TableRow>
   )
@@ -362,22 +384,33 @@ function DeleteCertDialog({ cert, onOpenChange }: DeleteCertDialogProps) {
 }
 
 interface CertWizardDialogProps {
-  open: boolean
+  target: WizardTarget | null
   onOpenChange: (open: boolean) => void
 }
 
-function CertWizardDialog({ open, onOpenChange }: CertWizardDialogProps) {
+function CertWizardDialog({ target, onOpenChange }: CertWizardDialogProps) {
   const { t } = useTranslation()
+  const editing = target?.mode === 'edit'
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={target !== null} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>{t('certificates.wizard.title')}</DialogTitle>
-          <DialogDescription>{t('certificates.wizard.description')}</DialogDescription>
+          <DialogTitle>
+            {editing ? t('certificates.wizard.editTitle') : t('certificates.wizard.title')}
+          </DialogTitle>
+          <DialogDescription>
+            {editing
+              ? t('certificates.wizard.editDescription')
+              : t('certificates.wizard.description')}
+          </DialogDescription>
         </DialogHeader>
-        {/* Radix unmounts content on close, so state resets on each open. */}
-        <CertWizardForm onDone={() => onOpenChange(false)} />
+        {/* Radix unmounts content on close, so state resets on each open — the
+            form seeds from `cert` on mount. */}
+        <CertWizardForm
+          cert={target?.mode === 'edit' ? target.cert : undefined}
+          onDone={() => onOpenChange(false)}
+        />
       </DialogContent>
     </Dialog>
   )
@@ -409,19 +442,38 @@ interface WizardFieldErrors {
   form?: string
 }
 
-export function CertWizardForm({ onDone }: { onDone: () => void }) {
+export function CertWizardForm({
+  cert,
+  onDone,
+}: {
+  cert?: Cert
+  onDone: () => void
+}) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const editing = cert !== undefined
 
-  const [form, setForm] = useState<WizardState>({
-    name: '',
-    domains: [],
-    challenge: 'http',
-    key_type: 'ecdsa',
-    email: '',
-    staging: false,
-    dns_provider: null,
-  })
+  const [form, setForm] = useState<WizardState>(() =>
+    cert
+      ? {
+          name: cert.name,
+          domains: cert.domains,
+          challenge: cert.challenge,
+          key_type: cert.key_type,
+          email: cert.email ?? '',
+          staging: cert.staging,
+          dns_provider: cert.dns_provider,
+        }
+      : {
+          name: '',
+          domains: [],
+          challenge: 'http',
+          key_type: 'ecdsa',
+          email: '',
+          staging: false,
+          dns_provider: null,
+        },
+  )
   const profilesQuery = useQuery({
     queryKey: ['dns-credentials'],
     queryFn: () => api.listDnsCredentials(),
@@ -451,20 +503,24 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
     mutationFn: (id: number) => api.precheckCertificate(id),
   })
 
-  const createMutation = useMutation({
-    mutationFn: (input: CertInput) => api.createCertificate(input),
-    onSuccess: (cert) => {
+  const saveMutation = useMutation({
+    mutationFn: (input: CertInput) =>
+      editing ? api.updateCertificate(cert.id, input) : api.createCertificate(input),
+    onSuccess: (saved) => {
       void queryClient.invalidateQueries({ queryKey: ['certificates'] })
       toast({
-        title: t('certificates.wizard.createdToastTitle'),
-        description: t('certificates.wizard.createdToastBody'),
+        title: editing
+          ? t('certificates.wizard.updatedToastTitle')
+          : t('certificates.wizard.createdToastTitle'),
+        description: editing
+          ? t('certificates.wizard.updatedToastBody')
+          : t('certificates.wizard.createdToastBody'),
       })
-      if (cert.challenge === 'dns' && cert.dns_provider === null) {
+      if (saved.challenge === 'dns' && saved.dns_provider === null) {
         // Self-answered DNS-01: show the NS-delegation records the user must
-        // create. Provider (reg.ru) certs need none — the hook does it — so we
-        // just close.
-        setCreated(cert)
-        precheckMutation.mutate(cert.id)
+        // create. Provider certs need none — the hook does it — so we just close.
+        setCreated(saved)
+        precheckMutation.mutate(saved.id)
       } else {
         onDone()
       }
@@ -472,11 +528,11 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
   })
 
   const serverErrors = useMemo<WizardFieldErrors>(() => {
-    if (!createMutation.isError) {
+    if (!saveMutation.isError) {
       return {}
     }
-    if (createMutation.error instanceof ApiError) {
-      const { code, message } = createMutation.error
+    if (saveMutation.error instanceof ApiError) {
+      const { code, message } = saveMutation.error
       switch (code) {
         case 'invalid_cert_name':
         case 'cert_name_taken':
@@ -492,7 +548,7 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
       }
     }
     return { form: t('common.error') }
-  }, [createMutation.isError, createMutation.error, t])
+  }, [saveMutation.isError, saveMutation.error, t])
 
   const errors: WizardFieldErrors = {
     name: clientErrors.name ?? serverErrors.name,
@@ -548,7 +604,7 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
       staging: form.staging,
       dns_provider: effectiveDnsProvider,
     }
-    createMutation.mutate(input)
+    saveMutation.mutate(input)
   }
 
   if (created !== null) {
@@ -563,6 +619,12 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
+      {editing && (
+        <Alert variant="info">
+          <Info aria-hidden="true" />
+          <AlertDescription>{t('certificates.wizard.editNote')}</AlertDescription>
+        </Alert>
+      )}
       <div className="space-y-2">
         <Label htmlFor="cert-name">{t('certificates.wizard.name')}</Label>
         <Input
@@ -836,15 +898,17 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
           type="button"
           variant="outline"
           onClick={onDone}
-          disabled={createMutation.isPending}
+          disabled={saveMutation.isPending}
         >
           {t('common.cancel')}
         </Button>
-        <Button type="submit" disabled={createMutation.isPending}>
-          {createMutation.isPending && (
+        <Button type="submit" disabled={saveMutation.isPending}>
+          {saveMutation.isPending && (
             <Loader2 className="animate-spin" aria-hidden="true" />
           )}
-          {t('certificates.wizard.submit')}
+          {editing
+            ? t('certificates.wizard.saveEdit')
+            : t('certificates.wizard.submit')}
         </Button>
       </DialogFooter>
     </form>
