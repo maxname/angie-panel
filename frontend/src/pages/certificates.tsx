@@ -119,7 +119,6 @@ export function CertificatesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('certificates.table.name')}</TableHead>
                   <TableHead>{t('certificates.table.domains')}</TableHead>
                   <TableHead>{t('certificates.table.challenge')}</TableHead>
                   <TableHead>{t('certificates.table.keyType')}</TableHead>
@@ -181,15 +180,17 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <span className="font-mono text-xs">{cert.name}</span>
-      </TableCell>
-      <TableCell>
-        <div className="flex flex-wrap gap-1">
-          {cert.domains.map((domain) => (
-            <Badge key={domain} variant="secondary">
-              {domain}
-            </Badge>
-          ))}
+        <div className="space-y-1">
+          <div className="flex flex-wrap gap-1">
+            {cert.domains.map((domain) => (
+              <Badge key={domain} variant="secondary">
+                {domain}
+              </Badge>
+            ))}
+          </div>
+          <span className="font-mono text-xs text-muted-foreground">
+            {cert.name}
+          </span>
         </div>
       </TableCell>
       <TableCell>
