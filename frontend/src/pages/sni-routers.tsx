@@ -72,19 +72,19 @@ export function SniRoutersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="space-y-1">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('sniRouters.title')}
           </h1>
-          <p className="text-sm text-muted-foreground">
-            {t('sniRouters.subtitle')}
-          </p>
+          <Button className="shrink-0" onClick={openCreate}>
+            <Plus aria-hidden="true" />
+            {t('sniRouters.add')}
+          </Button>
         </div>
-        <Button onClick={openCreate}>
-          <Plus aria-hidden="true" />
-          {t('sniRouters.add')}
-        </Button>
+        <p className="text-sm text-muted-foreground">
+          {t('sniRouters.subtitle')}
+        </p>
       </div>
 
       {!contextActive && hasEnabled && <EnableContextBanner />}

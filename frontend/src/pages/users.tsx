@@ -52,17 +52,17 @@ export function UsersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('users.title')}
           </h1>
-          <p className="text-sm text-muted-foreground">{t('users.subtitle')}</p>
+          <Button className="shrink-0" onClick={() => setCreateOpen(true)}>
+            <Plus aria-hidden="true" />
+            {t('users.add')}
+          </Button>
         </div>
-        <Button className="shrink-0" onClick={() => setCreateOpen(true)}>
-          <Plus aria-hidden="true" />
-          {t('users.add')}
-        </Button>
+        <p className="text-sm text-muted-foreground">{t('users.subtitle')}</p>
       </div>
 
       {usersQuery.isPending ? (

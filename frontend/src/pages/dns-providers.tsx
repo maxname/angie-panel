@@ -67,23 +67,23 @@ export function DnsProvidersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('dnsProviders.title')}
           </h1>
-          <p className="text-sm text-muted-foreground">
-            {t('dnsProviders.subtitle')}
-          </p>
+          <Button
+            className="shrink-0"
+            onClick={() => setCreating(true)}
+            disabled={types.length === 0}
+          >
+            <Plus aria-hidden="true" />
+            {t('dnsProviders.add')}
+          </Button>
         </div>
-        <Button
-          className="shrink-0"
-          onClick={() => setCreating(true)}
-          disabled={types.length === 0}
-        >
-          <Plus aria-hidden="true" />
-          {t('dnsProviders.add')}
-        </Button>
+        <p className="text-sm text-muted-foreground">
+          {t('dnsProviders.subtitle')}
+        </p>
       </div>
 
       {profilesQuery.isPending ? (
