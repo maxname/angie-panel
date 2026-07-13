@@ -69,6 +69,8 @@ export const ru: typeof en = {
   header: {
     toggleTheme: 'Переключить тему',
     switchLanguage: 'Сменить язык',
+    themeDark: 'Тёмная тема',
+    themeLight: 'Светлая тема',
     logout: 'Выйти',
   },
   login: {

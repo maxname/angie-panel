@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  MoreVertical,
   ScrollText,
   ShieldBan,
   Moon,
@@ -23,8 +24,13 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Toaster } from '@/components/ui/toaster'
 import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
@@ -148,47 +154,20 @@ function useLogout() {
   })
 }
 
-/** Bottom of the sidebar (desktop): who you are + session controls. */
+/** Bottom of the sidebar (desktop): the signed-in user as a shadcn "nav-user"
+ *  card that opens the session menu. */
 function SidebarFooter() {
-  const { t } = useTranslation()
-  const { data: me } = useMe()
-  const logoutMutation = useLogout()
-
   return (
-    <div className="mt-auto flex flex-col gap-2 border-t p-3">
-      {me !== undefined && (
-        <div className="flex min-w-0 items-center gap-2 px-1 text-sm">
-          <span className="truncate text-muted-foreground">{me.email}</span>
-          {me.role === 'viewer' && (
-            <Badge variant="outline" className="shrink-0 text-xs">
-              {t('users.roles.viewer')}
-            </Badge>
-          )}
-        </div>
-      )}
-      <div className="flex items-center gap-1">
-        <LanguageToggle />
-        <ThemeToggle />
-        <div className="flex-1" />
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => logoutMutation.mutate()}
-          disabled={logoutMutation.isPending}
-        >
-          <LogOut aria-hidden="true" />
-          {t('header.logout')}
-        </Button>
-      </div>
+    <div className="mt-auto border-t p-2">
+      <SidebarUser />
     </div>
   )
 }
 
 /** The sidebar is hidden on mobile, so a compact top bar carries the app name
- *  and session controls there. */
+ *  and the same user menu (avatar only). */
 function MobileHeader() {
   const { t } = useTranslation()
-  const logoutMutation = useLogout()
 
   return (
     <header className="flex h-14 items-center justify-between gap-2 border-b px-4 md:hidden">
@@ -196,53 +175,101 @@ function MobileHeader() {
         <Waypoints className="size-5" aria-hidden="true" />
         {t('app.name')}
       </div>
-      <div className="flex items-center gap-1">
-        <LanguageToggle />
-        <ThemeToggle />
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={t('header.logout')}
-          onClick={() => logoutMutation.mutate()}
-          disabled={logoutMutation.isPending}
-        >
-          <LogOut aria-hidden="true" />
-        </Button>
-      </div>
+      <SidebarUser compact />
     </header>
   )
 }
 
-function ThemeToggle() {
-  const { t } = useTranslation()
-  const { theme, toggleTheme } = useTheme()
-
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={toggleTheme}
-      aria-label={t('header.toggleTheme')}
-    >
-      {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
-    </Button>
-  )
+function userInitials(email: string): string {
+  const local = email.split('@')[0] || email
+  return (local.slice(0, 2) || '?').toUpperCase()
 }
 
-function LanguageToggle() {
+/** shadcn "nav-user": an avatar + identity row (or just the avatar, on mobile)
+ *  that opens a dropdown with theme, language, and logout. */
+function SidebarUser({ compact = false }: { compact?: boolean }) {
   const { t, i18n } = useTranslation()
+  const { data: me } = useMe()
+  const { theme, toggleTheme } = useTheme()
+  const logoutMutation = useLogout()
+
+  const email = me?.email ?? ''
+  const roleLabel = me ? t(`users.roles.${me.role}`) : ''
   const current = i18n.resolvedLanguage === 'ru' ? 'ru' : 'en'
   const next = current === 'ru' ? 'en' : 'ru'
 
+  const avatar = (
+    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary">
+      {userInitials(email)}
+    </span>
+  )
+  const identity = (
+    <div className="grid min-w-0 flex-1 text-left leading-tight">
+      <span className="truncate text-sm font-medium">{email}</span>
+      <span className="truncate text-xs text-muted-foreground">{roleLabel}</span>
+    </div>
+  )
+
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={() => void i18n.changeLanguage(next)}
-      aria-label={t('header.switchLanguage')}
-    >
-      <Languages aria-hidden="true" />
-      {current.toUpperCase()}
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        {compact ? (
+          <button
+            type="button"
+            aria-label={email}
+            className="flex items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {avatar}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-lg p-2 outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {avatar}
+            {identity}
+            <MoreVertical
+              className="size-4 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+          </button>
+        )}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side={compact ? 'bottom' : 'right'}
+        align="end"
+        sideOffset={compact ? 8 : 12}
+        className="min-w-56"
+      >
+        <div className="flex items-center gap-2 p-1.5">
+          {avatar}
+          {identity}
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
+            toggleTheme()
+          }}
+        >
+          {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+          {theme === 'dark' ? t('header.themeLight') : t('header.themeDark')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
+            void i18n.changeLanguage(next)
+          }}
+        >
+          <Languages aria-hidden="true" />
+          {next === 'ru' ? 'Русский' : 'English'}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onSelect={() => logoutMutation.mutate()}>
+          <LogOut aria-hidden="true" />
+          {t('header.logout')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

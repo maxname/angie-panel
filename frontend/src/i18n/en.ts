@@ -67,6 +67,8 @@ export const en = {
   header: {
     toggleTheme: 'Toggle theme',
     switchLanguage: 'Switch language',
+    themeDark: 'Dark theme',
+    themeLight: 'Light theme',
     logout: 'Log out',
   },
   login: {
