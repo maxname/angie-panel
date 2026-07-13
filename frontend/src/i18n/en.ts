@@ -484,21 +484,35 @@ export const en = {
   dnsProviders: {
     title: 'DNS Providers',
     subtitle:
-      'API credentials for automatic DNS-01 wildcard certificates. Configure one or more providers — the panel creates the _acme-challenge TXT record via the provider’s API (acme.sh under the hood), so no NS delegation and no UDP/53. Pick a provider per certificate in the certificate wizard.',
-    summary: 'Configured providers: {{count}}',
+      'Credential profiles for automatic DNS-01 wildcard certificates. Add a profile per account — several of the same provider are fine (e.g. two Cloudflare tokens). The panel creates the _acme-challenge TXT via the provider’s API (acme.sh under the hood), so no NS delegation and no UDP/53. Each certificate picks a profile in the wizard.',
+    add: 'Add profile',
     loadFailed: 'Failed to load DNS providers',
-    table: { provider: 'Provider', status: 'Status', actions: 'Actions' },
+    empty: 'No provider profiles yet. Add one to issue wildcard certificates automatically.',
+    table: {
+      name: 'Name',
+      provider: 'Provider',
+      status: 'Status',
+      actions: 'Actions',
+    },
     status: { configured: 'Configured', notConfigured: 'Not configured' },
-    configure: 'Configure',
     edit: 'Edit',
-    disconnect: 'Disconnect',
-    saved: 'Credentials saved',
+    delete: 'Delete',
+    saved: 'Profile saved',
+    deleted: 'Profile deleted',
+    actionFailed: 'Action failed',
     editor: {
-      title: '{{provider}} credentials',
+      createTitle: 'Add DNS provider profile',
+      editTitle: 'Edit “{{name}}”',
       hint: 'Enter this provider’s API credentials. Enable API access with your provider first.',
-      secretNote:
-        'Stored write-only — never shown again or included in backups.',
-      save: 'Save',
+      provider: 'Provider',
+      name: 'Profile name',
+      namePlaceholder: 'e.g. Cloudflare — work',
+      secretNote: 'Stored write-only — never shown again or included in backups.',
+      create: 'Add profile',
+    },
+    deleteDialog: {
+      title: 'Delete profile?',
+      body: 'This removes the “{{name}}” credential profile. Detach it from any certificate first.',
     },
   },
   certificates: {
@@ -577,8 +591,10 @@ export const en = {
       dnsMethodProviderHint:
         'The panel creates the TXT record via your DNS provider’s API. Fully automatic, works behind NAT — no UDP/53.',
       provider: 'Provider',
+      noProviders:
+        'No provider profiles yet — add one on the DNS Providers page first.',
       providerNotConfigured:
-        '{{provider}} credentials aren’t set yet. Add them in Settings → DNS providers, then this will just work.',
+        '“{{provider}}” has no credentials yet. Set them on the DNS Providers page, then this will just work.',
       keyType: 'Key type',
       email: 'Contact email (optional)',
       emailPlaceholder: 'admin@example.com',

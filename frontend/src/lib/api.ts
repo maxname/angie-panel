@@ -488,18 +488,27 @@ export interface SettingsResponse {
 
 export type AcmeChallenge = 'http' | 'dns' | 'alpn'
 
-/** One credential field a DNS provider needs (maps to an acme.sh env var). */
+/** One credential field a DNS provider type needs (maps to an acme.sh env var). */
 export interface DnsProviderField {
   env: string
   label: string
 }
 
-/** A DNS-01 provider from the registry (acme.sh dnsapi under the hood). */
+/** A DNS-01 provider TYPE from the registry (acme.sh dnsapi under the hood). */
 export interface DnsProviderInfo {
   id: string
   label: string
   fields: DnsProviderField[]
-  /** Whether all its credentials are stored. */
+}
+
+/** A named credential profile — one account of a provider type. Several of the
+ *  same type may coexist. A certificate references a profile by its id. */
+export interface DnsCredentialProfile {
+  id: number
+  /** Provider type id (e.g. "cloudflare"). */
+  provider: string
+  provider_label: string
+  name: string
   configured: boolean
 }
 
@@ -949,16 +958,27 @@ export const api = {
   updateSettings: (body: Record<string, string>) =>
     request<SettingsResponse>('PUT', '/api/settings', body),
 
+  /** The static registry of provider TYPES (for the "add profile" form). */
   listDnsProviders: () =>
     request<{ providers: DnsProviderInfo[] }>('GET', '/api/dns-providers'),
 
-  /** Save (or clear, with empty values) a provider's credentials. */
-  setDnsProviderCredentials: (id: string, credentials: Record<string, string>) =>
-    request<{ ok: true; configured: boolean }>(
-      'PUT',
-      `/api/dns-providers/${id}/credentials`,
-      { credentials },
-    ),
+  /** The operator's credential profiles (several per type possible). */
+  listDnsCredentials: () =>
+    request<{ credentials: DnsCredentialProfile[] }>('GET', '/api/dns-credentials'),
+
+  createDnsCredential: (body: {
+    provider: string
+    name: string
+    credentials: Record<string, string>
+  }) => request<DnsCredentialProfile>('POST', '/api/dns-credentials', body),
+
+  updateDnsCredential: (
+    id: number,
+    body: { name?: string; credentials?: Record<string, string> },
+  ) => request<DnsCredentialProfile>('PUT', `/api/dns-credentials/${id}`, body),
+
+  deleteDnsCredential: (id: number) =>
+    request<OkResponse>('DELETE', `/api/dns-credentials/${id}`),
 
   listCertificates: () =>
     request<{ certificates: Cert[] }>('GET', '/api/certificates'),

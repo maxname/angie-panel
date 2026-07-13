@@ -48,7 +48,7 @@ import {
   type Cert,
   type CertInput,
   type CertPrecheck,
-  type DnsProviderInfo,
+  type DnsCredentialProfile,
 } from '@/lib/api'
 import { isValidDomain } from '@/lib/domain'
 import { toast } from '@/lib/toast'
@@ -422,11 +422,11 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
     staging: false,
     dns_provider: null,
   })
-  const providersQuery = useQuery({
-    queryKey: ['dns-providers'],
-    queryFn: () => api.listDnsProviders(),
+  const profilesQuery = useQuery({
+    queryKey: ['dns-credentials'],
+    queryFn: () => api.listDnsCredentials(),
   })
-  const providers = providersQuery.data?.providers ?? []
+  const profiles = profilesQuery.data?.credentials ?? []
   const [domainDraft, setDomainDraft] = useState('')
   const [domainError, setDomainError] = useState<string | null>(null)
   const [clientErrors, setClientErrors] = useState<WizardFieldErrors>({})
@@ -440,10 +440,11 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
   const hasWildcard = form.domains.some((domain) => domain.startsWith('*.'))
   const effectiveChallenge: AcmeChallenge = hasWildcard ? 'dns' : form.challenge
   const usingDns = effectiveChallenge === 'dns'
-  // The provider only applies to DNS-01; ignore any stray choice otherwise.
+  // The provider profile only applies to DNS-01; ignore any stray choice
+  // otherwise. dns_provider holds a credential-profile id (as a string).
   const effectiveDnsProvider: string | null = usingDns ? form.dns_provider : null
-  const selectedProvider: DnsProviderInfo | undefined = providers.find(
-    (p) => p.id === form.dns_provider,
+  const selectedProfile: DnsCredentialProfile | undefined = profiles.find(
+    (p) => String(p.id) === form.dns_provider,
   )
 
   const precheckMutation = useMutation({
@@ -716,14 +717,21 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
                 name="cert-dns-method"
                 className="mt-0.5 size-4 accent-primary"
                 checked={form.dns_provider !== null}
+                disabled={profiles.length === 0}
                 onChange={() =>
-                  patch({ dns_provider: form.dns_provider ?? providers[0]?.id ?? null })
+                  patch({
+                    dns_provider:
+                      form.dns_provider ??
+                      (profiles[0] ? String(profiles[0].id) : null),
+                  })
                 }
               />
               <span className="text-sm">
                 {t('certificates.wizard.dnsMethodProvider')}
                 <span className="block text-xs text-muted-foreground">
-                  {t('certificates.wizard.dnsMethodProviderHint')}
+                  {profiles.length === 0
+                    ? t('certificates.wizard.noProviders')
+                    : t('certificates.wizard.dnsMethodProviderHint')}
                 </span>
               </span>
             </label>
@@ -741,20 +749,20 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {providers.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.label}
+                  {profiles.map((p) => (
+                    <SelectItem key={p.id} value={String(p.id)}>
+                      {p.name} — {p.provider_label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {selectedProvider && !selectedProvider.configured && (
+              {selectedProfile && !selectedProfile.configured && (
                 <p
                   role="alert"
                   className="text-sm text-amber-600 dark:text-amber-500"
                 >
                   {t('certificates.wizard.providerNotConfigured', {
-                    provider: selectedProvider.label,
+                    provider: selectedProfile.name,
                   })}
                 </p>
               )}

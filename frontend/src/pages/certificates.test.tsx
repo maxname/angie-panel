@@ -124,16 +124,21 @@ describe('certificate wizard', () => {
     ).toBeInTheDocument()
   })
 
-  it('offers the DNS-provider method with a picker and warns when unconfigured', async () => {
+  it('offers the DNS-provider method with a profile picker and warns when unconfigured', async () => {
     const user = userEvent.setup()
-    // /api/dns-providers → Cloudflare (unconfigured) + reg.ru.
+    // /api/dns-credentials → one profile, not yet configured.
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
         jsonResponse({
-          providers: [
-            { id: 'cloudflare', label: 'Cloudflare', fields: [], configured: false },
-            { id: 'regru', label: 'reg.ru', fields: [], configured: false },
+          credentials: [
+            {
+              id: 5,
+              provider: 'cloudflare',
+              provider_label: 'Cloudflare',
+              name: 'CF work',
+              configured: false,
+            },
           ],
         }),
       ),
@@ -148,10 +153,10 @@ describe('certificate wizard', () => {
     const provider = screen.getByRole('radio', { name: /DNS provider API/ })
     expect(self).toBeChecked()
 
-    // Choosing the provider reveals the picker (defaults to the first provider),
-    // and an unconfigured one surfaces the setup hint.
+    // Choosing the provider reveals the profile picker (defaults to the first
+    // profile), and an unconfigured one surfaces the setup hint (by profile name).
     await user.click(provider)
     expect(provider).toBeChecked()
-    expect(await screen.findByText(/Cloudflare credentials aren.t set/i)).toBeInTheDocument()
+    expect(await screen.findByText(/CF work.*has no credentials/i)).toBeInTheDocument()
   })
 })
