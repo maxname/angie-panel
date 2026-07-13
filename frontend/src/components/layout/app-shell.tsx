@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useRouter } from '@tanstack/react-router'
 import {
   Cloud,
@@ -25,7 +25,6 @@ import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { Toaster } from '@/components/ui/toaster'
 import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
@@ -85,7 +84,7 @@ export function AppShell() {
           <Waypoints className="size-5" aria-hidden="true" />
           {t('app.name')}
         </div>
-        <nav className="flex flex-col gap-4 p-3">
+        <nav className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
           {NAV_SECTIONS.map((section) => {
             const items = section.items.filter(
               (item) => isAdmin || !('adminOnly' in item),
@@ -116,9 +115,10 @@ export function AppShell() {
             )
           })}
         </nav>
+        <SidebarFooter />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <AppHeader />
+        <MobileHeader />
         <main className="flex-1 p-4 lg:p-6">
           {me?.role === 'viewer' && (
             <div
@@ -136,47 +136,40 @@ export function AppShell() {
   )
 }
 
-function AppHeader() {
-  const { t } = useTranslation()
+function useLogout() {
   const router = useRouter()
   const queryClient = useQueryClient()
-
-  const meQuery = useQuery({
-    queryKey: ['auth', 'me'],
-    queryFn: () => api.me(),
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-  })
-
-  const logoutMutation = useMutation({
+  return useMutation({
     mutationFn: () => api.logout(),
     onSettled: () => {
       queryClient.clear()
       void router.navigate({ to: '/login' })
     },
   })
+}
+
+/** Bottom of the sidebar (desktop): who you are + session controls. */
+function SidebarFooter() {
+  const { t } = useTranslation()
+  const { data: me } = useMe()
+  const logoutMutation = useLogout()
 
   return (
-    <header className="flex h-14 items-center justify-between gap-2 border-b px-4 lg:px-6">
-      <div className="flex items-center gap-2 font-semibold md:hidden">
-        <Waypoints className="size-5" aria-hidden="true" />
-        {t('app.name')}
-      </div>
-      <div className="hidden font-semibold md:block">{t('app.name')}</div>
+    <div className="mt-auto flex flex-col gap-2 border-t p-3">
+      {me !== undefined && (
+        <div className="flex min-w-0 items-center gap-2 px-1 text-sm">
+          <span className="truncate text-muted-foreground">{me.email}</span>
+          {me.role === 'viewer' && (
+            <Badge variant="outline" className="shrink-0 text-xs">
+              {t('users.roles.viewer')}
+            </Badge>
+          )}
+        </div>
+      )}
       <div className="flex items-center gap-1">
-        {meQuery.data !== undefined && (
-          <span className="mr-2 hidden items-center gap-2 text-sm text-muted-foreground sm:inline-flex">
-            {meQuery.data.email}
-            {meQuery.data.role === 'viewer' && (
-              <Badge variant="outline" className="text-xs">
-                {t('users.roles.viewer')}
-              </Badge>
-            )}
-          </span>
-        )}
         <LanguageToggle />
         <ThemeToggle />
-        <Separator orientation="vertical" className="mx-1 h-6" />
+        <div className="flex-1" />
         <Button
           variant="ghost"
           size="sm"
@@ -185,6 +178,35 @@ function AppHeader() {
         >
           <LogOut aria-hidden="true" />
           {t('header.logout')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** The sidebar is hidden on mobile, so a compact top bar carries the app name
+ *  and session controls there. */
+function MobileHeader() {
+  const { t } = useTranslation()
+  const logoutMutation = useLogout()
+
+  return (
+    <header className="flex h-14 items-center justify-between gap-2 border-b px-4 md:hidden">
+      <div className="flex items-center gap-2 font-semibold">
+        <Waypoints className="size-5" aria-hidden="true" />
+        {t('app.name')}
+      </div>
+      <div className="flex items-center gap-1">
+        <LanguageToggle />
+        <ThemeToggle />
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t('header.logout')}
+          onClick={() => logoutMutation.mutate()}
+          disabled={logoutMutation.isPending}
+        >
+          <LogOut aria-hidden="true" />
         </Button>
       </div>
     </header>
