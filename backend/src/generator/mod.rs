@@ -604,13 +604,15 @@ fn gen_acme(input: &GeneratorInput) -> String {
         // Provider DNS-01: Angie calls this named location on each add/remove
         // step; it proxies to the panel's ACME hook, which creates/deletes the
         // _acme-challenge TXT via the provider API. Verified on real Angie.
-        if cert.dns_provider.is_some() {
+        if let Some(provider) = &cert.dns_provider {
             let _ = writeln!(out, "    location @acme_hook_location {{");
             let _ = writeln!(out, "        acme_hook {};", cert.name);
+            // The provider id in the URL tells the hook which acme.sh plugin +
+            // stored credentials to use. It is a validated registry id (safe).
             let _ = writeln!(
                 out,
-                "        proxy_pass http://{}/acme/hook?t={};",
-                input.acme_hook_target, input.acme_hook_token
+                "        proxy_pass http://{}/acme/hook?t={}&provider={};",
+                input.acme_hook_target, input.acme_hook_token, provider
             );
             let _ = writeln!(out, "        proxy_set_header X-Acme-Hook $acme_hook_name;");
             let _ = writeln!(

@@ -1106,32 +1106,12 @@ impl Challenge {
     }
 }
 
-/// How a DNS-01 challenge is fulfilled. `None` (the default) = Angie answers the
-/// validation query itself (`acme_dns_port` + NS delegation). A provider means
-/// Angie calls the panel's ACME hook, which creates the `_acme-challenge` TXT
-/// record via the provider's API — no NS delegation, no inbound UDP/53. This is
-/// what makes automatic wildcard work behind NAT / on a home connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DnsProvider {
-    /// reg.ru — TXT records managed via its API (zone/add_txt, zone/remove_record).
-    Regru,
-}
-
-impl DnsProvider {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DnsProvider::Regru => "regru",
-        }
-    }
-
-    pub fn from_stored(s: &str) -> Option<Self> {
-        match s {
-            "regru" => Some(DnsProvider::Regru),
-            _ => None,
-        }
-    }
-}
+// DNS-01 provider (for automatic wildcard) is stored on the certificate as a
+// provider id string (e.g. "cloudflare", "regru"), validated against the
+// [`crate::dns_providers`] registry. `None` = Angie answers the DNS query itself
+// (`acme_dns_port` + NS delegation). A provider means Angie calls the panel's
+// ACME hook, which creates the `_acme-challenge` TXT via that provider's acme.sh
+// dnsapi plugin — no NS delegation, no inbound UDP/53 (works behind NAT).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1163,7 +1143,7 @@ pub struct Certificate {
     /// For a DNS-01 cert: which provider API fulfils the challenge (via the
     /// ACME hook). `None` = Angie answers DNS itself (NS delegation).
     #[serde(default)]
-    pub dns_provider: Option<DnsProvider>,
+    pub dns_provider: Option<String>,
     pub created_at: i64,
 }
 
@@ -1180,7 +1160,7 @@ pub struct CertificateInput {
     #[serde(default)]
     pub staging: bool,
     #[serde(default)]
-    pub dns_provider: Option<DnsProvider>,
+    pub dns_provider: Option<String>,
 }
 
 fn default_challenge() -> Challenge {
@@ -1244,9 +1224,19 @@ pub fn validate_cert_input(mut input: CertificateInput) -> Result<CertificateInp
     }
 
     // A DNS provider (hook-based TXT) only makes sense for DNS-01. Drop a stray
-    // provider on http/alpn so it can't linger and change generation later.
+    // provider on http/alpn so it can't linger and change generation later; when
+    // set, it must be a known provider from the registry.
     if input.challenge != Challenge::Dns {
         input.dns_provider = None;
+    } else if let Some(p) = &input.dns_provider {
+        if p.is_empty() {
+            input.dns_provider = None;
+        } else if !crate::dns_providers::is_valid(p) {
+            return Err(bad(
+                "invalid_dns_provider",
+                format!("'{p}' is not a supported DNS provider"),
+            ));
+        }
     }
 
     if let Some(email) = &input.email {

@@ -19,12 +19,10 @@ pub const KEY_ACME_EMAIL: &str = "acme_email";
 pub const KEY_GEO_MODE: &str = "geo_mode"; // off|deny|allow
 pub const KEY_GEO_COUNTRIES: &str = "geo_countries"; // JSON array of ISO codes
 
-/// reg.ru API credentials for DNS-01-via-hook wildcard issuance. Secrets: never
-/// returned by the settings GET (only a "configured" flag is), never exported.
-pub const KEY_REGRU_USERNAME: &str = "regru_username";
-pub const KEY_REGRU_PASSWORD: &str = "regru_password";
 /// Random shared secret the ACME hook proxy_pass carries; the panel's hook
 /// endpoint rejects requests without it. Auto-generated, not user-editable.
+/// (Per-provider DNS credentials are stored under `dns_cred:*` keys — see
+/// [`crate::dns_providers`] — and redacted like this one.)
 pub const KEY_ACME_HOOK_TOKEN: &str = "acme_hook_token";
 /// hosts_revision that is currently live (set after each successful apply).
 /// Lets the reconciler distinguish external cert-readiness changes from
@@ -252,7 +250,7 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
             key_type: c.key_type.as_str().to_string(),
             email: c.email,
             staging: c.staging,
-            dns_provider: c.dns_provider.map(|p| p.as_str().to_string()),
+            dns_provider: c.dns_provider,
             // Pause/enabled toggle is a follow-up UI action; default on.
             enabled: true,
         })

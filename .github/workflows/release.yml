@@ -91,6 +91,12 @@ jobs:
       - name: Build GeoIP dataset
         run: ./scripts/build-geoip-data.sh backend/data/geoip-countries.csv || echo "geoip build failed; shipping fixture"
 
+      # Vendor acme.sh core + the supported dnsapi plugins so the .deb ships the
+      # DNS-01 provider hook's runtime. Pinned tag; fails the build if unavailable
+      # (unlike geoip, the provider hook is non-functional without these).
+      - name: Vendor acme.sh dnsapi plugins
+        run: ./scripts/vendor-acme-dnsapi.sh packaging/acme.sh
+
       - name: Build release binary (cargo-zigbuild)
         working-directory: backend
         run: cargo zigbuild --release --target ${{ matrix.target }}

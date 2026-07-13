@@ -17,6 +17,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         // exempt from CSRF/role via security::is_acme_hook). GET and POST since
         // the ACME module's internal subrequest method isn't contractual.
         .route("/acme/hook", get(acme_hook::hook).post(acme_hook::hook))
+        .route("/dns-providers", get(acme_hook::list_providers))
+        .route(
+            "/dns-providers/{id}/credentials",
+            axum::routing::put(acme_hook::set_credentials),
+        )
         .route("/auth/setup", post(auth::setup))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))

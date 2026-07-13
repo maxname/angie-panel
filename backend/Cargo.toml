@@ -49,7 +49,7 @@ strip = true
 # --- cargo-deb (packaging/ carries the referenced assets) ---
 [package.metadata.deb]
 maintainer = "Angie Panel contributors"
-depends = "angie (>= 1.11), dbus, polkitd"
+depends = "angie (>= 1.11), dbus, polkitd, bash, curl"
 section = "admin"
 priority = "optional"
 conf-files = ["/etc/angie-panel.toml"]
@@ -70,4 +70,10 @@ assets = [
     # with the full public-domain dataset before cargo-deb packages it.
     ["data/geoip-countries.csv", "usr/share/angie-panel/geoip-countries.csv", "644"],
     ["../packaging/tmpfiles/angie-panel.conf", "usr/lib/tmpfiles.d/", "644"],
+    # Vendored acme.sh core + the dnsapi plugins used by the DNS-01 provider hook
+    # (GPLv3, redistributed unmodified). Not committed — release.yml runs
+    # scripts/vendor-acme-dnsapi.sh to populate packaging/acme.sh/ before cargo-deb.
+    ["../packaging/acme.sh/acme.sh", "usr/share/angie-panel/acme.sh/acme.sh", "755"],
+    ["../packaging/acme.sh/dnsapi/*.sh", "usr/share/angie-panel/acme.sh/dnsapi/", "644"],
+    ["../packaging/acme.sh/VENDOR.txt", "usr/share/angie-panel/acme.sh/VENDOR.txt", "644"],
 ]

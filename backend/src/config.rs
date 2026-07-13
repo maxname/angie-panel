@@ -63,6 +63,10 @@ pub struct AngieConfig {
     /// Shipped by the package; (re)built by scripts/build-geoip-data.sh.
     #[serde(default = "default_geoip_data")]
     pub geoip_data: PathBuf,
+    /// Directory holding the vendored acme.sh core (`acme.sh`) + its `dnsapi/`
+    /// plugins, used by the DNS-01 provider hook. Shipped by the package.
+    #[serde(default = "default_acme_sh_dir")]
+    pub acme_sh_dir: PathBuf,
 }
 
 impl Default for AngieConfig {
@@ -76,8 +80,13 @@ impl Default for AngieConfig {
             snippets_dir: default_snippets_dir(),
             acme_socket_dir: default_acme_socket_dir(),
             geoip_data: default_geoip_data(),
+            acme_sh_dir: default_acme_sh_dir(),
         }
     }
+}
+
+fn default_acme_sh_dir() -> PathBuf {
+    "/usr/share/angie-panel/acme.sh".into()
 }
 
 fn default_snippets_dir() -> PathBuf {

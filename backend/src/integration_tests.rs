@@ -801,6 +801,81 @@ async fn acme_hook_requires_a_valid_token() {
 }
 
 #[tokio::test]
+async fn dns_providers_registry_and_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // The registry lists providers, all initially unconfigured.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/dns-providers",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    let providers = body["providers"].as_array().unwrap();
+    let cf = providers.iter().find(|p| p["id"] == "cloudflare").unwrap();
+    assert_eq!(cf["configured"], json!(false));
+    assert!(providers.iter().any(|p| p["id"] == "regru"));
+
+    // Saving credentials flips "configured".
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/dns-providers/cloudflare/credentials",
+            Some(json!({"credentials": {"CF_Token": "secret-token"}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["configured"], json!(true));
+
+    // Unknown provider → 404; unknown field → 400.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/dns-providers/nope/credentials",
+            Some(json!({"credentials": {"X": "y"}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/dns-providers/cloudflare/credentials",
+            Some(json!({"credentials": {"BOGUS": "y"}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // The stored credential is NEVER surfaced by the settings GET.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/settings", None, Some(&cookie)))
+        .await
+        .unwrap();
+    let settings = body_json(res).await;
+    let raw = settings["raw"].as_object().unwrap();
+    assert!(
+        !raw.keys().any(|k| k.starts_with("dns_cred:")),
+        "provider credentials must not leak in settings, got {raw:?}"
+    );
+}
+
+#[tokio::test]
 async fn sni_router_crud_conflict_and_preview() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

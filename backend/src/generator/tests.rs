@@ -237,7 +237,7 @@ fn golden_acme_dns_provider_hook() {
     );
     assert!(acme.contains("location @acme_hook_location"));
     assert!(acme.contains("acme_hook web;"));
-    assert!(acme.contains("proxy_pass http://127.0.0.1:8080/acme/hook?t=testtoken;"));
+    assert!(acme.contains("proxy_pass http://127.0.0.1:8080/acme/hook?t=testtoken&provider=regru;"));
     assert!(acme.contains("proxy_set_header X-Acme-Keyauth $acme_hook_keyauth;"));
     assert_golden("10-acme-hook.conf", acme);
     // The hook's loopback proxy_pass must pass the linter (it is exempt as a

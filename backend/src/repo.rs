@@ -7,9 +7,9 @@ use sqlx::SqlitePool;
 
 use crate::db::now_epoch;
 use crate::model::{
-    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, DnsProvider,
-    ErrorPages, ForwardAuth, Gzip, KeyType, Maintenance, Mtls, ProxyHost, ProxyHostInput,
-    RateLimit, Scheme, Upstream,
+    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, ErrorPages,
+    ForwardAuth, Gzip, KeyType, Maintenance, Mtls, ProxyHost, ProxyHostInput, RateLimit, Scheme,
+    Upstream,
 };
 
 // ------------------------------------------------------------------- rows
@@ -953,10 +953,7 @@ impl CertRow {
             key_type: key_type_from_str(&self.key_type),
             email: self.email,
             staging: self.staging != 0,
-            dns_provider: self
-                .dns_provider
-                .as_deref()
-                .and_then(DnsProvider::from_stored),
+            dns_provider: self.dns_provider,
             created_at: self.created_at,
         })
     }
@@ -1003,7 +1000,7 @@ pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::R
     .bind(input.key_type.as_str())
     .bind(input.email.as_deref())
     .bind(input.staging as i64)
-    .bind(input.dns_provider.map(|p| p.as_str()))
+    .bind(input.dns_provider.as_deref())
     .bind(now_epoch())
     .fetch_one(db)
     .await?;
@@ -1069,7 +1066,7 @@ pub async fn import_replace(
         .bind(c.key_type.as_str())
         .bind(c.email.as_deref())
         .bind(c.staging as i64)
-        .bind(c.dns_provider.map(|p| p.as_str()))
+        .bind(c.dns_provider.as_deref())
         .bind(now)
         .execute(&mut *tx)
         .await?;
