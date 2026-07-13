@@ -526,11 +526,11 @@ export const en = {
     add: 'Add certificate',
     loadFailed: 'Failed to load certificates',
     empty:
-      'No certificates yet. Add one, attach it to a proxy host, and Apply to start issuance.',
+      'No certificates yet. Add one and Apply to start issuance — attach it to a host later to serve HTTPS.',
     actionFailed: 'Action failed',
     info: {
       title: 'Certificates are issued by Angie itself (built-in ACME — no certbot)',
-      body: 'A certificate starts issuing after you attach it to a proxy host and Apply. HTTPS for that host activates once issuance completes.',
+      body: 'Issuance starts as soon as you Apply — you don’t need to attach the certificate to a host first. Attaching it to a proxy host is what turns on HTTPS for that host, once issuance completes.',
     },
     table: {
       name: 'Name',
@@ -573,7 +573,7 @@ export const en = {
     wizard: {
       title: 'Add certificate',
       description:
-        'Angie requests this certificate over ACME once you attach it to a proxy host and Apply.',
+        'Angie requests this certificate over ACME as soon as you Apply. Attach it to a proxy host to serve HTTPS.',
       editTitle: 'Edit certificate',
       editDescription:
         'Changes take effect on the next Apply. Any host using this certificate stays attached.',
@@ -618,7 +618,7 @@ export const en = {
       createFailed: 'Could not create certificate',
       createdToastTitle: 'Certificate created',
       createdToastBody:
-        'Attach it to a proxy host and Apply to start issuance.',
+        'Apply to start issuance. Attach it to a proxy host to serve HTTPS.',
       updatedToastTitle: 'Certificate updated',
       updatedToastBody: 'Apply to write the change and re-issue if needed.',
     },
