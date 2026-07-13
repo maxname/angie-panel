@@ -3,7 +3,7 @@
 > Рабочее название проекта. [English version below.](#english)
 
 ![status: M4 feature-complete](https://img.shields.io/badge/status-M4_feature--complete-brightgreen)
-![license: TBD](https://img.shields.io/badge/license-TBD-lightgrey)
+![license: MIT](https://img.shields.io/badge/license-MIT-blue)
 
 **Angie Panel** — веб-конфигуратор reverse-proxy на базе [Angie](https://angie.software/): аналог nginx-proxy-manager, но нативный systemd-сервис без Docker и с сертификатами через встроенный ACME-модуль Angie.
 
@@ -74,7 +74,9 @@ sudo bash install.sh
 
 ## Лицензия
 
-TBD.
+[MIT](LICENSE). Вендоренный `acme.sh` (в `.deb` для DNS-01 через API провайдеров)
+распространяется под собственной лицензией GPLv3 как отдельные скрипты — панель лишь
+вызывает их как подпроцесс.
 
 ---
 
@@ -120,4 +122,5 @@ See [PLAN.md](PLAN.md) §10.
 
 Roadmap: **M0** skeleton & privilege model → **M1** proxy hosts & apply pipeline → **M2** certificates via built-in ACME → **M3** live dashboard & drift detection → **M4** v1.0 release (export/import, docs, signed artifacts). See [PLAN.md](PLAN.md) §10.
 
-License: TBD.
+License: [MIT](LICENSE). The vendored `acme.sh` (bundled in the `.deb` for DNS-01 via
+provider APIs) keeps its own GPLv3 license as separate scripts invoked as a subprocess.

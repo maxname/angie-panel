@@ -3,7 +3,7 @@ name = "angie-panel"
 version = "0.1.0"
 edition = "2021"
 description = "Web configurator for the Angie reverse proxy (nginx-proxy-manager analog, native systemd service)"
-license = "UNLICENSED"
+license = "MIT"
 authors = ["Angie Panel contributors"]
 
 [dependencies]
