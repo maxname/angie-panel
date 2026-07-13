@@ -48,7 +48,7 @@ import {
   type Cert,
   type CertInput,
   type CertPrecheck,
-  type DnsProvider,
+  type DnsProviderInfo,
 } from '@/lib/api'
 import { isValidDomain } from '@/lib/domain'
 import { toast } from '@/lib/toast'
@@ -390,8 +390,9 @@ interface WizardState {
   key_type: AcmeKeyType
   email: string
   staging: boolean
-  /** For DNS-01: 'regru' = automatic via reg.ru API; null = Angie self-answers. */
-  dns_provider: DnsProvider | null
+  /** For DNS-01: a provider id = automatic via that provider's API; null = Angie
+   *  self-answers (NS delegation). */
+  dns_provider: string | null
 }
 
 const CHALLENGE_OPTIONS: { value: AcmeChallenge; labelKey: string }[] = [
@@ -421,11 +422,11 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
     staging: false,
     dns_provider: null,
   })
-  const settingsQuery = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => api.getSettings(),
+  const providersQuery = useQuery({
+    queryKey: ['dns-providers'],
+    queryFn: () => api.listDnsProviders(),
   })
-  const regruConfigured = settingsQuery.data?.regru_configured ?? false
+  const providers = providersQuery.data?.providers ?? []
   const [domainDraft, setDomainDraft] = useState('')
   const [domainError, setDomainError] = useState<string | null>(null)
   const [clientErrors, setClientErrors] = useState<WizardFieldErrors>({})
@@ -440,9 +441,10 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
   const effectiveChallenge: AcmeChallenge = hasWildcard ? 'dns' : form.challenge
   const usingDns = effectiveChallenge === 'dns'
   // The provider only applies to DNS-01; ignore any stray choice otherwise.
-  const effectiveDnsProvider: DnsProvider | null = usingDns
-    ? form.dns_provider
-    : null
+  const effectiveDnsProvider: string | null = usingDns ? form.dns_provider : null
+  const selectedProvider: DnsProviderInfo | undefined = providers.find(
+    (p) => p.id === form.dns_provider,
+  )
 
   const precheckMutation = useMutation({
     mutationFn: (id: number) => api.precheckCertificate(id),
@@ -705,29 +707,55 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
               </span>
             </label>
             <label
-              htmlFor="cert-dns-regru"
+              htmlFor="cert-dns-provider"
               className="flex cursor-pointer items-start gap-3"
             >
               <input
                 type="radio"
-                id="cert-dns-regru"
+                id="cert-dns-provider"
                 name="cert-dns-method"
                 className="mt-0.5 size-4 accent-primary"
-                checked={form.dns_provider === 'regru'}
-                onChange={() => patch({ dns_provider: 'regru' })}
+                checked={form.dns_provider !== null}
+                onChange={() =>
+                  patch({ dns_provider: form.dns_provider ?? providers[0]?.id ?? null })
+                }
               />
               <span className="text-sm">
-                {t('certificates.wizard.dnsMethodRegru')}
+                {t('certificates.wizard.dnsMethodProvider')}
                 <span className="block text-xs text-muted-foreground">
-                  {t('certificates.wizard.dnsMethodRegruHint')}
+                  {t('certificates.wizard.dnsMethodProviderHint')}
                 </span>
               </span>
             </label>
           </div>
-          {form.dns_provider === 'regru' && !regruConfigured && (
-            <p role="alert" className="text-sm text-amber-600 dark:text-amber-500">
-              {t('certificates.wizard.regruNotConfigured')}
-            </p>
+          {form.dns_provider !== null && (
+            <div className="space-y-2 pl-7">
+              <Label htmlFor="cert-dns-provider-select">
+                {t('certificates.wizard.provider')}
+              </Label>
+              <select
+                id="cert-dns-provider-select"
+                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-sm"
+                value={form.dns_provider}
+                onChange={(e) => patch({ dns_provider: e.target.value })}
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              {selectedProvider && !selectedProvider.configured && (
+                <p
+                  role="alert"
+                  className="text-sm text-amber-600 dark:text-amber-500"
+                >
+                  {t('certificates.wizard.providerNotConfigured', {
+                    provider: selectedProvider.label,
+                  })}
+                </p>
+              )}
+            </div>
           )}
         </fieldset>
       )}

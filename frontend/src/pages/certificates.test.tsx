@@ -124,13 +124,18 @@ describe('certificate wizard', () => {
     ).toBeInTheDocument()
   })
 
-  it('offers the reg.ru DNS method and warns when it is not configured', async () => {
+  it('offers the DNS-provider method with a picker and warns when unconfigured', async () => {
     const user = userEvent.setup()
-    // getSettings → reg.ru not configured; other calls unused here.
+    // /api/dns-providers → Cloudflare (unconfigured) + reg.ru.
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
-        jsonResponse({ raw: {}, regru_configured: false, effective: {} }),
+        jsonResponse({
+          providers: [
+            { id: 'cloudflare', label: 'Cloudflare', fields: [], configured: false },
+            { id: 'regru', label: 'reg.ru', fields: [], configured: false },
+          ],
+        }),
       ),
     )
     renderWizard()
@@ -138,16 +143,15 @@ describe('certificate wizard', () => {
     await user.type(screen.getByLabelText('Domains'), '*.example.com')
     await user.click(screen.getByRole('button', { name: 'Add' }))
 
-    // The DNS-method choice appears; self-answer is the default.
+    // Self-answer is the default; the provider option is offered.
     const self = screen.getByRole('radio', { name: /Angie answers/ })
-    const regru = screen.getByRole('radio', { name: /reg\.ru API/ })
+    const provider = screen.getByRole('radio', { name: /DNS provider API/ })
     expect(self).toBeChecked()
 
-    // Choosing reg.ru while creds are unset surfaces the setup hint.
-    await user.click(regru)
-    expect(regru).toBeChecked()
-    expect(
-      await screen.findByText(/reg\.ru credentials aren.t set yet/i),
-    ).toBeInTheDocument()
+    // Choosing the provider reveals the picker (defaults to the first provider),
+    // and an unconfigured one surfaces the setup hint.
+    await user.click(provider)
+    expect(provider).toBeChecked()
+    expect(await screen.findByText(/Cloudflare credentials aren.t set/i)).toBeInTheDocument()
   })
 })

@@ -172,9 +172,14 @@ pub async fn history(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiRes
 // ----------------------------------------------------------------- settings
 
 /// Is this settings key a secret — never returned by the GET, never exported?
-/// The ACME hook token and every DNS provider credential (`dns_cred:*`).
+/// The ACME hook token, every DNS provider credential (`dns_cred:*`), and the
+/// legacy reg.ru keys from before the multi-provider registry (redacted so an
+/// upgraded install never leaks stale credentials).
 pub fn is_secret_setting(key: &str) -> bool {
-    key == settings::KEY_ACME_HOOK_TOKEN || crate::dns_providers::is_cred_key(key)
+    key == settings::KEY_ACME_HOOK_TOKEN
+        || crate::dns_providers::is_cred_key(key)
+        || key == "regru_username"
+        || key == "regru_password"
 }
 
 pub async fn get_settings(

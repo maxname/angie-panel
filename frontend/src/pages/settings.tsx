@@ -81,7 +81,7 @@ export function SettingsPage() {
       ) : (
         <>
           <SettingsForm data={settingsQuery.data} />
-          <RegruCredentials configured={settingsQuery.data.regru_configured} />
+          <DnsProviders />
         </>
       )}
       <BackupRestore />
@@ -89,33 +89,47 @@ export function SettingsPage() {
   )
 }
 
-/** reg.ru API credentials for automatic DNS-01 wildcard issuance. Write-only:
- *  the panel never returns the stored values, only whether they are set. */
-function RegruCredentials({ configured }: { configured: boolean }) {
+/** DNS-01 provider credentials for automatic wildcard issuance. Pick a provider,
+ *  enter its API credentials (write-only — the panel never returns them, only a
+ *  "configured" flag). Backed by acme.sh's dnsapi plugins. */
+function DnsProviders() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
+  const providersQuery = useQuery({
+    queryKey: ['dns-providers'],
+    queryFn: () => api.listDnsProviders(),
+  })
+  const providers = providersQuery.data?.providers ?? []
+  const [selectedId, setSelectedId] = useState<string>('')
+  const [values, setValues] = useState<Record<string, string>>({})
+
+  const selected = providers.find((p) => p.id === selectedId) ?? providers[0]
 
   const saveMutation = useMutation({
-    mutationFn: (body: Record<string, string>) => api.updateSettings(body),
-    onSuccess: (result) => {
-      queryClient.setQueryData(['settings'], result)
-      setUsername('')
-      setPassword('')
+    mutationFn: (creds: Record<string, string>) =>
+      api.setDnsProviderCredentials(selected!.id, creds),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['dns-providers'] })
+      setValues({})
       toast({ variant: 'success', title: t('settings.saved') })
     },
   })
 
-  const disconnect = () =>
-    saveMutation.mutate({ regru_username: '', regru_password: '' })
-
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    saveMutation.mutate({
-      regru_username: username.trim(),
-      regru_password: password,
-    })
+    if (!selected) return
+    const creds: Record<string, string> = {}
+    for (const field of selected.fields) {
+      creds[field.env] = (values[field.env] ?? '').trim()
+    }
+    saveMutation.mutate(creds)
+  }
+
+  const disconnect = () => {
+    if (!selected) return
+    const creds: Record<string, string> = {}
+    for (const field of selected.fields) creds[field.env] = ''
+    saveMutation.mutate(creds)
   }
 
   const error =
@@ -128,73 +142,93 @@ function RegruCredentials({ configured }: { configured: boolean }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {t('settings.regru.title')}
-          {configured && (
-            <span className="rounded-full bg-emerald-600/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-              {t('settings.regru.configured')}
-            </span>
-          )}
-        </CardTitle>
-        <CardDescription>{t('settings.regru.description')}</CardDescription>
+        <CardTitle>{t('settings.dnsProviders.title')}</CardTitle>
+        <CardDescription>
+          {t('settings.dnsProviders.description')}
+        </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid gap-2 sm:max-w-xs">
-            <Label htmlFor="regru-username">{t('settings.regru.username')}</Label>
-            <Input
-              id="regru-username"
-              autoComplete="off"
-              placeholder={configured ? '••••••••' : ''}
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
+        {providersQuery.isPending ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            {t('common.loading')}
           </div>
-          <div className="grid gap-2 sm:max-w-xs">
-            <Label htmlFor="regru-password">{t('settings.regru.password')}</Label>
-            <Input
-              id="regru-password"
-              type="password"
-              autoComplete="new-password"
-              placeholder={configured ? '••••••••' : ''}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {t('settings.regru.hint')}
+        ) : selected === undefined ? (
+          <p className="text-sm text-muted-foreground">
+            {t('settings.dnsProviders.none')}
           </p>
-          {error !== null && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-          <div className="flex items-center gap-2">
-            <Button
-              type="submit"
-              disabled={
-                saveMutation.isPending ||
-                username.trim() === '' ||
-                password === ''
-              }
-            >
-              {saveMutation.isPending && (
-                <Loader2 className="animate-spin" aria-hidden="true" />
-              )}
-              {t('settings.regru.save')}
-            </Button>
-            {configured && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={saveMutation.isPending}
-                onClick={disconnect}
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid gap-2 sm:max-w-xs">
+              <Label htmlFor="dns-provider">
+                {t('settings.dnsProviders.provider')}
+              </Label>
+              <select
+                id="dns-provider"
+                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-sm"
+                value={selected.id}
+                onChange={(e) => {
+                  setSelectedId(e.target.value)
+                  setValues({})
+                }}
               >
-                {t('settings.regru.disconnect')}
-              </Button>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                    {p.configured ? ` — ${t('settings.dnsProviders.configured')}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {selected.fields.map((field) => (
+              <div key={field.env} className="grid gap-2 sm:max-w-xs">
+                <Label htmlFor={`dns-cred-${field.env}`}>{field.label}</Label>
+                <Input
+                  id={`dns-cred-${field.env}`}
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={selected.configured ? '••••••••' : ''}
+                  value={values[field.env] ?? ''}
+                  onChange={(e) =>
+                    setValues((v) => ({ ...v, [field.env]: e.target.value }))
+                  }
+                />
+              </div>
+            ))}
+            <p className="text-xs text-muted-foreground">
+              {t('settings.dnsProviders.hint')}
+            </p>
+            {error !== null && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
             )}
-          </div>
-        </form>
+            <div className="flex items-center gap-2">
+              <Button
+                type="submit"
+                disabled={
+                  saveMutation.isPending ||
+                  selected.fields.some((f) => (values[f.env] ?? '').trim() === '')
+                }
+              >
+                {saveMutation.isPending && (
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                )}
+                {t('settings.dnsProviders.save')}
+              </Button>
+              {selected.configured && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={saveMutation.isPending}
+                  onClick={disconnect}
+                >
+                  {t('settings.dnsProviders.disconnect')}
+                </Button>
+              )}
+            </div>
+          </form>
+        )}
       </CardContent>
     </Card>
   )

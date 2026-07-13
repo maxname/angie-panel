@@ -479,14 +479,14 @@ export const en = {
         'Imported {{hosts}} hosts, {{streams}} streams, {{certs}} certificates, {{lists}} access lists',
       goToApply: 'Go to Apply to activate the imported configuration',
     },
-    regru: {
-      title: 'reg.ru DNS provider',
-      configured: 'Configured',
+    dnsProviders: {
+      title: 'DNS providers',
+      configured: 'configured',
+      none: 'No DNS providers available.',
       description:
-        'API credentials for automatic DNS-01 wildcard certificates. The panel creates the _acme-challenge TXT record via reg.ru — no NS delegation, no UDP/53.',
-      username: 'API username',
-      password: 'API password',
-      hint: 'Your reg.ru account login and password (enable API access in reg.ru and allow this server’s IP). Stored write-only — never shown again or included in backups.',
+        'API credentials for automatic DNS-01 wildcard certificates. Pick your provider and enter its API credentials — the panel creates the _acme-challenge TXT record via that provider (acme.sh under the hood), so no NS delegation and no UDP/53.',
+      provider: 'Provider',
+      hint: 'Credentials are stored write-only — never shown again or included in backups. Enable API access with your provider first.',
       save: 'Save credentials',
       disconnect: 'Disconnect',
     },
@@ -563,11 +563,12 @@ export const en = {
       dnsMethodSelf: 'Angie answers (NS delegation)',
       dnsMethodSelfHint:
         'You delegate _acme-challenge to this server and it must be reachable on UDP/53. No good behind NAT.',
-      dnsMethodRegru: 'reg.ru API (automatic)',
-      dnsMethodRegruHint:
-        'The panel creates the TXT record via reg.ru’s API. Fully automatic, works behind NAT — no UDP/53.',
-      regruNotConfigured:
-        'reg.ru credentials aren’t set yet. Add them in Settings → reg.ru DNS provider, then this will just work.',
+      dnsMethodProvider: 'DNS provider API (automatic)',
+      dnsMethodProviderHint:
+        'The panel creates the TXT record via your DNS provider’s API. Fully automatic, works behind NAT — no UDP/53.',
+      provider: 'Provider',
+      providerNotConfigured:
+        '{{provider}} credentials aren’t set yet. Add them in Settings → DNS providers, then this will just work.',
       keyType: 'Key type',
       email: 'Contact email (optional)',
       emailPlaceholder: 'admin@example.com',

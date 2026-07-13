@@ -483,15 +483,25 @@ export interface EffectiveSettings {
 
 export interface SettingsResponse {
   raw: Record<string, string>
-  /** Whether reg.ru API credentials are set (the creds themselves are secret). */
-  regru_configured: boolean
   effective: EffectiveSettings
 }
 
 export type AcmeChallenge = 'http' | 'dns' | 'alpn'
 
-/** DNS-01 provider whose API fulfils the challenge via the ACME hook. */
-export type DnsProvider = 'regru'
+/** One credential field a DNS provider needs (maps to an acme.sh env var). */
+export interface DnsProviderField {
+  env: string
+  label: string
+}
+
+/** A DNS-01 provider from the registry (acme.sh dnsapi under the hood). */
+export interface DnsProviderInfo {
+  id: string
+  label: string
+  fields: DnsProviderField[]
+  /** Whether all its credentials are stored. */
+  configured: boolean
+}
 
 export type AcmeKeyType = 'ecdsa' | 'rsa'
 
@@ -517,9 +527,9 @@ export interface Cert {
   key_type: AcmeKeyType
   email: string | null
   staging: boolean
-  /** For a DNS-01 cert: provider API that fulfils the challenge (null = Angie
+  /** For a DNS-01 cert: provider id that fulfils the challenge (null = Angie
    *  answers DNS itself via NS delegation). */
-  dns_provider: DnsProvider | null
+  dns_provider: string | null
   /** Unix timestamp, seconds. */
   created_at: number
   status: AcmeStatus | null
@@ -533,7 +543,7 @@ export interface CertInput {
   key_type?: AcmeKeyType
   email?: string | null
   staging?: boolean
-  dns_provider?: DnsProvider | null
+  dns_provider?: string | null
 }
 
 export interface DelegationHint {
@@ -938,6 +948,17 @@ export const api = {
 
   updateSettings: (body: Record<string, string>) =>
     request<SettingsResponse>('PUT', '/api/settings', body),
+
+  listDnsProviders: () =>
+    request<{ providers: DnsProviderInfo[] }>('GET', '/api/dns-providers'),
+
+  /** Save (or clear, with empty values) a provider's credentials. */
+  setDnsProviderCredentials: (id: string, credentials: Record<string, string>) =>
+    request<{ ok: true; configured: boolean }>(
+      'PUT',
+      `/api/dns-providers/${id}/credentials`,
+      { credentials },
+    ),
 
   listCertificates: () =>
     request<{ certificates: Cert[] }>('GET', '/api/certificates'),
