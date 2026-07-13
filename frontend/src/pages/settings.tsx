@@ -163,22 +163,27 @@ function DnsProviders() {
               <Label htmlFor="dns-provider">
                 {t('settings.dnsProviders.provider')}
               </Label>
-              <select
-                id="dns-provider"
-                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-sm"
+              <Select
                 value={selected.id}
-                onChange={(e) => {
-                  setSelectedId(e.target.value)
+                onValueChange={(value) => {
+                  setSelectedId(value)
                   setValues({})
                 }}
               >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                    {p.configured ? ` — ${t('settings.dnsProviders.configured')}` : ''}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="dns-provider">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.label}
+                      {p.configured
+                        ? ` — ${t('settings.dnsProviders.configured')}`
+                        : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             {selected.fields.map((field) => (
               <div key={field.env} className="grid gap-2 sm:max-w-xs">

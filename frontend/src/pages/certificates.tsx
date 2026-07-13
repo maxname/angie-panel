@@ -733,18 +733,21 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
               <Label htmlFor="cert-dns-provider-select">
                 {t('certificates.wizard.provider')}
               </Label>
-              <select
-                id="cert-dns-provider-select"
-                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-sm"
+              <Select
                 value={form.dns_provider}
-                onChange={(e) => patch({ dns_provider: e.target.value })}
+                onValueChange={(value) => patch({ dns_provider: value })}
               >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="cert-dns-provider-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {selectedProvider && !selectedProvider.configured && (
                 <p
                   role="alert"
