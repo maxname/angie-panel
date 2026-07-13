@@ -31,30 +31,52 @@ import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
 import { useTheme } from '@/theme/theme-context'
 
-const NAV_ITEMS = [
-  { to: '/', labelKey: 'nav.dashboard', icon: LayoutDashboard, exact: true },
-  { to: '/hosts', labelKey: 'nav.proxyHosts', icon: Globe, exact: false },
-  { to: '/redirect-hosts', labelKey: 'nav.redirectHosts', icon: CornerUpRight, exact: false },
-  { to: '/dead-hosts', labelKey: 'nav.deadHosts', icon: FileQuestion, exact: false },
-  { to: '/streams', labelKey: 'nav.streams', icon: Network, exact: false },
-  { to: '/sni-routers', labelKey: 'nav.sniRouters', icon: Split, exact: false },
-  { to: '/certificates', labelKey: 'nav.certificates', icon: ShieldCheck, exact: false },
-  { to: '/dns-providers', labelKey: 'nav.dnsProviders', icon: Cloud, exact: false },
-  { to: '/access-lists', labelKey: 'nav.accessLists', icon: ListChecks, exact: false },
-  { to: '/blocklist', labelKey: 'nav.blocklist', icon: ShieldBan, exact: false },
-  { to: '/apply', labelKey: 'nav.apply', icon: Rocket, exact: false },
-  { to: '/users', labelKey: 'nav.users', icon: Users, exact: false, adminOnly: true },
-  { to: '/audit', labelKey: 'nav.audit', icon: ScrollText, exact: false, adminOnly: true },
-  { to: '/settings', labelKey: 'nav.settings', icon: Settings, exact: false },
+// The sidebar is grouped into labelled sections. The first section has no
+// label (the dashboard sits on its own above the groups).
+const NAV_SECTIONS = [
+  {
+    labelKey: null,
+    items: [{ to: '/', labelKey: 'nav.dashboard', icon: LayoutDashboard, exact: true }],
+  },
+  {
+    labelKey: 'nav.sections.hosts',
+    items: [
+      { to: '/hosts', labelKey: 'nav.proxyHosts', icon: Globe, exact: false },
+      { to: '/redirect-hosts', labelKey: 'nav.redirectHosts', icon: CornerUpRight, exact: false },
+      { to: '/dead-hosts', labelKey: 'nav.deadHosts', icon: FileQuestion, exact: false },
+      { to: '/streams', labelKey: 'nav.streams', icon: Network, exact: false },
+      { to: '/sni-routers', labelKey: 'nav.sniRouters', icon: Split, exact: false },
+    ],
+  },
+  {
+    labelKey: 'nav.sections.certificates',
+    items: [
+      { to: '/certificates', labelKey: 'nav.certificates', icon: ShieldCheck, exact: false },
+      { to: '/dns-providers', labelKey: 'nav.dnsProviders', icon: Cloud, exact: false },
+    ],
+  },
+  {
+    labelKey: 'nav.sections.security',
+    items: [
+      { to: '/access-lists', labelKey: 'nav.accessLists', icon: ListChecks, exact: false },
+      { to: '/blocklist', labelKey: 'nav.blocklist', icon: ShieldBan, exact: false },
+    ],
+  },
+  {
+    labelKey: 'nav.sections.admin',
+    items: [
+      { to: '/apply', labelKey: 'nav.apply', icon: Rocket, exact: false },
+      { to: '/users', labelKey: 'nav.users', icon: Users, exact: false, adminOnly: true },
+      { to: '/audit', labelKey: 'nav.audit', icon: ScrollText, exact: false, adminOnly: true },
+      { to: '/settings', labelKey: 'nav.settings', icon: Settings, exact: false },
+    ],
+  },
 ] as const
 
 export function AppShell() {
   const { t } = useTranslation()
   const { data: me } = useMe()
   const isAdmin = me?.role === 'admin'
-  const navItems = NAV_ITEMS.filter(
-    (item) => isAdmin || !('adminOnly' in item),
-  )
 
   return (
     <div className="flex min-h-svh">
@@ -63,19 +85,36 @@ export function AppShell() {
           <Waypoints className="size-5" aria-hidden="true" />
           {t('app.name')}
         </div>
-        <nav className="flex flex-col gap-1 p-3">
-          {navItems.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              activeOptions={{ exact: item.exact }}
-              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              activeProps={{ className: 'bg-muted text-foreground' }}
-            >
-              <item.icon className="size-4" aria-hidden="true" />
-              {t(item.labelKey)}
-            </Link>
-          ))}
+        <nav className="flex flex-col gap-4 p-3">
+          {NAV_SECTIONS.map((section) => {
+            const items = section.items.filter(
+              (item) => isAdmin || !('adminOnly' in item),
+            )
+            if (items.length === 0) {
+              return null
+            }
+            return (
+              <div key={section.labelKey ?? 'main'} className="flex flex-col gap-1">
+                {section.labelKey && (
+                  <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+                    {t(section.labelKey)}
+                  </div>
+                )}
+                {items.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    activeOptions={{ exact: item.exact }}
+                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    activeProps={{ className: 'bg-muted text-foreground' }}
+                  >
+                    <item.icon className="size-4" aria-hidden="true" />
+                    {t(item.labelKey)}
+                  </Link>
+                ))}
+              </div>
+            )
+          })}
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">

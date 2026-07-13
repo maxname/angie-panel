@@ -33,6 +33,12 @@ export const ru: typeof en = {
     users: 'Пользователи',
     audit: 'Журнал аудита',
     settings: 'Настройки',
+    sections: {
+      hosts: 'Хосты',
+      certificates: 'Сертификаты',
+      security: 'Безопасность',
+      admin: 'Администрирование',
+    },
   },
   audit: {
     title: 'Журнал аудита',

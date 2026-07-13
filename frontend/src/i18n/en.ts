@@ -31,6 +31,12 @@ export const en = {
     users: 'Users',
     audit: 'Audit log',
     settings: 'Settings',
+    sections: {
+      hosts: 'Hosts',
+      certificates: 'Certificates',
+      security: 'Security',
+      admin: 'Administration',
+    },
   },
   audit: {
     title: 'Audit log',
