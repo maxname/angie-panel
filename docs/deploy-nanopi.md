@@ -93,10 +93,8 @@ curl -s http://127.0.0.1/status/angie      # JSON с версией — API дл
 `/etc/angie/http.d/default.conf` уже отдаёт `/status/` (только с `127.0.0.1`) — это то,
 что нужно дашборду панели.
 
-Единственное важное, чего не хватает из коробки, — **`resolver`** (без него встроенный
-ACME не резолвит адрес УЦ, а `proxy_pass` не резолвит хосты по имени). Добавляем его и
-несколько полезных дефолтов **в блок `http {}`** (панель управляет только `http.d/` и
-`stream.d/`, а не самим `angie.conf`, так что правки безопасны):
+Можно добавить несколько полезных дефолтов **в блок `http {}`** (панель управляет только
+`http.d/` и `stream.d/`, а не самим `angie.conf`, так что правки безопасны):
 
 ```bash
 cp -a /etc/angie/angie.conf /etc/angie/angie.conf.orig-$(date +%Y%m%d)
@@ -108,11 +106,6 @@ cat > /tmp/angie-tuning.txt <<'EOF'
     tcp_nopush           on;
     tcp_nodelay          on;
     types_hash_max_size  2048;
-
-    # DNS resolver — required for built-in ACME (reaching the CA) and for
-    # proxy_pass to hostnames. Uses the local systemd-resolved stub.
-    resolver             127.0.0.53 valid=300s ipv6=off;
-    resolver_timeout     5s;
 
     # Sensible global TLS defaults (per-host certs are managed by the panel).
     ssl_protocols        TLSv1.2 TLSv1.3;
@@ -128,10 +121,14 @@ rm -f /tmp/angie-tuning.txt
 angie -t && systemctl reload angie
 ```
 
-> `resolver 127.0.0.53` — локальный стаб systemd-resolved (в Armbian активен). `ipv6=off`
-> убирает AAAA-ответы, чтобы ACME/апстримы не спотыкались, если у устройства нет
-> IPv6-маршрута. Если systemd-resolved не используется — подставьте адрес роутера или
-> публичный резолвер (`1.1.1.1`, `9.9.9.9`).
+> **Не добавляйте `resolver` в `angie.conf`.** Встроенному ACME он нужен (без резолвера не
+> резолвится адрес УЦ, а `proxy_pass` — хосты по имени), НО панель эмитит свой
+> `resolver` (взятый из `/etc/resolv.conf`) в генерируемом `00-panel.conf`. Второй
+> `resolver` в `http {}` — дубликат, и `angie -t` при первом Apply падает с
+> `"resolver" directive is duplicate`. Резолвером на этом хосте владеет панель.
+>
+> Если панель НЕ используется (голый Angie), тогда наоборот — добавьте
+> `resolver 127.0.0.53 valid=300s ipv6=off;` (стаб systemd-resolved) сюда же.
 
 ## 4. Проверка
 
