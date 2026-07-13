@@ -180,17 +180,12 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <div className="space-y-1">
-          <div className="flex flex-wrap gap-1">
-            {cert.domains.map((domain) => (
-              <Badge key={domain} variant="secondary">
-                {domain}
-              </Badge>
-            ))}
-          </div>
-          <span className="font-mono text-xs text-muted-foreground">
-            {cert.name}
-          </span>
+        <div className="flex flex-wrap gap-1">
+          {cert.domains.map((domain) => (
+            <Badge key={domain} variant="secondary">
+              {domain}
+            </Badge>
+          ))}
         </div>
       </TableCell>
       <TableCell>

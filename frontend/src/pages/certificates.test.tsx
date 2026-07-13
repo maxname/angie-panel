@@ -83,11 +83,8 @@ describe('certificates page', () => {
 
     renderPage()
 
-    // Names render in a mono cell.
-    expect(await screen.findByText('no_status')).toBeInTheDocument()
-    expect(screen.getByText('live_site')).toBeInTheDocument()
-    // Domains render as badges.
-    expect(screen.getByText('unknown.example.com')).toBeInTheDocument()
+    // Domains are the primary identifier, rendered as badges.
+    expect(await screen.findByText('unknown.example.com')).toBeInTheDocument()
     expect(screen.getByText('example.com')).toBeInTheDocument()
     // Status pills: null → "Unknown", certificate "valid" → "Issued".
     expect(screen.getByText('Unknown')).toBeInTheDocument()
