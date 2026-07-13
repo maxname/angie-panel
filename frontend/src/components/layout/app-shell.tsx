@@ -9,7 +9,9 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  Menu,
   MoreVertical,
+  PanelLeftClose,
   ScrollText,
   ShieldBan,
   Moon,
@@ -22,8 +24,10 @@ import {
   Users,
   Waypoints,
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,8 +36,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Toaster } from '@/components/ui/toaster'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
+import { cn } from '@/lib/utils'
 import { useTheme } from '@/theme/theme-context'
 
 // The sidebar is grouped into labelled sections. The first section has no
@@ -78,53 +84,62 @@ const NAV_SECTIONS = [
   },
 ] as const
 
+const COLLAPSE_KEY = 'sidebar-collapsed'
+
 export function AppShell() {
   const { t } = useTranslation()
   const { data: me } = useMe()
   const isAdmin = me?.role === 'admin'
 
+  // Desktop: collapse to an icon rail (persisted). Mobile: an off-canvas drawer.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(COLLAPSE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const [mobileOpen, setMobileOpen] = useState(false)
+
+  const toggleCollapsed = () =>
+    setCollapsed((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0')
+      } catch {
+        // ignore storage failures (private mode etc.)
+      }
+      return next
+    })
+
+  // Cmd/Ctrl+B toggles the desktop sidebar; Escape closes the mobile drawer.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'b' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault()
+        toggleCollapsed()
+      } else if (event.key === 'Escape') {
+        setMobileOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   return (
     <div className="flex min-h-svh">
-      <aside className="hidden w-60 shrink-0 flex-col border-r bg-muted/20 md:flex">
-        <div className="flex h-14 items-center gap-2 border-b px-4 font-semibold">
-          <Waypoints className="size-5" aria-hidden="true" />
-          {t('app.name')}
-        </div>
-        <nav className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
-          {NAV_SECTIONS.map((section) => {
-            const items = section.items.filter(
-              (item) => isAdmin || !('adminOnly' in item),
-            )
-            if (items.length === 0) {
-              return null
-            }
-            return (
-              <div key={section.labelKey ?? 'main'} className="flex flex-col gap-1">
-                {section.labelKey && (
-                  <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-                    {t(section.labelKey)}
-                  </div>
-                )}
-                {items.map((item) => (
-                  <Link
-                    key={item.to}
-                    to={item.to}
-                    activeOptions={{ exact: item.exact }}
-                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    activeProps={{ className: 'bg-muted text-foreground' }}
-                  >
-                    <item.icon className="size-4" aria-hidden="true" />
-                    {t(item.labelKey)}
-                  </Link>
-                ))}
-              </div>
-            )
-          })}
-        </nav>
-        <SidebarFooter />
-      </aside>
+      <DesktopSidebar
+        collapsed={collapsed}
+        isAdmin={isAdmin}
+        onToggle={toggleCollapsed}
+      />
+      <MobileDrawer
+        open={mobileOpen}
+        isAdmin={isAdmin}
+        onClose={() => setMobileOpen(false)}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
-        <MobileHeader />
+        <MobileHeader onOpenMenu={() => setMobileOpen(true)} />
         <main className="flex-1 p-4 lg:p-6">
           {me?.role === 'viewer' && (
             <div
@@ -142,6 +157,164 @@ export function AppShell() {
   )
 }
 
+/** The desktop sidebar — full width, or a narrow icon rail with tooltips. */
+function DesktopSidebar({
+  collapsed,
+  isAdmin,
+  onToggle,
+}: {
+  collapsed: boolean
+  isAdmin: boolean
+  onToggle: () => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <aside
+      className={cn(
+        'hidden shrink-0 flex-col border-r bg-muted/20 transition-[width] duration-200 md:flex',
+        collapsed ? 'w-16' : 'w-60',
+      )}
+    >
+      <div className="flex h-14 items-center gap-2 border-b px-3">
+        {collapsed ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="mx-auto"
+                aria-label={t('nav.expandSidebar')}
+                onClick={onToggle}
+              >
+                <Waypoints className="size-5" aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">{t('nav.expandSidebar')}</TooltipContent>
+          </Tooltip>
+        ) : (
+          <>
+            <Waypoints className="size-5 shrink-0" aria-hidden="true" />
+            <span className="flex-1 truncate font-semibold">{t('app.name')}</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t('nav.collapseSidebar')}
+              onClick={onToggle}
+            >
+              <PanelLeftClose className="size-4" aria-hidden="true" />
+            </Button>
+          </>
+        )}
+      </div>
+      <NavSections collapsed={collapsed} isAdmin={isAdmin} />
+      <div className="mt-auto border-t p-2">
+        <SidebarUser compact={collapsed} />
+      </div>
+    </aside>
+  )
+}
+
+/** Off-canvas sidebar for mobile, opened from the top bar. */
+function MobileDrawer({
+  open,
+  isAdmin,
+  onClose,
+}: {
+  open: boolean
+  isAdmin: boolean
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  if (!open) {
+    return null
+  }
+  return (
+    <div className="fixed inset-0 z-50 md:hidden">
+      <button
+        type="button"
+        aria-label={t('nav.closeMenu')}
+        className="absolute inset-0 bg-black/50"
+        onClick={onClose}
+      />
+      <aside className="absolute inset-y-0 left-0 flex w-64 flex-col border-r bg-background shadow-xl">
+        <div className="flex h-14 items-center gap-2 border-b px-4 font-semibold">
+          <Waypoints className="size-5 shrink-0" aria-hidden="true" />
+          {t('app.name')}
+        </div>
+        <NavSections collapsed={false} isAdmin={isAdmin} onNavigate={onClose} />
+        <div className="mt-auto border-t p-2">
+          <SidebarUser />
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+/** The grouped nav links, shared by the desktop rail and the mobile drawer.
+ *  When collapsed, labels and section headers are hidden and each icon gets a
+ *  tooltip. */
+function NavSections({
+  collapsed,
+  isAdmin,
+  onNavigate,
+}: {
+  collapsed: boolean
+  isAdmin: boolean
+  onNavigate?: () => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <nav className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
+      {NAV_SECTIONS.map((section) => {
+        const items = section.items.filter(
+          (item) => isAdmin || !('adminOnly' in item),
+        )
+        if (items.length === 0) {
+          return null
+        }
+        return (
+          <div key={section.labelKey ?? 'main'} className="flex flex-col gap-1">
+            {section.labelKey && !collapsed && (
+              <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+                {t(section.labelKey)}
+              </div>
+            )}
+            {items.map((item) => {
+              const label = t(item.labelKey)
+              const link = (
+                <Link
+                  to={item.to}
+                  activeOptions={{ exact: item.exact }}
+                  onClick={onNavigate}
+                  aria-label={collapsed ? label : undefined}
+                  className={cn(
+                    'flex items-center gap-2 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                    collapsed ? 'justify-center px-2' : 'px-3',
+                  )}
+                  activeProps={{ className: 'bg-muted text-foreground' }}
+                >
+                  <item.icon className="size-4 shrink-0" aria-hidden="true" />
+                  {!collapsed && <span className="truncate">{label}</span>}
+                </Link>
+              )
+              return collapsed ? (
+                <Tooltip key={item.to}>
+                  <TooltipTrigger asChild>{link}</TooltipTrigger>
+                  <TooltipContent side="right">{label}</TooltipContent>
+                </Tooltip>
+              ) : (
+                <div key={item.to}>{link}</div>
+              )
+            })}
+          </div>
+        )
+      })}
+    </nav>
+  )
+}
+
 function useLogout() {
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -154,28 +327,28 @@ function useLogout() {
   })
 }
 
-/** Bottom of the sidebar (desktop): the signed-in user as a shadcn "nav-user"
- *  card that opens the session menu. */
-function SidebarFooter() {
-  return (
-    <div className="mt-auto border-t p-2">
-      <SidebarUser />
-    </div>
-  )
-}
-
-/** The sidebar is hidden on mobile, so a compact top bar carries the app name
- *  and the same user menu (avatar only). */
-function MobileHeader() {
+/** A compact top bar for mobile (the sidebar is off-canvas there): a menu
+ *  button, the app name, and the user menu. */
+function MobileHeader({ onOpenMenu }: { onOpenMenu: () => void }) {
   const { t } = useTranslation()
 
   return (
     <header className="flex h-14 items-center justify-between gap-2 border-b px-4 md:hidden">
-      <div className="flex items-center gap-2 font-semibold">
-        <Waypoints className="size-5" aria-hidden="true" />
-        {t('app.name')}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t('nav.openMenu')}
+          onClick={onOpenMenu}
+        >
+          <Menu className="size-5" aria-hidden="true" />
+        </Button>
+        <div className="flex items-center gap-2 font-semibold">
+          <Waypoints className="size-5" aria-hidden="true" />
+          {t('app.name')}
+        </div>
       </div>
-      <SidebarUser compact />
+      <SidebarUser compact side="bottom" />
     </header>
   )
 }
@@ -185,9 +358,16 @@ function userInitials(email: string): string {
   return (local.slice(0, 2) || '?').toUpperCase()
 }
 
-/** shadcn "nav-user": an avatar + identity row (or just the avatar, on mobile)
- *  that opens a dropdown with theme, language, and logout. */
-function SidebarUser({ compact = false }: { compact?: boolean }) {
+/** shadcn "nav-user": an avatar + identity row (or just the avatar, when the
+ *  sidebar is collapsed / on mobile) that opens a dropdown with theme,
+ *  language, and logout. */
+function SidebarUser({
+  compact = false,
+  side = 'right',
+}: {
+  compact?: boolean
+  side?: 'right' | 'bottom'
+}) {
   const { t, i18n } = useTranslation()
   const { data: me } = useMe()
   const { theme, toggleTheme } = useTheme()
@@ -217,7 +397,7 @@ function SidebarUser({ compact = false }: { compact?: boolean }) {
           <button
             type="button"
             aria-label={email}
-            className="flex items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="mx-auto flex items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {avatar}
           </button>
@@ -236,9 +416,9 @@ function SidebarUser({ compact = false }: { compact?: boolean }) {
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        side={compact ? 'bottom' : 'right'}
+        side={side}
         align="end"
-        sideOffset={compact ? 8 : 12}
+        sideOffset={8}
         className="min-w-56"
       >
         <div className="flex items-center gap-2 p-1.5">

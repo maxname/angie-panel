@@ -37,6 +37,10 @@ export const en = {
       security: 'Security',
       admin: 'Administration',
     },
+    openMenu: 'Open menu',
+    closeMenu: 'Close menu',
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
   },
   audit: {
     title: 'Audit log',

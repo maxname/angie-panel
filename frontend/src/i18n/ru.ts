@@ -39,6 +39,10 @@ export const ru: typeof en = {
       security: 'Безопасность',
       admin: 'Администрирование',
     },
+    openMenu: 'Открыть меню',
+    closeMenu: 'Закрыть меню',
+    collapseSidebar: 'Свернуть меню',
+    expandSidebar: 'Развернуть меню',
   },
   audit: {
     title: 'Журнал аудита',
