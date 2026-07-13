@@ -1059,6 +1059,44 @@ async fn certificate_edit_keeps_host_binding() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// NPM-style: creating a certificate without a name derives a unique one from
+/// the first domain (the name is only the acme_client id).
+#[tokio::test]
+async fn certificate_name_auto_generated_from_domain() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    let create = |body: Value| {
+        app.clone().oneshot(request(
+            Method::POST,
+            "/api/certificates",
+            Some(body),
+            Some(&cookie),
+        ))
+    };
+
+    // No name → slug of the first domain.
+    let res = create(json!({"domains": ["app.example.com"], "challenge": "http"}))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["name"], json!("app_example_com"));
+
+    // Same domain again → the slug is taken, so it gets a numeric suffix.
+    let res = create(json!({"domains": ["app.example.com"], "challenge": "http"}))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["name"], json!("app_example_com_2"));
+
+    // Wildcard: the leading "*." is stripped in the slug.
+    let res = create(json!({"domains": ["*.example.com"], "challenge": "dns"}))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["name"], json!("example_com"));
+}
+
 #[tokio::test]
 async fn sni_router_crud_conflict_and_preview() {
     let dir = tempfile::tempdir().unwrap();

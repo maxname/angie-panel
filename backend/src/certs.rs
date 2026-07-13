@@ -61,8 +61,14 @@ pub async fn get_one(
 pub async fn create(
     _u: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(raw): Json<model::CertificateInput>,
+    Json(mut raw): Json<model::CertificateInput>,
 ) -> ApiResult<Json<Value>> {
+    // NPM-style: the name is optional. When blank, derive a unique identifier
+    // from the first domain — it's only the acme_client id / $acme_cert_<name>,
+    // never shown to end users.
+    if raw.name.trim().is_empty() {
+        raw.name = generate_cert_name(&state, raw.domains.first().map(String::as_str)).await?;
+    }
     let input = model::validate_cert_input(raw)?;
     ensure_dns_provider_exists(&state, &input).await?;
     // Name is the acme_client identifier and the $acme_cert_<name> variable —
@@ -126,6 +132,54 @@ fn name_taken(name: &str) -> ApiError {
         "cert_name_taken",
         format!("certificate name '{name}' is already in use"),
     )
+}
+
+/// Reduce a domain to a valid acme_client identifier (`^[a-z0-9_]+$`), e.g.
+/// `*.example.com` → `example_com`. May return "" if the domain has no usable
+/// characters.
+fn slugify_cert_name(domain: &str) -> String {
+    let mut out = String::new();
+    for ch in domain.trim().to_ascii_lowercase().chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            out.push(ch);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_matches('_')
+        .chars()
+        .take(model::MAX_CERT_NAME_LEN)
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+/// Pick a free acme_client name derived from the first domain, appending `_N`
+/// on a clash so two certs for the same domain can coexist.
+async fn generate_cert_name(state: &AppState, domain: Option<&str>) -> ApiResult<String> {
+    let base = domain
+        .map(slugify_cert_name)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "cert".to_string());
+    if !repo::cert_name_exists(&state.db, &base).await? {
+        return Ok(base);
+    }
+    for n in 2..1000 {
+        let suffix = format!("_{n}");
+        let head: String = base
+            .chars()
+            .take(model::MAX_CERT_NAME_LEN - suffix.len())
+            .collect();
+        let candidate = format!("{}{suffix}", head.trim_end_matches('_'));
+        if !repo::cert_name_exists(&state.db, &candidate).await? {
+            return Ok(candidate);
+        }
+    }
+    Err(ApiError::new(
+        axum::http::StatusCode::CONFLICT,
+        "cert_name_taken",
+        "could not derive a free certificate name; set one explicitly",
+    ))
 }
 
 pub async fn delete(

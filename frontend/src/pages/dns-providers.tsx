@@ -67,7 +67,7 @@ export function DnsProvidersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('dnsProviders.title')}
@@ -76,7 +76,11 @@ export function DnsProvidersPage() {
             {t('dnsProviders.subtitle')}
           </p>
         </div>
-        <Button onClick={() => setCreating(true)} disabled={types.length === 0}>
+        <Button
+          className="shrink-0"
+          onClick={() => setCreating(true)}
+          disabled={types.length === 0}
+        >
           <Plus aria-hidden="true" />
           {t('dnsProviders.add')}
         </Button>

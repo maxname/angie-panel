@@ -592,7 +592,7 @@ export function CertWizardForm({
     event.preventDefault()
 
     const nextErrors: WizardFieldErrors = {}
-    if (form.name.trim() === '') {
+    if (editing && form.name.trim() === '') {
       nextErrors.name = t('certificates.wizard.noName')
     }
     if (form.domains.length === 0) {
@@ -634,28 +634,32 @@ export function CertWizardForm({
           <AlertDescription>{t('certificates.wizard.editNote')}</AlertDescription>
         </Alert>
       )}
-      <div className="space-y-2">
-        <Label htmlFor="cert-name">{t('certificates.wizard.name')}</Label>
-        <Input
-          id="cert-name"
-          value={form.name}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder="my_site"
-          onChange={(event) => {
-            patch({ name: event.target.value })
-            setClientErrors((prev) => ({ ...prev, name: undefined }))
-          }}
-        />
-        <p className="text-xs text-muted-foreground">
-          {t('certificates.wizard.nameHelp')}
-        </p>
-        {errors.name !== undefined && (
-          <p role="alert" className="text-sm text-destructive">
-            {errors.name}
+      {/* Name is the acme_client identifier. On create it's auto-derived from
+          the first domain (NPM has no name field); only surfaced when editing. */}
+      {editing && (
+        <div className="space-y-2">
+          <Label htmlFor="cert-name">{t('certificates.wizard.name')}</Label>
+          <Input
+            id="cert-name"
+            value={form.name}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="my_site"
+            onChange={(event) => {
+              patch({ name: event.target.value })
+              setClientErrors((prev) => ({ ...prev, name: undefined }))
+            }}
+          />
+          <p className="text-xs text-muted-foreground">
+            {t('certificates.wizard.nameHelp')}
           </p>
-        )}
-      </div>
+          {errors.name !== undefined && (
+            <p role="alert" className="text-sm text-destructive">
+              {errors.name}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label htmlFor="cert-domain-input">{t('certificates.wizard.domains')}</Label>

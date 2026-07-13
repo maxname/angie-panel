@@ -1149,6 +1149,8 @@ pub struct Certificate {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CertificateInput {
+    /// Optional — blank means "derive it from the first domain" (see certs::create).
+    #[serde(default)]
     pub name: String,
     pub domains: Vec<String>,
     #[serde(default = "default_challenge")]
