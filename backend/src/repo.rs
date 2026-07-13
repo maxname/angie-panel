@@ -7,9 +7,9 @@ use sqlx::SqlitePool;
 
 use crate::db::now_epoch;
 use crate::model::{
-    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, ErrorPages,
-    ForwardAuth, Gzip, KeyType, Maintenance, Mtls, ProxyHost, ProxyHostInput, RateLimit, Scheme,
-    Upstream,
+    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, DnsProvider,
+    ErrorPages, ForwardAuth, Gzip, KeyType, Maintenance, Mtls, ProxyHost, ProxyHostInput,
+    RateLimit, Scheme, Upstream,
 };
 
 // ------------------------------------------------------------------- rows
@@ -924,6 +924,7 @@ struct CertRow {
     key_type: String,
     email: Option<String>,
     staging: i64,
+    dns_provider: Option<String>,
     created_at: i64,
 }
 
@@ -952,12 +953,17 @@ impl CertRow {
             key_type: key_type_from_str(&self.key_type),
             email: self.email,
             staging: self.staging != 0,
+            dns_provider: self
+                .dns_provider
+                .as_deref()
+                .and_then(DnsProvider::from_stored),
             created_at: self.created_at,
         })
     }
 }
 
-const CERT_COLUMNS: &str = "id, name, domains, challenge, key_type, email, staging, created_at";
+const CERT_COLUMNS: &str =
+    "id, name, domains, challenge, key_type, email, staging, dns_provider, created_at";
 
 pub async fn list_certs(db: &SqlitePool) -> anyhow::Result<Vec<Certificate>> {
     let rows: Vec<CertRow> = sqlx::query_as(&format!(
@@ -988,8 +994,8 @@ pub async fn cert_name_exists(db: &SqlitePool, name: &str) -> anyhow::Result<boo
 
 pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::Result<i64> {
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO certificates (name, domains, challenge, key_type, email, staging, created_at) \
-         VALUES (?,?,?,?,?,?,?) RETURNING id",
+        "INSERT INTO certificates (name, domains, challenge, key_type, email, staging, \
+         dns_provider, created_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(&input.name)
     .bind(domains_json(&input.domains))
@@ -997,6 +1003,7 @@ pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::R
     .bind(input.key_type.as_str())
     .bind(input.email.as_deref())
     .bind(input.staging as i64)
+    .bind(input.dns_provider.map(|p| p.as_str()))
     .bind(now_epoch())
     .fetch_one(db)
     .await?;
@@ -1052,8 +1059,8 @@ pub async fn import_replace(
 
     for (id, c) in certs {
         sqlx::query(
-            "INSERT INTO certificates (id, name, domains, challenge, key_type, email, staging, created_at) \
-             VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO certificates (id, name, domains, challenge, key_type, email, staging, \
+             dns_provider, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(&c.name)
@@ -1062,6 +1069,7 @@ pub async fn import_replace(
         .bind(c.key_type.as_str())
         .bind(c.email.as_deref())
         .bind(c.staging as i64)
+        .bind(c.dns_provider.map(|p| p.as_str()))
         .bind(now)
         .execute(&mut *tx)
         .await?;
@@ -1517,6 +1525,14 @@ pub async fn set_setting(db: &SqlitePool, key: &str, value: &str) -> anyhow::Res
     .execute(db)
     .await?;
     Ok(())
+}
+
+pub async fn get_setting(db: &SqlitePool, key: &str) -> anyhow::Result<Option<String>> {
+    let v: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(db)
+        .await?;
+    Ok(v)
 }
 
 pub async fn all_settings(

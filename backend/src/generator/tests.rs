@@ -88,6 +88,8 @@ fn input_acl(
         public_dir: public_dir(),
         certificates: certs,
         acme_socket_dir: PathBuf::from("/run/angie-panel"),
+        acme_hook_target: "127.0.0.1:8080".into(),
+        acme_hook_token: "testtoken".into(),
         access_lists,
         http_d_dir: PathBuf::from("/etc/angie/http.d"),
         redirect_hosts: vec![],
@@ -129,6 +131,7 @@ fn ready_cert(id: i64, name: &str, domains: &[&str]) -> Certificate {
         staging: false,
         enabled: true,
         ready: true,
+        dns_provider: None,
     }
 }
 
@@ -210,6 +213,50 @@ fn golden_10_acme_clients() {
     ))
     .unwrap();
     assert_golden("10-acme-clients.conf", &files["10-acme.conf"]);
+}
+
+#[test]
+fn golden_acme_dns_provider_hook() {
+    // A wildcard DNS-01 cert fulfilled via a provider (reg.ru) hook: the
+    // collector gains an @acme_hook_location that proxies to the panel, and
+    // acme_dns_port is NOT emitted (Angie doesn't answer DNS itself). Verified
+    // on real Angie + pebble: the hook sets the TXT and the cert issues.
+    let mut wild = ready_cert(1, "web", &["*.example.com", "example.com"]);
+    wild.challenge = "dns".into();
+    wild.dns_provider = Some("regru".into());
+    let files = generate(&input(
+        vec![],
+        vec![wild],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let acme = &files["10-acme.conf"];
+    assert!(
+        !acme.contains("acme_dns_port"),
+        "provider certs must not self-answer DNS"
+    );
+    assert!(acme.contains("location @acme_hook_location"));
+    assert!(acme.contains("acme_hook web;"));
+    assert!(acme.contains("proxy_pass http://127.0.0.1:8080/acme/hook?t=testtoken;"));
+    assert!(acme.contains("proxy_set_header X-Acme-Keyauth $acme_hook_keyauth;"));
+    assert_golden("10-acme-hook.conf", acme);
+}
+
+#[test]
+fn acme_dns_port_still_emitted_for_self_answered() {
+    // A self-answered dns cert (no provider) keeps acme_dns_port; a provider one
+    // alongside it doesn't add a hook to the self-answered block.
+    let mut selfans = ready_cert(1, "web", &["*.a.example.com"]);
+    selfans.challenge = "dns".into();
+    let files = generate(&input(
+        vec![],
+        vec![selfans],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let acme = &files["10-acme.conf"];
+    assert!(acme.contains("acme_dns_port 53;"));
+    assert!(!acme.contains("@acme_hook_location"));
 }
 
 #[test]

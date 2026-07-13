@@ -18,6 +18,14 @@ pub const KEY_RESOLVER_OVERRIDE: &str = "resolver_override"; // space/comma list
 pub const KEY_ACME_EMAIL: &str = "acme_email";
 pub const KEY_GEO_MODE: &str = "geo_mode"; // off|deny|allow
 pub const KEY_GEO_COUNTRIES: &str = "geo_countries"; // JSON array of ISO codes
+
+/// reg.ru API credentials for DNS-01-via-hook wildcard issuance. Secrets: never
+/// returned by the settings GET (only a "configured" flag is), never exported.
+pub const KEY_REGRU_USERNAME: &str = "regru_username";
+pub const KEY_REGRU_PASSWORD: &str = "regru_password";
+/// Random shared secret the ACME hook proxy_pass carries; the panel's hook
+/// endpoint rejects requests without it. Auto-generated, not user-editable.
+pub const KEY_ACME_HOOK_TOKEN: &str = "acme_hook_token";
 /// hosts_revision that is currently live (set after each successful apply).
 /// Lets the reconciler distinguish external cert-readiness changes from
 /// pending user edits. Not user-editable.
@@ -111,6 +119,39 @@ fn status_port(state: &AppState) -> u16 {
         .and_then(|tail| tail.split('/').next())
         .and_then(|p| p.parse().ok())
         .unwrap_or(8100)
+}
+
+/// Loopback `host:port` Angie uses to reach the panel's ACME hook. Angie and
+/// the panel share a host; a wildcard/loopback bind is reached via 127.0.0.1.
+fn hook_target(state: &AppState) -> String {
+    let bind = state.cfg.bind_addr.as_str();
+    let host = if matches!(bind, "0.0.0.0" | "::" | "127.0.0.1" | "localhost") {
+        "127.0.0.1"
+    } else {
+        bind
+    };
+    format!("{host}:{}", state.cfg.port)
+}
+
+/// Get-or-create the ACME hook shared secret. Generated once (32 random bytes,
+/// hex) and stored; stable across restarts so regenerating the config doesn't
+/// churn the token on every apply.
+async fn ensure_acme_hook_token(state: &AppState) -> ApiResult<String> {
+    if let Some(tok) = repo::get_setting(&state.db, KEY_ACME_HOOK_TOKEN)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        if !tok.is_empty() {
+            return Ok(tok);
+        }
+    }
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).map_err(ApiError::internal)?;
+    let tok = hex::encode(buf);
+    repo::set_setting(&state.db, KEY_ACME_HOOK_TOKEN, &tok)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(tok)
 }
 
 /// Query `/status/http/acme_clients/` and return name → issued?. On any error
@@ -211,6 +252,7 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
             key_type: c.key_type.as_str().to_string(),
             email: c.email,
             staging: c.staging,
+            dns_provider: c.dns_provider.map(|p| p.as_str().to_string()),
             // Pause/enabled toggle is a follow-up UI action; default on.
             enabled: true,
         })
@@ -245,6 +287,8 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         public_dir: state.cfg.public_dir(),
         certificates,
         acme_socket_dir: state.cfg.angie.acme_socket_dir.clone(),
+        acme_hook_target: hook_target(state),
+        acme_hook_token: ensure_acme_hook_token(state).await?,
         access_lists,
         http_d_dir: state.cfg.angie.http_d_dir.clone(),
         redirect_hosts: repo::list_redirects(&state.db).await?,

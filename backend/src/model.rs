@@ -1106,6 +1106,33 @@ impl Challenge {
     }
 }
 
+/// How a DNS-01 challenge is fulfilled. `None` (the default) = Angie answers the
+/// validation query itself (`acme_dns_port` + NS delegation). A provider means
+/// Angie calls the panel's ACME hook, which creates the `_acme-challenge` TXT
+/// record via the provider's API — no NS delegation, no inbound UDP/53. This is
+/// what makes automatic wildcard work behind NAT / on a home connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DnsProvider {
+    /// reg.ru — TXT records managed via its API (zone/add_txt, zone/remove_record).
+    Regru,
+}
+
+impl DnsProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DnsProvider::Regru => "regru",
+        }
+    }
+
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s {
+            "regru" => Some(DnsProvider::Regru),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyType {
@@ -1133,6 +1160,10 @@ pub struct Certificate {
     pub key_type: KeyType,
     pub email: Option<String>,
     pub staging: bool,
+    /// For a DNS-01 cert: which provider API fulfils the challenge (via the
+    /// ACME hook). `None` = Angie answers DNS itself (NS delegation).
+    #[serde(default)]
+    pub dns_provider: Option<DnsProvider>,
     pub created_at: i64,
 }
 
@@ -1148,6 +1179,8 @@ pub struct CertificateInput {
     pub email: Option<String>,
     #[serde(default)]
     pub staging: bool,
+    #[serde(default)]
+    pub dns_provider: Option<DnsProvider>,
 }
 
 fn default_challenge() -> Challenge {
@@ -1208,6 +1241,12 @@ pub fn validate_cert_input(mut input: CertificateInput) -> Result<CertificateInp
             "wildcard_needs_dns",
             "wildcard domains (*.example.com) require the DNS-01 challenge",
         ));
+    }
+
+    // A DNS provider (hook-based TXT) only makes sense for DNS-01. Drop a stray
+    // provider on http/alpn so it can't linger and change generation later.
+    if input.challenge != Challenge::Dns {
+        input.dns_provider = None;
     }
 
     if let Some(email) = &input.email {
@@ -2310,6 +2349,7 @@ mod tests {
             key_type: KeyType::Ecdsa,
             email: None,
             staging: false,
+            dns_provider: None,
         }
     }
 

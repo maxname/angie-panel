@@ -59,6 +59,13 @@ pub struct GeneratorInput {
     /// Directory for the ACME collector unix sockets (one per certificate).
     /// The root helper ensures it exists before reload.
     pub acme_socket_dir: std::path::PathBuf,
+    /// Where Angie's ACME hook reaches the panel (`host:port`), for DNS-01
+    /// certs that use a provider API. The panel + Angie share a host, so this
+    /// is a loopback address.
+    pub acme_hook_target: String,
+    /// Shared secret embedded in the hook `proxy_pass` URL; the panel's hook
+    /// endpoint rejects any request without it (defence for a localhost port).
+    pub acme_hook_token: String,
     /// Access lists referenced by hosts via `access_list_id`.
     pub access_lists: Vec<AccessList>,
     /// Managed config dir — where generated files (incl. htpasswd) live; used
@@ -132,6 +139,9 @@ pub struct Certificate {
     pub enabled: bool,
     /// True once Angie has issued the certificate at least once.
     pub ready: bool,
+    /// DNS-01 provider ("regru", …) fulfilled via the ACME hook; None = Angie
+    /// answers DNS itself (acme_dns_port).
+    pub dns_provider: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -543,8 +553,15 @@ fn gen_acme(input: &GeneratorInput) -> String {
         return out;
     }
 
-    // dns-01 needs Angie to answer validation queries on UDP/53 itself.
-    if input.certificates.iter().any(|c| c.challenge == "dns") {
+    // dns-01 WITHOUT a provider needs Angie to answer validation queries on
+    // UDP/53 itself. Provider (hook-based) certs don't — the hook writes the
+    // TXT at the provider's API instead — so we only emit acme_dns_port when at
+    // least one self-answered dns cert exists.
+    if input
+        .certificates
+        .iter()
+        .any(|c| c.challenge == "dns" && c.dns_provider.is_none())
+    {
         out.push_str("# dns-01 certificates: Angie answers ACME DNS queries itself.\n");
         out.push_str("acme_dns_port 53;\n\n");
     }
@@ -584,6 +601,32 @@ fn gen_acme(input: &GeneratorInput) -> String {
         let _ = writeln!(out, "    listen unix:{};", sock.display());
         let _ = writeln!(out, "    server_name {};", cert.domains.join(" "));
         let _ = writeln!(out, "    acme {};", cert.name);
+        // Provider DNS-01: Angie calls this named location on each add/remove
+        // step; it proxies to the panel's ACME hook, which creates/deletes the
+        // _acme-challenge TXT via the provider API. Verified on real Angie.
+        if cert.dns_provider.is_some() {
+            let _ = writeln!(out, "    location @acme_hook_location {{");
+            let _ = writeln!(out, "        acme_hook {};", cert.name);
+            let _ = writeln!(
+                out,
+                "        proxy_pass http://{}/acme/hook?t={};",
+                input.acme_hook_target, input.acme_hook_token
+            );
+            let _ = writeln!(out, "        proxy_set_header X-Acme-Hook $acme_hook_name;");
+            let _ = writeln!(
+                out,
+                "        proxy_set_header X-Acme-Challenge $acme_hook_challenge;"
+            );
+            let _ = writeln!(
+                out,
+                "        proxy_set_header X-Acme-Domain $acme_hook_domain;"
+            );
+            let _ = writeln!(
+                out,
+                "        proxy_set_header X-Acme-Keyauth $acme_hook_keyauth;"
+            );
+            let _ = writeln!(out, "    }}");
+        }
         let _ = writeln!(out, "}}");
         out.push('\n');
     }

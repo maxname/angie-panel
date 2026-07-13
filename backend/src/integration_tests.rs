@@ -770,6 +770,37 @@ async fn stream_crud_port_conflict_and_preview() {
 }
 
 #[tokio::test]
+async fn acme_hook_requires_a_valid_token() {
+    // The ACME hook is called by Angie, not a user; it self-authenticates by a
+    // token in the query string. A caller without the (or a wrong) token gets
+    // 403 and triggers NO provider action — the security gate for a loopback
+    // endpoint that is exempt from CSRF/role.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cookie) = authed_app(dir.path()).await;
+
+    // No token → 403.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/acme/hook", None, None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // Wrong token → 403 (no token has been generated yet, so anything is wrong).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/acme/hook?t=deadbeef",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn sni_router_crud_conflict_and_preview() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

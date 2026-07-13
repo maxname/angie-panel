@@ -67,8 +67,12 @@ pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResu
     let bans = repo::list_bans(&state.db).await?;
     let mut settings = repo::all_settings(&state.db).await?;
 
-    // Never export internal bookkeeping keys.
+    // Never export internal bookkeeping keys or secrets (reg.ru creds, the hook
+    // token). The user re-enters credentials after a restore.
     settings.remove(crate::settings::KEY_LAST_APPLIED_REVISION);
+    for k in crate::apply_api::SECRET_SETTING_KEYS {
+        settings.remove(*k);
+    }
 
     // Access lists carry their user password HASHES so a restore is faithful
     // (the normal list API hides them; the full export is sensitive by design).

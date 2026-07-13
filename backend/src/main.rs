@@ -1,4 +1,5 @@
 mod access_lists;
+mod acme_hook;
 mod api;
 mod apply;
 mod apply_api;
@@ -19,6 +20,7 @@ mod hosts;
 mod model;
 mod other_hosts;
 mod reconcile;
+mod regru;
 mod repo;
 mod security;
 mod settings;

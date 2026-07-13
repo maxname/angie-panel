@@ -171,14 +171,33 @@ pub async fn history(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiRes
 
 // ----------------------------------------------------------------- settings
 
+/// Setting keys that are secrets: never returned by the settings GET (only a
+/// "configured" flag is), and never included in a config export.
+pub const SECRET_SETTING_KEYS: &[&str] = &[
+    settings::KEY_REGRU_USERNAME,
+    settings::KEY_REGRU_PASSWORD,
+    settings::KEY_ACME_HOOK_TOKEN,
+];
+
 pub async fn get_settings(
     _u: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<Value>> {
-    let map = repo::all_settings(&state.db).await?;
+    let mut map = repo::all_settings(&state.db).await?;
+    // Redact secrets — the client learns only whether reg.ru creds are set.
+    let regru_configured = map
+        .get(settings::KEY_REGRU_USERNAME)
+        .is_some_and(|v| !v.is_empty())
+        && map
+            .get(settings::KEY_REGRU_PASSWORD)
+            .is_some_and(|v| !v.is_empty());
+    for k in SECRET_SETTING_KEYS {
+        map.remove(*k);
+    }
     let eff = settings::effective_settings(&state).await?;
     Ok(Json(json!({
         "raw": map,
+        "regru_configured": regru_configured,
         "effective": {
             "default_site": format!("{:?}", eff.default_site),
             "ipv6_enabled": eff.ipv6_enabled,
@@ -199,6 +218,10 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     settings::KEY_IPV6_ENABLED,
     settings::KEY_RESOLVER_OVERRIDE,
     settings::KEY_ACME_EMAIL,
+    // reg.ru API credentials (write-only secrets; redacted from GET). Writing an
+    // empty string clears one, disconnecting the provider.
+    settings::KEY_REGRU_USERNAME,
+    settings::KEY_REGRU_PASSWORD,
 ];
 
 pub async fn put_settings(

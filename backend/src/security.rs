@@ -23,6 +23,14 @@ fn is_self_service(path: &str) -> bool {
     )
 }
 
+/// The ACME DNS-01 hook Angie calls during issuance. It carries no session and
+/// is authenticated by a token in the query string (see `acme_hook`), so it is
+/// exempt from the CSRF + role gate. It is loopback-only (Host allowlist still
+/// applies) and does nothing without a valid token.
+pub fn is_acme_hook(path: &str) -> bool {
+    path == "/api/acme/hook"
+}
+
 fn reject(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
@@ -74,8 +82,10 @@ pub async fn security_layer(
         );
     }
 
-    // 2. Mutation guard: custom header + Origin check.
-    let mutating = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    // 2. Mutation guard: custom header + Origin check. The token-gated ACME hook
+    // is exempt — it is called by Angie (no session/CSRF) and self-authenticates.
+    let mutating = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
+        && !is_acme_hook(req.uri().path());
     if mutating {
         let has_marker = req
             .headers()

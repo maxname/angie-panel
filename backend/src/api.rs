@@ -6,13 +6,17 @@ use axum::Router;
 
 use crate::state::AppState;
 use crate::{
-    access_lists, apply_api, assets, audit, auth, bans, certs, dashboard, export_import, geo,
-    hosts, other_hosts, security, sni_routers, streams, system, users,
+    access_lists, acme_hook, apply_api, assets, audit, auth, bans, certs, dashboard, export_import,
+    geo, hosts, other_hosts, security, sni_routers, streams, system, users,
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/auth/state", get(auth::auth_state))
+        // Called by Angie's acme_hook during DNS-01 issuance (token-gated;
+        // exempt from CSRF/role via security::is_acme_hook). GET and POST since
+        // the ACME module's internal subrequest method isn't contractual.
+        .route("/acme/hook", get(acme_hook::hook).post(acme_hook::hook))
         .route("/auth/setup", post(auth::setup))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
