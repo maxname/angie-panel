@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
-import { Info, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { Info, Loader2, MoreHorizontal, Plus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -21,6 +21,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -209,24 +216,26 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">{created}</TableCell>
       <TableCell className="text-right">
-        <div className="flex justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onEdit}
-            aria-label={t('certificates.actions.edit')}
-          >
-            <Pencil aria-hidden="true" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onDelete}
-            aria-label={t('certificates.actions.delete')}
-          >
-            <Trash2 aria-hidden="true" />
-          </Button>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t('certificates.table.actions')}
+            >
+              <MoreHorizontal aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={onEdit}>
+              {t('certificates.actions.edit')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              {t('certificates.actions.delete')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </TableCell>
     </TableRow>
   )
