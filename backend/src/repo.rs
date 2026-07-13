@@ -7,9 +7,9 @@ use sqlx::SqlitePool;
 
 use crate::db::now_epoch;
 use crate::model::{
-    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, ErrorPages,
-    ForwardAuth, Gzip, KeyType, Maintenance, Mtls, ProxyHost, ProxyHostInput, RateLimit, Scheme,
-    Upstream,
+    Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, DnsCredential,
+    DnsCredentialInput, ErrorPages, ForwardAuth, Gzip, KeyType, Maintenance, Mtls, ProxyHost,
+    ProxyHostInput, RateLimit, Scheme, Upstream,
 };
 
 // ------------------------------------------------------------------- rows
@@ -1015,6 +1015,97 @@ pub async fn delete_cert(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
     Ok(rows.rows_affected() > 0)
 }
 
+// ------------------------------------------------- DNS credential profiles
+
+#[derive(sqlx::FromRow)]
+struct DnsCredentialRow {
+    id: i64,
+    provider: String,
+    name: String,
+    created_at: i64,
+}
+
+impl From<DnsCredentialRow> for DnsCredential {
+    fn from(r: DnsCredentialRow) -> Self {
+        DnsCredential {
+            id: r.id,
+            provider: r.provider,
+            name: r.name,
+            created_at: r.created_at,
+        }
+    }
+}
+
+pub async fn list_dns_credentials(db: &SqlitePool) -> anyhow::Result<Vec<DnsCredential>> {
+    let rows: Vec<DnsCredentialRow> =
+        sqlx::query_as("SELECT id, provider, name, created_at FROM dns_credentials ORDER BY id")
+            .fetch_all(db)
+            .await?;
+    Ok(rows.into_iter().map(DnsCredential::from).collect())
+}
+
+pub async fn get_dns_credential(db: &SqlitePool, id: i64) -> anyhow::Result<Option<DnsCredential>> {
+    let row: Option<DnsCredentialRow> =
+        sqlx::query_as("SELECT id, provider, name, created_at FROM dns_credentials WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.map(DnsCredential::from))
+}
+
+pub async fn insert_dns_credential(
+    db: &SqlitePool,
+    input: &DnsCredentialInput,
+) -> anyhow::Result<i64> {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO dns_credentials (provider, name, created_at) VALUES (?,?,?) RETURNING id",
+    )
+    .bind(&input.provider)
+    .bind(&input.name)
+    .bind(now_epoch())
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+/// Rename a profile (the provider type is immutable). Returns false if missing.
+pub async fn update_dns_credential_name(
+    db: &SqlitePool,
+    id: i64,
+    name: &str,
+) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE dns_credentials SET name = ? WHERE id = ?")
+        .bind(name)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+/// Delete a profile and all its stored credential settings (`dns_cred:<id>:*`).
+pub async fn delete_dns_credential(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let mut tx = db.begin().await?;
+    let rows = sqlx::query("DELETE FROM dns_credentials WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM settings WHERE key LIKE ?")
+        .bind(format!("dns_cred:{id}:%"))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+/// Whether any certificate references this credential profile (by its id).
+pub async fn dns_credential_in_use(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM certificates WHERE dns_provider = ?")
+        .bind(id.to_string())
+        .fetch_one(db)
+        .await?;
+    Ok(n > 0)
+}
+
 /// Transactionally REPLACE all hosts + certificates with an imported set
 /// (config import). Every input is already validated by the caller. Explicit
 /// ids are preserved so hosts keep their certificate_id references. The admin
@@ -1029,6 +1120,7 @@ pub async fn import_replace(
     deads: &[(i64, DeadHostInput)],
     streams: &[(i64, StreamInput)],
     sni_routers: &[(i64, SniRouterInput)],
+    dns_credentials: &[(i64, DnsCredentialInput)],
     bans: &[(i64, BanInput)],
     settings: &std::collections::HashMap<String, String>,
 ) -> anyhow::Result<()> {
@@ -1043,6 +1135,7 @@ pub async fn import_replace(
         "dead_hosts",
         "streams",
         "sni_routers",
+        "dns_credentials",
         "bans",
         "access_list_users",
         "access_list_clients",
@@ -1067,6 +1160,18 @@ pub async fn import_replace(
         .bind(c.email.as_deref())
         .bind(c.staging as i64)
         .bind(c.dns_provider.as_deref())
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (id, dc) in dns_credentials {
+        sqlx::query(
+            "INSERT INTO dns_credentials (id, provider, name, created_at) VALUES (?,?,?,?)",
+        )
+        .bind(id)
+        .bind(&dc.provider)
+        .bind(&dc.name)
         .bind(now)
         .execute(&mut *tx)
         .await?;

@@ -19,8 +19,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/acme/hook", get(acme_hook::hook).post(acme_hook::hook))
         .route("/dns-providers", get(acme_hook::list_providers))
         .route(
-            "/dns-providers/{id}/credentials",
-            axum::routing::put(acme_hook::set_credentials),
+            "/dns-credentials",
+            get(acme_hook::list_credentials).post(acme_hook::create_credential),
+        )
+        .route(
+            "/dns-credentials/{id}",
+            axum::routing::put(acme_hook::update_credential).delete(acme_hook::delete_credential),
         )
         .route("/auth/setup", post(auth::setup))
         .route("/auth/login", post(auth::login))

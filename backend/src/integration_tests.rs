@@ -801,11 +801,11 @@ async fn acme_hook_requires_a_valid_token() {
 }
 
 #[tokio::test]
-async fn dns_providers_registry_and_credentials() {
+async fn dns_credential_profiles_crud() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;
 
-    // The registry lists providers, all initially unconfigured.
+    // The static type registry lists provider types (no per-type creds now).
     let res = app
         .clone()
         .oneshot(request(
@@ -817,62 +817,128 @@ async fn dns_providers_registry_and_credentials() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let body = body_json(res).await;
-    let providers = body["providers"].as_array().unwrap();
-    let cf = providers.iter().find(|p| p["id"] == "cloudflare").unwrap();
-    assert_eq!(cf["configured"], json!(false));
-    assert!(providers.iter().any(|p| p["id"] == "regru"));
+    let providers = body_json(res).await["providers"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(providers.iter().any(|p| p["id"] == "cloudflare"));
 
-    // Saving credentials flips "configured".
+    // TWO Cloudflare profiles can coexist (the whole point).
+    let mk = |name: &str, token: &str| json!({"provider":"cloudflare","name":name,"credentials":{"CF_Token":token}});
     let res = app
         .clone()
         .oneshot(request(
-            Method::PUT,
-            "/api/dns-providers/cloudflare/credentials",
-            Some(json!({"credentials": {"CF_Token": "secret-token"}})),
+            Method::POST,
+            "/api/dns-credentials",
+            Some(mk("CF personal", "tok1")),
             Some(&cookie),
         ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_json(res).await["configured"], json!(true));
+    let p1 = body_json(res).await;
+    assert_eq!(p1["configured"], json!(true));
+    assert_eq!(p1["provider_label"], json!("Cloudflare"));
+    let id1 = p1["id"].as_i64().unwrap();
 
-    // Unknown provider → 404; unknown field → 400.
     let res = app
         .clone()
         .oneshot(request(
-            Method::PUT,
-            "/api/dns-providers/nope/credentials",
-            Some(json!({"credentials": {"X": "y"}})),
+            Method::POST,
+            "/api/dns-credentials",
+            Some(mk("CF work", "tok2")),
             Some(&cookie),
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Both appear in the list.
     let res = app
         .clone()
         .oneshot(request(
-            Method::PUT,
-            "/api/dns-providers/cloudflare/credentials",
-            Some(json!({"credentials": {"BOGUS": "y"}})),
+            Method::GET,
+            "/api/dns-credentials",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let creds = body_json(res).await["credentials"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        creds
+            .iter()
+            .filter(|c| c["provider"] == "cloudflare")
+            .count(),
+        2
+    );
+
+    // Unknown provider type → 400; unknown field → 400.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/dns-credentials",
+            Some(json!({"provider":"nope","name":"x","credentials":{}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/dns-credentials",
+            Some(json!({"provider":"cloudflare","name":"x","credentials":{"BOGUS":"y"}})),
             Some(&cookie),
         ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 
-    // The stored credential is NEVER surfaced by the settings GET.
+    // A cert may reference a profile; then deleting it is blocked (409).
+    let res = app
+        .clone()
+        .oneshot(request(Method::POST, "/api/certificates",
+            Some(json!({"name":"wild","domains":["*.example.com"],"challenge":"dns","dns_provider":id1.to_string()})),
+            Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/dns-credentials/{id1}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // A cert referencing a non-existent profile is rejected.
+    let res = app
+        .clone()
+        .oneshot(request(Method::POST, "/api/certificates",
+            Some(json!({"name":"wild2","domains":["*.other.com"],"challenge":"dns","dns_provider":"9999"})),
+            Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Credentials never leak via the settings GET.
     let res = app
         .clone()
         .oneshot(request(Method::GET, "/api/settings", None, Some(&cookie)))
         .await
         .unwrap();
-    let settings = body_json(res).await;
-    let raw = settings["raw"].as_object().unwrap();
-    assert!(
-        !raw.keys().any(|k| k.starts_with("dns_cred:")),
-        "provider credentials must not leak in settings, got {raw:?}"
-    );
+    let raw = body_json(res).await["raw"].as_object().unwrap().clone();
+    assert!(!raw.keys().any(|k| k.starts_with("dns_cred:")));
 }
 
 #[tokio::test]

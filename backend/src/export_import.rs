@@ -43,6 +43,7 @@ struct Export {
     dead_hosts: Vec<Value>,
     streams: Vec<Value>,
     sni_routers: Vec<Value>,
+    dns_credentials: Vec<Value>,
     bans: Vec<Value>,
     settings: HashMap<String, String>,
 }
@@ -64,6 +65,7 @@ pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResu
     let deads = repo::list_dead(&state.db).await?;
     let streams = repo::list_streams(&state.db).await?;
     let sni_routers = repo::list_sni_routers(&state.db).await?;
+    let dns_credentials = repo::list_dns_credentials(&state.db).await?;
     let bans = repo::list_bans(&state.db).await?;
     let mut settings = repo::all_settings(&state.db).await?;
 
@@ -104,6 +106,7 @@ pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResu
         dead_hosts: to_values(&deads),
         streams: to_values(&streams),
         sni_routers: to_values(&sni_routers),
+        dns_credentials: to_values(&dns_credentials),
         bans: to_values(&bans),
         settings,
     };
@@ -128,6 +131,8 @@ pub struct ImportDoc {
     streams: Vec<Value>,
     #[serde(default)]
     sni_routers: Vec<Value>,
+    #[serde(default)]
+    dns_credentials: Vec<Value>,
     #[serde(default)]
     bans: Vec<Value>,
     #[serde(default)]
@@ -405,6 +410,39 @@ pub async fn import(
         sni_routers.push((id, input));
     }
 
+    // --- DNS credential profiles (validated; ids preserved so certs keep their
+    // dns_provider reference). Secrets are not in the export — restored profiles
+    // are unconfigured until the operator re-enters credentials. ---
+    let mut dns_credentials: Vec<(i64, model::DnsCredentialInput)> = Vec::new();
+    let mut dns_cred_ids = std::collections::HashSet::new();
+    for (i, v) in doc.dns_credentials.iter().enumerate() {
+        let id =
+            extract_id(v).ok_or_else(|| bad_entry("dns_credential", i, "missing numeric id"))?;
+        let input: model::DnsCredentialInput = serde_json::from_value(v.clone())
+            .map_err(|e| bad_entry("dns_credential", i, &e.to_string()))?;
+        let input = model::validate_dns_credential_input(input)?;
+        if !dns_cred_ids.insert(id) {
+            return Err(bad_entry("dns_credential", i, "duplicate id"));
+        }
+        dns_credentials.push((id, input));
+    }
+    // A cert's dns_provider (when set) must reference an imported profile.
+    for (i, (_, cert)) in certs.iter().enumerate() {
+        if let Some(pid) = &cert.dns_provider {
+            let ok = pid
+                .parse::<i64>()
+                .map(|n| dns_cred_ids.contains(&n))
+                .unwrap_or(false);
+            if !ok {
+                return Err(bad_entry(
+                    "certificate",
+                    i,
+                    "dns_provider references a DNS credential profile not in the import",
+                ));
+            }
+        }
+    }
+
     // --- bans (validated like the CRUD API; dedup by address) ---
     let mut bans: Vec<(i64, model::BanInput)> = Vec::new();
     let mut ban_ids = std::collections::HashSet::new();
@@ -444,6 +482,7 @@ pub async fn import(
         &deads,
         &streams,
         &sni_routers,
+        &dns_credentials,
         &bans,
         &settings,
     )
@@ -459,6 +498,7 @@ pub async fn import(
             "dead_hosts": deads.len(),
             "streams": streams.len(),
             "sni_routers": sni_routers.len(),
+            "dns_credentials": dns_credentials.len(),
             "bans": bans.len(),
             "settings": settings.len(),
         },

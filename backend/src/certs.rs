@@ -64,6 +64,19 @@ pub async fn create(
     Json(raw): Json<model::CertificateInput>,
 ) -> ApiResult<Json<Value>> {
     let input = model::validate_cert_input(raw)?;
+    // A DNS-01 provider reference must point at an existing credential profile.
+    if let Some(pid) = &input.dns_provider {
+        let exists = match pid.parse::<i64>() {
+            Ok(id) => repo::get_dns_credential(&state.db, id).await?.is_some(),
+            Err(_) => false,
+        };
+        if !exists {
+            return Err(ApiError::bad_request(
+                "invalid_dns_provider",
+                "the selected DNS provider profile does not exist",
+            ));
+        }
+    }
     // Name is the acme_client identifier and the $acme_cert_<name> variable —
     // globally unique, immutable after creation.
     if repo::cert_name_exists(&state.db, &input.name).await? {

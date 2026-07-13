@@ -217,13 +217,13 @@ fn golden_10_acme_clients() {
 
 #[test]
 fn golden_acme_dns_provider_hook() {
-    // A wildcard DNS-01 cert fulfilled via a provider (reg.ru) hook: the
-    // collector gains an @acme_hook_location that proxies to the panel, and
-    // acme_dns_port is NOT emitted (Angie doesn't answer DNS itself). Verified
-    // on real Angie + pebble: the hook sets the TXT and the cert issues.
+    // A wildcard DNS-01 cert fulfilled via a provider hook: the collector gains
+    // an @acme_hook_location that proxies to the panel with the credential
+    // profile id, and acme_dns_port is NOT emitted (Angie doesn't answer DNS).
+    // Verified on real Angie + pebble: the hook sets the TXT and the cert issues.
     let mut wild = ready_cert(1, "web", &["*.example.com", "example.com"]);
     wild.challenge = "dns".into();
-    wild.dns_provider = Some("regru".into());
+    wild.dns_provider = Some("7".into()); // credential-profile id
     let files = generate(&input(
         vec![],
         vec![wild],
@@ -237,7 +237,7 @@ fn golden_acme_dns_provider_hook() {
     );
     assert!(acme.contains("location @acme_hook_location"));
     assert!(acme.contains("acme_hook web;"));
-    assert!(acme.contains("proxy_pass http://127.0.0.1:8080/acme/hook?t=testtoken&provider=regru;"));
+    assert!(acme.contains("proxy_pass http://127.0.0.1:8080/acme/hook?t=testtoken&provider=7;"));
     assert!(acme.contains("proxy_set_header X-Acme-Keyauth $acme_hook_keyauth;"));
     assert_golden("10-acme-hook.conf", acme);
     // The hook's loopback proxy_pass must pass the linter (it is exempt as a

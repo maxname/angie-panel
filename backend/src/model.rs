@@ -1163,6 +1163,53 @@ pub struct CertificateInput {
     pub dns_provider: Option<String>,
 }
 
+/// A named DNS provider credential profile — one account of a provider type
+/// (so two Cloudflare accounts can coexist). The secret values live in the
+/// settings table under `dns_cred:<id>:<ENV>`. A certificate's `dns_provider`
+/// references this profile's id.
+#[derive(Debug, Clone, Serialize)]
+pub struct DnsCredential {
+    pub id: i64,
+    /// Provider TYPE id from the [`crate::dns_providers`] registry.
+    pub provider: String,
+    pub name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DnsCredentialInput {
+    pub provider: String,
+    pub name: String,
+}
+
+pub const MAX_DNS_CREDENTIAL_NAME_LEN: usize = 64;
+
+/// Validate a credential profile: known provider type + a clean label.
+pub fn validate_dns_credential_input(
+    mut input: DnsCredentialInput,
+) -> Result<DnsCredentialInput, ApiError> {
+    if !crate::dns_providers::is_valid(&input.provider) {
+        return Err(bad(
+            "invalid_dns_provider",
+            format!("'{}' is not a supported DNS provider", input.provider),
+        ));
+    }
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty() {
+        return Err(bad("invalid_name", "profile name must not be empty"));
+    }
+    if input.name.chars().count() > MAX_DNS_CREDENTIAL_NAME_LEN {
+        return Err(bad("invalid_name", "profile name is too long"));
+    }
+    if input.name.chars().any(|c| c.is_control()) {
+        return Err(bad(
+            "invalid_name",
+            "profile name must not contain control characters",
+        ));
+    }
+    Ok(input)
+}
+
 fn default_challenge() -> Challenge {
     Challenge::Http
 }
@@ -1223,20 +1270,12 @@ pub fn validate_cert_input(mut input: CertificateInput) -> Result<CertificateInp
         ));
     }
 
-    // A DNS provider (hook-based TXT) only makes sense for DNS-01. Drop a stray
-    // provider on http/alpn so it can't linger and change generation later; when
-    // set, it must be a known provider from the registry.
-    if input.challenge != Challenge::Dns {
+    // A DNS provider profile (hook-based TXT) only makes sense for DNS-01. Drop a
+    // stray reference on http/alpn so it can't linger and change generation
+    // later. `dns_provider` holds a credential-profile id; that it references an
+    // existing profile is checked in the certs handler (needs the DB).
+    if input.challenge != Challenge::Dns || input.dns_provider.as_deref() == Some("") {
         input.dns_provider = None;
-    } else if let Some(p) = &input.dns_provider {
-        if p.is_empty() {
-            input.dns_provider = None;
-        } else if !crate::dns_providers::is_valid(p) {
-            return Err(bad(
-                "invalid_dns_provider",
-                format!("'{p}' is not a supported DNS provider"),
-            ));
-        }
     }
 
     if let Some(email) = &input.email {
