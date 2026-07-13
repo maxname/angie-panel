@@ -479,6 +479,17 @@ export const ru: typeof en = {
         'Импортировано хостов: {{hosts}}, потоков: {{streams}}, сертификатов: {{certs}}, списков доступа: {{lists}}',
       goToApply: 'Перейдите к применению, чтобы активировать импортированную конфигурацию',
     },
+    regru: {
+      title: 'DNS-провайдер reg.ru',
+      configured: 'Настроено',
+      description:
+        'API-доступ для автоматических wildcard-сертификатов через DNS-01. Панель сама создаёт TXT-запись _acme-challenge через reg.ru — без NS-делегирования и UDP/53.',
+      username: 'API-логин',
+      password: 'API-пароль',
+      hint: 'Логин и пароль вашего аккаунта reg.ru (включите доступ к API в reg.ru и разрешите IP этого сервера). Хранятся только для записи — не показываются повторно и не попадают в бэкапы.',
+      save: 'Сохранить доступы',
+      disconnect: 'Отключить',
+    },
   },
   certificates: {
     title: 'Сертификаты',
@@ -548,6 +559,15 @@ export const ru: typeof en = {
       challengeAlpn: 'TLS-ALPN-01 (только порт 443)',
       challengeDns: 'DNS-01 (обязателен для wildcard)',
       wildcardNote: 'Домены с wildcard требуют DNS-01.',
+      dnsMethod: 'Как отвечать на DNS-проверку',
+      dnsMethodSelf: 'Angie отвечает сам (NS-делегирование)',
+      dnsMethodSelfHint:
+        'Вы делегируете _acme-challenge на этот сервер, и он должен быть доступен по UDP/53. Не годится за NAT.',
+      dnsMethodRegru: 'API reg.ru (автоматически)',
+      dnsMethodRegruHint:
+        'Панель сама создаёт TXT-запись через API reg.ru. Полностью автоматически, работает за NAT — без UDP/53.',
+      regruNotConfigured:
+        'Учётные данные reg.ru ещё не заданы. Добавьте их в Настройках → DNS-провайдер reg.ru — и всё заработает.',
       keyType: 'Тип ключа',
       email: 'Контактный email (необязательно)',
       emailPlaceholder: 'admin@example.com',

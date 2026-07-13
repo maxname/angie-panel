@@ -483,10 +483,15 @@ export interface EffectiveSettings {
 
 export interface SettingsResponse {
   raw: Record<string, string>
+  /** Whether reg.ru API credentials are set (the creds themselves are secret). */
+  regru_configured: boolean
   effective: EffectiveSettings
 }
 
 export type AcmeChallenge = 'http' | 'dns' | 'alpn'
+
+/** DNS-01 provider whose API fulfils the challenge via the ACME hook. */
+export type DnsProvider = 'regru'
 
 export type AcmeKeyType = 'ecdsa' | 'rsa'
 
@@ -512,6 +517,9 @@ export interface Cert {
   key_type: AcmeKeyType
   email: string | null
   staging: boolean
+  /** For a DNS-01 cert: provider API that fulfils the challenge (null = Angie
+   *  answers DNS itself via NS delegation). */
+  dns_provider: DnsProvider | null
   /** Unix timestamp, seconds. */
   created_at: number
   status: AcmeStatus | null
@@ -525,6 +533,7 @@ export interface CertInput {
   key_type?: AcmeKeyType
   email?: string | null
   staging?: boolean
+  dns_provider?: DnsProvider | null
 }
 
 export interface DelegationHint {

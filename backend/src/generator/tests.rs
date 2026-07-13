@@ -240,6 +240,18 @@ fn golden_acme_dns_provider_hook() {
     assert!(acme.contains("proxy_pass http://127.0.0.1:8080/acme/hook?t=testtoken;"));
     assert!(acme.contains("proxy_set_header X-Acme-Keyauth $acme_hook_keyauth;"));
     assert_golden("10-acme-hook.conf", acme);
+    // The hook's loopback proxy_pass must pass the linter (it is exempt as a
+    // token-gated endpoint) — the whole fileset is lint-clean.
+    let policy = lint::LintPolicy {
+        snippets_dir: snippets_dir(),
+        public_dir: public_dir(),
+        allow_advanced_snippets: true,
+    };
+    let violations = lint::check_fileset(&files, &policy);
+    assert!(
+        violations.is_empty(),
+        "provider-hook fileset must lint clean, got: {violations:#?}"
+    );
 }
 
 #[test]

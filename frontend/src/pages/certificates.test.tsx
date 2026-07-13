@@ -23,6 +23,7 @@ const unknownCert: Cert = {
   key_type: 'ecdsa',
   email: null,
   staging: false,
+  dns_provider: null,
   created_at: 1751700000,
   // Angie status API unreachable → the whole status object is null.
   status: null,
@@ -36,6 +37,7 @@ const validCert: Cert = {
   key_type: 'rsa',
   email: 'admin@example.com',
   staging: true,
+  dns_provider: null,
   created_at: 1751700000,
   status: { state: 'valid', certificate: 'valid' },
 }
@@ -119,6 +121,33 @@ describe('certificate wizard', () => {
     expect(screen.getByRole('radio', { name: /TLS-ALPN-01/ })).toBeDisabled()
     expect(
       screen.getByText('Wildcard domains require DNS-01.'),
+    ).toBeInTheDocument()
+  })
+
+  it('offers the reg.ru DNS method and warns when it is not configured', async () => {
+    const user = userEvent.setup()
+    // getSettings → reg.ru not configured; other calls unused here.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({ raw: {}, regru_configured: false, effective: {} }),
+      ),
+    )
+    renderWizard()
+
+    await user.type(screen.getByLabelText('Domains'), '*.example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    // The DNS-method choice appears; self-answer is the default.
+    const self = screen.getByRole('radio', { name: /Angie answers/ })
+    const regru = screen.getByRole('radio', { name: /reg\.ru API/ })
+    expect(self).toBeChecked()
+
+    // Choosing reg.ru while creds are unset surfaces the setup hint.
+    await user.click(regru)
+    expect(regru).toBeChecked()
+    expect(
+      await screen.findByText(/reg\.ru credentials aren.t set yet/i),
     ).toBeInTheDocument()
   })
 })

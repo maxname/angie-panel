@@ -79,10 +79,124 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       ) : (
-        <SettingsForm data={settingsQuery.data} />
+        <>
+          <SettingsForm data={settingsQuery.data} />
+          <RegruCredentials configured={settingsQuery.data.regru_configured} />
+        </>
       )}
       <BackupRestore />
     </div>
+  )
+}
+
+/** reg.ru API credentials for automatic DNS-01 wildcard issuance. Write-only:
+ *  the panel never returns the stored values, only whether they are set. */
+function RegruCredentials({ configured }: { configured: boolean }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
+  const saveMutation = useMutation({
+    mutationFn: (body: Record<string, string>) => api.updateSettings(body),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['settings'], result)
+      setUsername('')
+      setPassword('')
+      toast({ variant: 'success', title: t('settings.saved') })
+    },
+  })
+
+  const disconnect = () =>
+    saveMutation.mutate({ regru_username: '', regru_password: '' })
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    saveMutation.mutate({
+      regru_username: username.trim(),
+      regru_password: password,
+    })
+  }
+
+  const error =
+    saveMutation.isError && saveMutation.error instanceof ApiError
+      ? saveMutation.error.message
+      : saveMutation.isError
+        ? t('common.error')
+        : null
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {t('settings.regru.title')}
+          {configured && (
+            <span className="rounded-full bg-emerald-600/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              {t('settings.regru.configured')}
+            </span>
+          )}
+        </CardTitle>
+        <CardDescription>{t('settings.regru.description')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid gap-2 sm:max-w-xs">
+            <Label htmlFor="regru-username">{t('settings.regru.username')}</Label>
+            <Input
+              id="regru-username"
+              autoComplete="off"
+              placeholder={configured ? '••••••••' : ''}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-2 sm:max-w-xs">
+            <Label htmlFor="regru-password">{t('settings.regru.password')}</Label>
+            <Input
+              id="regru-password"
+              type="password"
+              autoComplete="new-password"
+              placeholder={configured ? '••••••••' : ''}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t('settings.regru.hint')}
+          </p>
+          {error !== null && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <Button
+              type="submit"
+              disabled={
+                saveMutation.isPending ||
+                username.trim() === '' ||
+                password === ''
+              }
+            >
+              {saveMutation.isPending && (
+                <Loader2 className="animate-spin" aria-hidden="true" />
+              )}
+              {t('settings.regru.save')}
+            </Button>
+            {configured && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={saveMutation.isPending}
+                onClick={disconnect}
+              >
+                {t('settings.regru.disconnect')}
+              </Button>
+            )}
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   )
 }
 

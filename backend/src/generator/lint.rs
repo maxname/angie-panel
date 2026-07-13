@@ -372,6 +372,16 @@ fn check_proxy_pass(directive: &str, args: &str) -> Option<String> {
         .unwrap_or(target);
     // Take the authority (up to the first '/').
     let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+    let path = &after_scheme[authority.len()..];
+
+    // Exempt the panel's own DNS-01 ACME hook: it is a deliberate loopback
+    // proxy_pass (emitted for provider certs) to a TOKEN-GATED endpoint. This is
+    // the only sanctioned loopback target. Safe because the path reaches nothing
+    // else privileged and the hook returns 403 without the secret token — so
+    // even a hand-written snippet aimed here cannot drive it.
+    if directive == "proxy_pass" && path.trim_start_matches('/').starts_with("acme/hook") {
+        return None;
+    }
 
     if let Some((host, port)) = split_host_port(authority) {
         let is_local = match host.parse::<IpAddr>() {

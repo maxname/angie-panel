@@ -48,6 +48,7 @@ import {
   type Cert,
   type CertInput,
   type CertPrecheck,
+  type DnsProvider,
 } from '@/lib/api'
 import { isValidDomain } from '@/lib/domain'
 import { toast } from '@/lib/toast'
@@ -389,6 +390,8 @@ interface WizardState {
   key_type: AcmeKeyType
   email: string
   staging: boolean
+  /** For DNS-01: 'regru' = automatic via reg.ru API; null = Angie self-answers. */
+  dns_provider: DnsProvider | null
 }
 
 const CHALLENGE_OPTIONS: { value: AcmeChallenge; labelKey: string }[] = [
@@ -416,7 +419,13 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
     key_type: 'ecdsa',
     email: '',
     staging: false,
+    dns_provider: null,
   })
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.getSettings(),
+  })
+  const regruConfigured = settingsQuery.data?.regru_configured ?? false
   const [domainDraft, setDomainDraft] = useState('')
   const [domainError, setDomainError] = useState<string | null>(null)
   const [clientErrors, setClientErrors] = useState<WizardFieldErrors>({})
@@ -429,6 +438,11 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
   // force the challenge and disable the other two options while one is present.
   const hasWildcard = form.domains.some((domain) => domain.startsWith('*.'))
   const effectiveChallenge: AcmeChallenge = hasWildcard ? 'dns' : form.challenge
+  const usingDns = effectiveChallenge === 'dns'
+  // The provider only applies to DNS-01; ignore any stray choice otherwise.
+  const effectiveDnsProvider: DnsProvider | null = usingDns
+    ? form.dns_provider
+    : null
 
   const precheckMutation = useMutation({
     mutationFn: (id: number) => api.precheckCertificate(id),
@@ -442,8 +456,10 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
         title: t('certificates.wizard.createdToastTitle'),
         description: t('certificates.wizard.createdToastBody'),
       })
-      if (cert.challenge === 'dns') {
-        // Show the delegation records the user must create before issuance works.
+      if (cert.challenge === 'dns' && cert.dns_provider === null) {
+        // Self-answered DNS-01: show the NS-delegation records the user must
+        // create. Provider (reg.ru) certs need none — the hook does it — so we
+        // just close.
         setCreated(cert)
         precheckMutation.mutate(cert.id)
       } else {
@@ -527,6 +543,7 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
       key_type: form.key_type,
       email: form.email.trim() === '' ? null : form.email.trim(),
       staging: form.staging,
+      dns_provider: effectiveDnsProvider,
     }
     createMutation.mutate(input)
   }
@@ -661,6 +678,59 @@ export function CertWizardForm({ onDone }: { onDone: () => void }) {
           </p>
         )}
       </fieldset>
+
+      {usingDns && (
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium">
+            {t('certificates.wizard.dnsMethod')}
+          </legend>
+          <div className="space-y-2 rounded-lg border p-3">
+            <label
+              htmlFor="cert-dns-self"
+              className="flex cursor-pointer items-start gap-3"
+            >
+              <input
+                type="radio"
+                id="cert-dns-self"
+                name="cert-dns-method"
+                className="mt-0.5 size-4 accent-primary"
+                checked={form.dns_provider === null}
+                onChange={() => patch({ dns_provider: null })}
+              />
+              <span className="text-sm">
+                {t('certificates.wizard.dnsMethodSelf')}
+                <span className="block text-xs text-muted-foreground">
+                  {t('certificates.wizard.dnsMethodSelfHint')}
+                </span>
+              </span>
+            </label>
+            <label
+              htmlFor="cert-dns-regru"
+              className="flex cursor-pointer items-start gap-3"
+            >
+              <input
+                type="radio"
+                id="cert-dns-regru"
+                name="cert-dns-method"
+                className="mt-0.5 size-4 accent-primary"
+                checked={form.dns_provider === 'regru'}
+                onChange={() => patch({ dns_provider: 'regru' })}
+              />
+              <span className="text-sm">
+                {t('certificates.wizard.dnsMethodRegru')}
+                <span className="block text-xs text-muted-foreground">
+                  {t('certificates.wizard.dnsMethodRegruHint')}
+                </span>
+              </span>
+            </label>
+          </div>
+          {form.dns_provider === 'regru' && !regruConfigured && (
+            <p role="alert" className="text-sm text-amber-600 dark:text-amber-500">
+              {t('certificates.wizard.regruNotConfigured')}
+            </p>
+          )}
+        </fieldset>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
