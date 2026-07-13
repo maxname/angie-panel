@@ -78,6 +78,22 @@ async fn check_port_free(state: &AppState, input: &StreamInput, exclude: i64) ->
             ));
         }
     }
+    // SNI routers listen TCP in the same stream context — a TCP stream on the
+    // same port would clash. (A UDP-only stream is fine alongside a router.)
+    if input.tcp {
+        for r in repo::list_sni_routers(&state.db).await? {
+            if r.enabled && r.incoming_port == input.incoming_port {
+                return Err(ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "port_conflict",
+                    format!(
+                        "port {} (TCP) is already used by SNI router #{}",
+                        input.incoming_port, r.id
+                    ),
+                ));
+            }
+        }
+    }
     Ok(())
 }
 

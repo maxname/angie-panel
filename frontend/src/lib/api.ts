@@ -322,6 +322,41 @@ export interface StreamInput {
   enabled?: boolean
 }
 
+/** One SNI → backend route inside an SNI router. */
+export interface SniRoute {
+  /** Exact hostname or `*.`-prefixed wildcard. */
+  sni: string
+  forward_host: string
+  forward_port: number
+}
+
+/** An SNI passthrough router: one stream listener that forwards TLS connections
+ *  by SNI hostname without terminating TLS (ssl_preread). */
+export interface SniRouter {
+  id: number
+  name: string
+  incoming_port: number
+  routes: SniRoute[]
+  /** Catch-all backend for unmatched/absent SNI ('' / 0 = none, drop). */
+  default_host: string
+  default_port: number
+  enabled: boolean
+  /** Unix timestamp, seconds. */
+  created_at: number
+  /** Unix timestamp, seconds. */
+  updated_at: number
+}
+
+/** SniRouter without id/created_at/updated_at — the create/update payload. */
+export interface SniRouterInput {
+  name: string
+  incoming_port: number
+  routes: SniRoute[]
+  default_host?: string
+  default_port?: number
+  enabled?: boolean
+}
+
 /** RedirectHost without id/created_at/updated_at — the create/update payload. */
 export interface RedirectHostInput {
   domains: string[]
@@ -857,6 +892,30 @@ export const api = {
     request<{ ok: boolean; already_active?: boolean; message?: string }>(
       'POST',
       '/api/streams/enable-context',
+    ),
+
+  listSniRouters: () =>
+    request<{ sni_routers: SniRouter[] }>('GET', '/api/sni-routers'),
+
+  createSniRouter: (body: SniRouterInput) =>
+    request<SniRouter>('POST', '/api/sni-routers', body),
+
+  updateSniRouter: (id: number, body: SniRouterInput) =>
+    request<SniRouter>('PUT', `/api/sni-routers/${id}`, body),
+
+  deleteSniRouter: (id: number) =>
+    request<OkResponse>('DELETE', `/api/sni-routers/${id}`),
+
+  enableSniRouter: (id: number) =>
+    request<{ ok: true; enabled: true }>(
+      'POST',
+      `/api/sni-routers/${id}/enable`,
+    ),
+
+  disableSniRouter: (id: number) =>
+    request<{ ok: true; enabled: false }>(
+      'POST',
+      `/api/sni-routers/${id}/disable`,
     ),
 
   getApplyPreview: () => request<ApplyPreview>('GET', '/api/apply/preview'),

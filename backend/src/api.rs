@@ -7,7 +7,7 @@ use axum::Router;
 use crate::state::AppState;
 use crate::{
     access_lists, apply_api, assets, audit, auth, bans, certs, dashboard, export_import, geo,
-    hosts, other_hosts, security, streams, system, users,
+    hosts, other_hosts, security, sni_routers, streams, system, users,
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -89,6 +89,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/streams/{id}/enable", post(streams::enable))
         .route("/streams/{id}/disable", post(streams::disable))
         .route("/streams/enable-context", post(streams::enable_context))
+        .route(
+            "/sni-routers",
+            get(sni_routers::list).post(sni_routers::create),
+        )
+        .route(
+            "/sni-routers/{id}",
+            get(sni_routers::get_one)
+                .put(sni_routers::update)
+                .delete(sni_routers::delete),
+        )
+        .route("/sni-routers/{id}/enable", post(sni_routers::enable))
+        .route("/sni-routers/{id}/disable", post(sni_routers::disable))
         .route("/bans", get(bans::list).post(bans::create))
         .route("/bans/{id}", axum::routing::delete(bans::delete))
         .route("/geo", get(geo::get).put(geo::put))

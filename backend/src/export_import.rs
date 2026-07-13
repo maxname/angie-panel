@@ -42,6 +42,7 @@ struct Export {
     redirect_hosts: Vec<Value>,
     dead_hosts: Vec<Value>,
     streams: Vec<Value>,
+    sni_routers: Vec<Value>,
     bans: Vec<Value>,
     settings: HashMap<String, String>,
 }
@@ -62,6 +63,7 @@ pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResu
     let redirects = repo::list_redirects(&state.db).await?;
     let deads = repo::list_dead(&state.db).await?;
     let streams = repo::list_streams(&state.db).await?;
+    let sni_routers = repo::list_sni_routers(&state.db).await?;
     let bans = repo::list_bans(&state.db).await?;
     let mut settings = repo::all_settings(&state.db).await?;
 
@@ -99,6 +101,7 @@ pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResu
         redirect_hosts: to_values(&redirects),
         dead_hosts: to_values(&deads),
         streams: to_values(&streams),
+        sni_routers: to_values(&sni_routers),
         bans: to_values(&bans),
         settings,
     };
@@ -121,6 +124,8 @@ pub struct ImportDoc {
     dead_hosts: Vec<Value>,
     #[serde(default)]
     streams: Vec<Value>,
+    #[serde(default)]
+    sni_routers: Vec<Value>,
     #[serde(default)]
     bans: Vec<Value>,
     #[serde(default)]
@@ -367,6 +372,37 @@ pub async fn import(
         streams.push((id, input));
     }
 
+    // --- SNI routers (listen TCP in the stream context, so they share the port
+    // space with streams: reuse `port_use` to reject collisions either way) ---
+    let mut sni_routers: Vec<(i64, model::SniRouterInput)> = Vec::new();
+    let mut sni_router_ids = std::collections::HashSet::new();
+    for (i, v) in doc.sni_routers.iter().enumerate() {
+        let id = extract_id(v).ok_or_else(|| bad_entry("sni_router", i, "missing numeric id"))?;
+        let input: model::SniRouterInput = serde_json::from_value(v.clone())
+            .map_err(|e| bad_entry("sni_router", i, &e.to_string()))?;
+        let input = model::validate_sni_router_input(input, &policy)?;
+        if !sni_router_ids.insert(id) {
+            return Err(bad_entry("sni_router", i, "duplicate id"));
+        }
+        if input.enabled {
+            let entry = port_use
+                .entry(input.incoming_port)
+                .or_insert((false, false));
+            if entry.0 {
+                return Err(ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "port_conflict",
+                    format!(
+                        "port {} is used by more than one enabled stream / SNI router in the import",
+                        input.incoming_port
+                    ),
+                ));
+            }
+            entry.0 = true;
+        }
+        sni_routers.push((id, input));
+    }
+
     // --- bans (validated like the CRUD API; dedup by address) ---
     let mut bans: Vec<(i64, model::BanInput)> = Vec::new();
     let mut ban_ids = std::collections::HashSet::new();
@@ -398,7 +434,16 @@ pub async fn import(
     }
 
     repo::import_replace(
-        &state.db, &certs, &acls, &hosts, &redirects, &deads, &streams, &bans, &settings,
+        &state.db,
+        &certs,
+        &acls,
+        &hosts,
+        &redirects,
+        &deads,
+        &streams,
+        &sni_routers,
+        &bans,
+        &settings,
     )
     .await?;
 
@@ -411,6 +456,7 @@ pub async fn import(
             "redirect_hosts": redirects.len(),
             "dead_hosts": deads.len(),
             "streams": streams.len(),
+            "sni_routers": sni_routers.len(),
             "bans": bans.len(),
             "settings": settings.len(),
         },

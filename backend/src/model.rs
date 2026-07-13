@@ -1864,6 +1864,163 @@ pub fn validate_stream_input(
     Ok(input)
 }
 
+// ------------------------------------------------------------- SNI routers
+
+/// One SNI → backend route inside an [`SniRouter`]. `sni` is an exact hostname
+/// or a `*.`-prefixed wildcard; `forward_host`/`forward_port` are a TLS backend
+/// the raw connection is passed through to (TLS is NOT terminated here).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SniRoute {
+    pub sni: String,
+    pub forward_host: String,
+    pub forward_port: u16,
+}
+
+/// An SNI passthrough router: one stream listener that inspects the TLS
+/// ClientHello (`ssl_preread`) and forwards the connection, unterminated, to a
+/// backend chosen by SNI hostname. `default_host`/`default_port` are an optional
+/// catch-all for unmatched or absent SNI (empty host / 0 port ⇒ no catch-all,
+/// unmatched connections are dropped).
+#[derive(Debug, Clone, Serialize)]
+pub struct SniRouter {
+    pub id: i64,
+    pub name: String,
+    pub incoming_port: u16,
+    pub routes: Vec<SniRoute>,
+    pub default_host: String,
+    pub default_port: u16,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SniRouterInput {
+    pub name: String,
+    pub incoming_port: u16,
+    #[serde(default)]
+    pub routes: Vec<SniRoute>,
+    #[serde(default)]
+    pub default_host: String,
+    #[serde(default)]
+    pub default_port: u16,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl SniRouter {
+    /// Whether a catch-all backend is configured (both host and port set).
+    pub fn has_default(&self) -> bool {
+        !self.default_host.is_empty() && self.default_port != 0
+    }
+}
+
+pub const MAX_SNI_ROUTES: usize = 100;
+pub const MAX_SNI_ROUTER_NAME_LEN: usize = 64;
+
+/// Validate + normalize an SNI router. Names are a plain label (also emitted as
+/// a config comment, so no control chars). Each route's SNI is a strict
+/// hostname/wildcard token (it becomes a `map` key), deduped case-insensitively;
+/// each backend passes the same SSRF guard as a stream. The optional catch-all
+/// is all-or-nothing.
+pub fn validate_sni_router_input(
+    mut input: SniRouterInput,
+    upstream_policy: &UpstreamPolicy,
+) -> Result<SniRouterInput, ApiError> {
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty() {
+        return Err(bad("invalid_sni_router", "name must not be empty"));
+    }
+    if input.name.chars().count() > MAX_SNI_ROUTER_NAME_LEN {
+        return Err(bad("invalid_sni_router", "name is too long"));
+    }
+    if input.name.chars().any(|c| c.is_control()) {
+        return Err(bad(
+            "invalid_sni_router",
+            "name must not contain control characters",
+        ));
+    }
+    if input.incoming_port == 0 {
+        return Err(bad("invalid_port", "incoming port must be 1-65535"));
+    }
+    if input.routes.len() > MAX_SNI_ROUTES {
+        return Err(bad("invalid_sni_router", "too many routes"));
+    }
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut routes = Vec::with_capacity(input.routes.len());
+    for r in input.routes {
+        let sni = validate_sni_hostname(&r.sni)?;
+        if !seen.insert(sni.clone()) {
+            return Err(bad("invalid_sni_router", format!("duplicate SNI '{sni}'")));
+        }
+        if r.forward_port == 0 {
+            return Err(bad("invalid_port", "forward port must be 1-65535"));
+        }
+        let forward_host = validate_forward_host(&r.forward_host, upstream_policy)?;
+        routes.push(SniRoute {
+            sni,
+            forward_host,
+            forward_port: r.forward_port,
+        });
+    }
+
+    // Catch-all: all-or-nothing. An empty host with a non-zero port (or vice
+    // versa) is a mistake, not "no default".
+    input.default_host = input.default_host.trim().to_string();
+    let has_host = !input.default_host.is_empty();
+    let has_port = input.default_port != 0;
+    if has_host != has_port {
+        return Err(bad(
+            "invalid_sni_router",
+            "the catch-all backend needs both a host and a port",
+        ));
+    }
+    if has_host {
+        input.default_host = validate_forward_host(&input.default_host, upstream_policy)?;
+    }
+
+    if routes.is_empty() && !has_host {
+        return Err(bad(
+            "invalid_sni_router",
+            "add at least one route or a catch-all backend",
+        ));
+    }
+    input.routes = routes;
+    Ok(input)
+}
+
+/// An SNI map key: an exact hostname or a `*.`-prefixed wildcard, lower-cased.
+/// Rejects anything that isn't a real domain token — it is interpolated as a
+/// `map` key, and the reserved words `default`/`hostnames` would change the
+/// map's meaning, so a dot is required (which they lack).
+fn validate_sni_hostname(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim().to_lowercase();
+    if s.is_empty() {
+        return Err(bad("invalid_sni_router", "SNI hostname must not be empty"));
+    }
+    if s.len() > 253 {
+        return Err(bad("invalid_sni_router", "SNI hostname too long"));
+    }
+    // Optional leading "*." wildcard, then dot-separated DNS labels. Require at
+    // least one dot in the non-wildcard part so single-word map keywords
+    // (`default`, `hostnames`) can never be produced.
+    let rest = s.strip_prefix("*.").unwrap_or(&s);
+    if rest.is_empty() || !rest.contains('.') {
+        return Err(bad(
+            "invalid_sni_router",
+            format!("'{raw}' is not a valid SNI hostname (need a domain like app.example.com or *.example.com)"),
+        ));
+    }
+    if !rest.split('.').all(valid_dns_label) {
+        return Err(bad(
+            "invalid_sni_router",
+            format!("'{raw}' is not a valid SNI hostname"),
+        ));
+    }
+    Ok(s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2006,6 +2163,90 @@ mod tests {
         s.certificate_id = Some(42);
         let out = validate_stream_input(s, &policy()).unwrap();
         assert_eq!(out.certificate_id, None);
+    }
+
+    fn base_sni_router_input() -> SniRouterInput {
+        SniRouterInput {
+            name: "edge".into(),
+            incoming_port: 443,
+            routes: vec![SniRoute {
+                sni: "app.example.com".into(),
+                forward_host: "10.0.0.10".into(),
+                forward_port: 443,
+            }],
+            default_host: String::new(),
+            default_port: 0,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn sni_router_valid() {
+        let out = validate_sni_router_input(base_sni_router_input(), &policy()).unwrap();
+        assert_eq!(out.routes.len(), 1);
+        assert!(out.default_host.is_empty() && out.default_port == 0);
+    }
+
+    #[test]
+    fn sni_router_wildcard_and_normalization() {
+        let mut inp = base_sni_router_input();
+        inp.routes[0].sni = "*.Example.COM".into();
+        let out = validate_sni_router_input(inp, &policy()).unwrap();
+        assert_eq!(out.routes[0].sni, "*.example.com");
+    }
+
+    #[test]
+    fn sni_router_rejects_bad_sni() {
+        // Single-label / reserved-word keys would collide with map keywords.
+        for bad in ["default", "hostnames", "nodot", "", "*.", "bad host.com"] {
+            let mut inp = base_sni_router_input();
+            inp.routes[0].sni = bad.into();
+            assert!(
+                validate_sni_router_input(inp, &policy()).is_err(),
+                "SNI '{bad}' must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn sni_router_rejects_duplicate_sni() {
+        let mut inp = base_sni_router_input();
+        inp.routes.push(SniRoute {
+            sni: "APP.example.com".into(), // same host, different case
+            forward_host: "10.0.0.11".into(),
+            forward_port: 443,
+        });
+        assert!(validate_sni_router_input(inp, &policy()).is_err());
+    }
+
+    #[test]
+    fn sni_router_default_is_all_or_nothing() {
+        // Host without port (or vice versa) is a mistake, not "no default".
+        let mut inp = base_sni_router_input();
+        inp.default_host = "10.0.0.1".into();
+        inp.default_port = 0;
+        assert!(validate_sni_router_input(inp, &policy()).is_err());
+
+        let mut ok = base_sni_router_input();
+        ok.default_host = "10.0.0.1".into();
+        ok.default_port = 443;
+        let out = validate_sni_router_input(ok, &policy()).unwrap();
+        assert!(!out.default_host.is_empty() && out.default_port != 0);
+    }
+
+    #[test]
+    fn sni_router_needs_a_route_or_default() {
+        let mut inp = base_sni_router_input();
+        inp.routes.clear();
+        assert!(validate_sni_router_input(inp, &policy()).is_err());
+    }
+
+    #[test]
+    fn sni_router_backend_ssrf_guarded() {
+        // Loopback backend rejected under the default (no-loopback) policy.
+        let mut inp = base_sni_router_input();
+        inp.routes[0].forward_host = "127.0.0.1".into();
+        assert!(validate_sni_router_input(inp, &policy()).is_err());
     }
 
     #[test]

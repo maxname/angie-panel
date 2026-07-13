@@ -22,6 +22,7 @@ mod reconcile;
 mod repo;
 mod security;
 mod settings;
+mod sni_routers;
 mod state;
 mod streams;
 mod system;

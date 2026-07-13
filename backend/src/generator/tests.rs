@@ -9,7 +9,8 @@ use super::*;
 use crate::model::{
     BalanceMethod, CustomHeader, CustomLocation, DeadHost, ErrorPage, ErrorPages, ForwardAuth,
     GeoMode, GeoPolicy, Gzip, HeaderDirection, Maintenance, Mtls, ProxyHost, RateLimit,
-    RedirectHost, RedirectScheme, Scheme, Stream, StreamTls, Upstream, UpstreamServer,
+    RedirectHost, RedirectScheme, Scheme, SniRoute, SniRouter, Stream, StreamTls, Upstream,
+    UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -92,6 +93,7 @@ fn input_acl(
         redirect_hosts: vec![],
         dead_hosts: vec![],
         streams: vec![],
+        sni_routers: vec![],
         bans: vec![],
         geo_policy: GeoPolicy::default(),
         geo_cidrs: vec![],
@@ -463,6 +465,92 @@ fn stream_tls_skipped_when_cert_missing() {
         !files.contains_key("stream.d/stream-1.conf"),
         "terminate stream with a missing cert must be skipped, not emitted"
     );
+}
+
+#[test]
+fn golden_sni_router() {
+    // SNI passthrough router: map $ssl_preread_server_name → one upstream per
+    // route (+ a catch-all), ssl_preread on, proxy_pass the variable. Verified
+    // on real Angie (a.test→A, *.wild→B, other→default, all TLS end-to-end).
+    let mut inp = input(vec![], vec![], settings(DefaultSite::NotFound, false));
+    inp.sni_routers = vec![
+        SniRouter {
+            id: 1,
+            name: "edge".into(),
+            incoming_port: 443,
+            routes: vec![
+                SniRoute {
+                    sni: "app.example.com".into(),
+                    forward_host: "10.0.0.10".into(),
+                    forward_port: 443,
+                },
+                SniRoute {
+                    sni: "*.internal.example.com".into(),
+                    forward_host: "10.0.0.20".into(),
+                    forward_port: 8443,
+                },
+            ],
+            default_host: "10.0.0.1".into(),
+            default_port: 443,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        },
+        // Disabled — must NOT be emitted.
+        SniRouter {
+            id: 2,
+            name: "off".into(),
+            incoming_port: 9443,
+            routes: vec![SniRoute {
+                sni: "x.example.com".into(),
+                forward_host: "10.0.0.99".into(),
+                forward_port: 443,
+            }],
+            default_host: String::new(),
+            default_port: 0,
+            enabled: false,
+            created_at: 0,
+            updated_at: 0,
+        },
+    ];
+    let files = generate(&inp).unwrap();
+    assert!(
+        !files.contains_key("stream.d/sni-2.conf"),
+        "disabled SNI router must not be emitted"
+    );
+    let body = &files["stream.d/sni-1.conf"];
+    assert!(body.contains("ssl_preread on;"));
+    assert!(body.contains("proxy_pass $sni_router_1;"));
+    assert!(body.contains("default sni_1_default;"));
+    assert_golden("stream-sni-1.conf", body);
+}
+
+#[test]
+fn sni_router_without_default_omits_default() {
+    // No catch-all → no `default` map entry and no default upstream; unmatched
+    // SNI leaves the variable empty and Angie drops the connection.
+    let mut inp = input(vec![], vec![], settings(DefaultSite::NotFound, false));
+    inp.sni_routers = vec![SniRouter {
+        id: 5,
+        name: "no-default".into(),
+        incoming_port: 8443,
+        routes: vec![SniRoute {
+            sni: "only.example.com".into(),
+            forward_host: "10.0.0.5".into(),
+            forward_port: 443,
+        }],
+        default_host: String::new(),
+        default_port: 0,
+        enabled: true,
+        created_at: 0,
+        updated_at: 0,
+    }];
+    let body = &generate(&inp).unwrap()["stream.d/sni-5.conf"];
+    assert!(
+        !body.contains("default sni_"),
+        "no catch-all → no default entry"
+    );
+    assert!(!body.contains("sni_5_default"));
 }
 
 #[test]

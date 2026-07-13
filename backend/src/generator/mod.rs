@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 use crate::model::{
     Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy, HeaderDirection, ProxyHost,
-    RateLimit, RedirectHost, Scheme, Stream, StreamTls,
+    RateLimit, RedirectHost, Scheme, SniRouter, Stream, StreamTls,
 };
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
@@ -71,6 +71,10 @@ pub struct GeneratorInput {
     /// TCP/UDP port forwards (stream context). Emitted with the STREAM_PREFIX
     /// so the apply pipeline routes them to stream.d.
     pub streams: Vec<Stream>,
+    /// SNI passthrough routers (stream context): one listener per router that
+    /// forwards by SNI hostname without terminating TLS. Also emitted with the
+    /// STREAM_PREFIX so they route to stream.d and trigger the stream context.
+    pub sni_routers: Vec<SniRouter>,
     /// Blocked IPs/CIDRs — emitted as http-scope `deny` rules (03-bans.conf).
     pub bans: Vec<Ban>,
     /// Global country access policy (off / deny-listed / allow-listed).
@@ -288,6 +292,21 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
         files.insert(format!("{STREAM_PREFIX}stream-{}.conf", s.id), body);
     }
 
+    // SNI passthrough routers (stream.d/sni-<id>.conf). Same STREAM_PREFIX so
+    // they land in stream.d and, via the pipeline's has_streams check, arm the
+    // stream {} context.
+    let mut routers: Vec<&SniRouter> = input.sni_routers.iter().collect();
+    routers.sort_by_key(|r| r.id);
+    for r in routers {
+        if !r.enabled {
+            continue;
+        }
+        files.insert(
+            format!("{STREAM_PREFIX}sni-{}.conf", r.id),
+            gen_sni_router(r),
+        );
+    }
+
     // htpasswd files for access lists that have basic-auth users. These are
     // NOT *.conf, so Angie's `include *.conf` never loads them; the apply
     // pipeline manages them via the MANAGED-BY header (nginx auth_basic skips
@@ -317,6 +336,48 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
 
 fn htpasswd_name(list_id: i64) -> String {
     format!("access-{list_id}.htpasswd")
+}
+
+/// Render one SNI passthrough router into a stream server. `ssl_preread on`
+/// exposes the ClientHello SNI as `$ssl_preread_server_name`; a `map` (with
+/// `hostnames`, which enables `*.` wildcard keys) picks an upstream by SNI, and
+/// the raw connection is `proxy_pass`ed there UNTERMINATED. One upstream per
+/// route (+ the optional catch-all) so `proxy_pass $var` resolves to a named
+/// upstream and never needs a resolver — verified on real Angie. With no
+/// catch-all, unmatched/absent SNI leaves the variable empty and Angie drops the
+/// connection. name/SNI/host/port were all strictly validated upstream.
+fn gen_sni_router(r: &SniRouter) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# SNI router: {}", r.name);
+    let _ = writeln!(out, "map $ssl_preread_server_name $sni_router_{} {{", r.id);
+    let _ = writeln!(out, "    hostnames;");
+    for (i, route) in r.routes.iter().enumerate() {
+        let _ = writeln!(out, "    {} sni_{}_{};", route.sni, r.id, i);
+    }
+    if r.has_default() {
+        let _ = writeln!(out, "    default sni_{}_default;", r.id);
+    }
+    let _ = writeln!(out, "}}");
+    for (i, route) in r.routes.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "upstream sni_{}_{} {{ server {}:{}; }}",
+            r.id, i, route.forward_host, route.forward_port
+        );
+    }
+    if r.has_default() {
+        let _ = writeln!(
+            out,
+            "upstream sni_{}_default {{ server {}:{}; }}",
+            r.id, r.default_host, r.default_port
+        );
+    }
+    let _ = writeln!(out, "server {{");
+    let _ = writeln!(out, "    listen {};", r.incoming_port);
+    let _ = writeln!(out, "    ssl_preread on;");
+    let _ = writeln!(out, "    proxy_pass $sni_router_{};", r.id);
+    let _ = writeln!(out, "}}");
+    out
 }
 
 // ------------------------------------------------------------- 00-panel.conf

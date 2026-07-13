@@ -22,6 +22,7 @@ export const en = {
     redirectHosts: 'Redirection Hosts',
     deadHosts: '404 Hosts',
     streams: 'Streams',
+    sniRouters: 'SNI Routers',
     certificates: 'Certificates',
     accessLists: 'Access Lists',
     blocklist: 'Blocked IPs',
@@ -880,6 +881,52 @@ export const en = {
         certLoadFailed: 'Failed to load certificates',
         tcpOnly: 'TLS termination is TCP only (no UDP).',
       },
+    },
+  },
+  sniRouters: {
+    title: 'SNI Routers',
+    subtitle:
+      'Route TLS connections to different backends by SNI hostname on one port — without terminating TLS (passthrough).',
+    add: 'Add SNI router',
+    loadFailed: 'Failed to load SNI routers',
+    empty: 'No SNI routers yet. Add one to route TLS by hostname on a shared port.',
+    actionFailed: 'Action failed',
+    table: {
+      name: 'Name',
+      port: 'Port',
+      routes: 'Backends',
+      status: 'Status',
+      actions: 'Actions',
+    },
+    status: { enabled: 'Enabled', disabled: 'Disabled' },
+    actions: { edit: 'Edit', enable: 'Enable', disable: 'Disable', delete: 'Delete' },
+    delete: {
+      title: 'Delete SNI router?',
+      body: 'This removes the router "{{name}}". It takes effect on the next Apply.',
+    },
+    editor: {
+      createTitle: 'New SNI router',
+      editTitle: 'Edit SNI router',
+      description:
+        'Angie reads the SNI hostname from the TLS handshake and forwards the connection, unterminated, to the matching backend.',
+      name: 'Name',
+      namePlaceholder: 'e.g. edge',
+      port: 'Listen port',
+      port443Warning:
+        'Port 443 is also used by proxy hosts that terminate TLS — they cannot both bind it. Use this only if no proxy host serves 443.',
+      routes: 'Routes',
+      routesHint:
+        'Match by exact hostname (app.example.com) or wildcard (*.example.com). The backend must speak TLS.',
+      sni: 'SNI hostname',
+      backendHost: 'Backend host',
+      backendPort: 'Backend port',
+      addRoute: 'Add route',
+      removeRoute: 'Remove route',
+      defaultBackend: 'Catch-all backend',
+      defaultHint:
+        'Optional. Handles connections whose SNI matches no route (or has none). Leave blank to drop them.',
+      defaultHostPlaceholder: 'e.g. 10.0.0.1 (optional)',
+      create: 'Create',
     },
   },
 }

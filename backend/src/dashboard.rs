@@ -173,12 +173,17 @@ pub async fn get_dashboard(
             "message":"There are unapplied changes"}));
     }
 
-    // --- streams (TCP/UDP forwarding) ---
+    // --- streams (TCP/UDP forwarding) + SNI routers (both live in stream {}) ---
     let stream_ctx_active = crate::streams::context_active(&state);
     let enabled_streams = streams.iter().filter(|s| s.enabled).count();
-    if enabled_streams > 0 && !stream_ctx_active {
+    let enabled_sni_routers = repo::list_sni_routers(&state.db)
+        .await?
+        .iter()
+        .filter(|r| r.enabled)
+        .count();
+    if (enabled_streams > 0 || enabled_sni_routers > 0) && !stream_ctx_active {
         alerts.push(json!({"severity":"warning","code":"stream_context_off",
-            "message":"TCP/UDP streams are configured but the Angie stream context is off; enable it before applying"}));
+            "message":"TCP/UDP streams or SNI routers are configured but the Angie stream context is off; enable it before applying"}));
     }
 
     Ok(Json(json!({

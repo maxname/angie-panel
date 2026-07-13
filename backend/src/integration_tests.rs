@@ -770,6 +770,114 @@ async fn stream_crud_port_conflict_and_preview() {
 }
 
 #[tokio::test]
+async fn sni_router_crud_conflict_and_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Create a router on :443 with two routes and a catch-all.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/sni-routers",
+            Some(json!({
+                "name": "edge",
+                "incoming_port": 443,
+                "routes": [
+                    {"sni":"app.example.com","forward_host":"10.0.0.10","forward_port":443},
+                    {"sni":"*.internal.example.com","forward_host":"10.0.0.20","forward_port":8443}
+                ],
+                "default_host":"10.0.0.1","default_port":443
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let rid = body_json(res).await["id"].as_i64().unwrap();
+
+    // Another router on the SAME port → 409 port_conflict.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/sni-routers",
+            Some(json!({"name":"dup","incoming_port":443,
+                "routes":[{"sni":"x.example.com","forward_host":"10.0.0.9","forward_port":443}]})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(res).await["error"]["code"],
+        json!("port_conflict")
+    );
+
+    // A TCP stream on the router's port also conflicts (shared stream context).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/streams",
+            Some(json!({"incoming_port":443,"forward_host":"10.0.0.9","forward_port":80})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // A single-label SNI (would collide with a map keyword) → 400.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/sni-routers",
+            Some(json!({"name":"bad","incoming_port":8443,
+                "routes":[{"sni":"default","forward_host":"10.0.0.9","forward_port":443}]})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Apply preview emits the router as a stream.d/ file.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/apply/preview",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let files = body_json(res).await["diff"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        files.iter().any(|n| n == "stream.d/sni-1.conf"),
+        "expected stream.d/sni-1.conf in the preview, got {files:?}"
+    );
+
+    // Delete the router.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/sni-routers/{rid}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn bans_crud_and_preview() {
     let dir = tempfile::tempdir().unwrap();
     let (app, cookie) = authed_app(dir.path()).await;

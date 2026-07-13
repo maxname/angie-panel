@@ -21,6 +21,7 @@ import { LoginPage } from '@/pages/login'
 import { RedirectHostsPage } from '@/pages/redirect-hosts'
 import { SettingsPage } from '@/pages/settings'
 import { SetupPage } from '@/pages/setup'
+import { SniRoutersPage } from '@/pages/sni-routers'
 import { StreamsPage } from '@/pages/streams'
 import { UsersPage } from '@/pages/users'
 
@@ -101,6 +102,12 @@ const streamsRoute = createRoute({
   component: StreamsPage,
 })
 
+const sniRoutersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/sni-routers',
+  component: SniRoutersPage,
+})
+
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/certificates',
@@ -152,6 +159,7 @@ const routeTree = rootRoute.addChildren([
     redirectHostsRoute,
     deadHostsRoute,
     streamsRoute,
+    sniRoutersRoute,
     certificatesRoute,
     accessListsRoute,
     blocklistRoute,

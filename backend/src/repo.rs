@@ -739,6 +739,129 @@ pub async fn set_stream_enabled(db: &SqlitePool, id: i64, enabled: bool) -> anyh
     Ok(rows.rows_affected() > 0)
 }
 
+// ----------------------------------------------------------- SNI routers
+
+use crate::model::{SniRoute, SniRouter, SniRouterInput};
+
+#[derive(sqlx::FromRow)]
+struct SniRouterRow {
+    id: i64,
+    name: String,
+    incoming_port: i64,
+    routes: String,
+    default_host: String,
+    default_port: i64,
+    enabled: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+fn sni_routes_json(routes: &[SniRoute]) -> String {
+    serde_json::to_string(routes).unwrap_or_else(|_| "[]".into())
+}
+
+impl TryFrom<SniRouterRow> for SniRouter {
+    type Error = anyhow::Error;
+    fn try_from(r: SniRouterRow) -> anyhow::Result<Self> {
+        Ok(SniRouter {
+            id: r.id,
+            name: r.name,
+            incoming_port: r.incoming_port as u16,
+            routes: serde_json::from_str(&r.routes).context("sni routes json")?,
+            default_host: r.default_host,
+            default_port: r.default_port as u16,
+            enabled: r.enabled != 0,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+    }
+}
+
+const SNI_ROUTER_COLUMNS: &str = "id, name, incoming_port, routes, default_host, default_port, \
+     enabled, created_at, updated_at";
+
+pub async fn list_sni_routers(db: &SqlitePool) -> anyhow::Result<Vec<SniRouter>> {
+    let rows: Vec<SniRouterRow> = sqlx::query_as(&format!(
+        "SELECT {SNI_ROUTER_COLUMNS} FROM sni_routers ORDER BY id"
+    ))
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(SniRouter::try_from).collect()
+}
+
+pub async fn get_sni_router(db: &SqlitePool, id: i64) -> anyhow::Result<Option<SniRouter>> {
+    let row: Option<SniRouterRow> = sqlx::query_as(&format!(
+        "SELECT {SNI_ROUTER_COLUMNS} FROM sni_routers WHERE id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    row.map(SniRouter::try_from).transpose()
+}
+
+pub async fn insert_sni_router(db: &SqlitePool, i: &SniRouterInput) -> anyhow::Result<i64> {
+    let now = now_epoch();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO sni_routers (name, incoming_port, routes, default_host, default_port, \
+         enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+    )
+    .bind(&i.name)
+    .bind(i.incoming_port as i64)
+    .bind(sni_routes_json(&i.routes))
+    .bind(&i.default_host)
+    .bind(i.default_port as i64)
+    .bind(i.enabled as i64)
+    .bind(now)
+    .bind(now)
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn update_sni_router(
+    db: &SqlitePool,
+    id: i64,
+    i: &SniRouterInput,
+) -> anyhow::Result<bool> {
+    let rows = sqlx::query(
+        "UPDATE sni_routers SET name=?, incoming_port=?, routes=?, default_host=?, \
+         default_port=?, enabled=?, updated_at=? WHERE id=?",
+    )
+    .bind(&i.name)
+    .bind(i.incoming_port as i64)
+    .bind(sni_routes_json(&i.routes))
+    .bind(&i.default_host)
+    .bind(i.default_port as i64)
+    .bind(i.enabled as i64)
+    .bind(now_epoch())
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn delete_sni_router(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM sni_routers WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn set_sni_router_enabled(
+    db: &SqlitePool,
+    id: i64,
+    enabled: bool,
+) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE sni_routers SET enabled=?, updated_at=? WHERE id=?")
+        .bind(enabled as i64)
+        .bind(now_epoch())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
 /// Which host type owns a domain (for cross-type uniqueness messages).
 #[derive(Debug, Clone, Copy)]
 pub enum HostKind {
@@ -901,6 +1024,7 @@ pub async fn import_replace(
     redirects: &[(i64, RedirectHostInput)],
     deads: &[(i64, DeadHostInput)],
     streams: &[(i64, StreamInput)],
+    sni_routers: &[(i64, SniRouterInput)],
     bans: &[(i64, BanInput)],
     settings: &std::collections::HashMap<String, String>,
 ) -> anyhow::Result<()> {
@@ -914,6 +1038,7 @@ pub async fn import_replace(
         "redirect_hosts",
         "dead_hosts",
         "streams",
+        "sni_routers",
         "bans",
         "access_list_users",
         "access_list_clients",
@@ -1079,6 +1204,24 @@ pub async fn import_replace(
         .bind(s.tls.as_str())
         .bind(s.certificate_id)
         .bind(s.enabled as i64)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (id, r) in sni_routers {
+        sqlx::query(
+            "INSERT INTO sni_routers (id, name, incoming_port, routes, default_host, \
+             default_port, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(&r.name)
+        .bind(r.incoming_port as i64)
+        .bind(sni_routes_json(&r.routes))
+        .bind(&r.default_host)
+        .bind(r.default_port as i64)
+        .bind(r.enabled as i64)
         .bind(now)
         .bind(now)
         .execute(&mut *tx)
