@@ -855,6 +855,8 @@ export const en = {
     actionFailed: 'Action failed',
     you: '(you)',
     delete: 'Delete',
+    makeAdmin: 'Make admin',
+    makeViewer: 'Make viewer',
     table: { email: 'Email', role: 'Role', actions: 'Actions' },
     roles: { admin: 'Admin', viewer: 'Viewer' },
     create: {

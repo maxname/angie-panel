@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus } from 'lucide-react'
+import { Loader2, MoreHorizontal, Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -14,6 +15,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -44,14 +52,14 @@ export function UsersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('users.title')}
           </h1>
           <p className="text-sm text-muted-foreground">{t('users.subtitle')}</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button className="shrink-0" onClick={() => setCreateOpen(true)}>
           <Plus aria-hidden="true" />
           {t('users.add')}
         </Button>
@@ -138,33 +146,47 @@ function UserRow({ user, selfEmail }: { user: User; selfEmail?: string }) {
         )}
       </TableCell>
       <TableCell>
-        <Select
-          value={user.role}
-          onValueChange={(value) => roleMutation.mutate(value as Role)}
-          disabled={roleMutation.isPending}
-        >
-          <SelectTrigger className="h-8 w-32" aria-label={t('users.table.role')}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="admin">{t('users.roles.admin')}</SelectItem>
-            <SelectItem value="viewer">{t('users.roles.viewer')}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
+          {t(`users.roles.${user.role}`)}
+        </Badge>
       </TableCell>
       <TableCell className="text-right">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-destructive"
-          disabled={isSelf || deleteMutation.isPending}
-          onClick={() => deleteMutation.mutate()}
-        >
-          {deleteMutation.isPending && (
-            <Loader2 className="animate-spin" aria-hidden="true" />
-          )}
-          {t('users.delete')}
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t('users.table.actions')}
+            >
+              <MoreHorizontal aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {user.role === 'admin' ? (
+              <DropdownMenuItem
+                disabled={roleMutation.isPending}
+                onSelect={() => roleMutation.mutate('viewer')}
+              >
+                {t('users.makeViewer')}
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem
+                disabled={roleMutation.isPending}
+                onSelect={() => roleMutation.mutate('admin')}
+              >
+                {t('users.makeAdmin')}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              disabled={isSelf || deleteMutation.isPending}
+              onSelect={() => deleteMutation.mutate()}
+            >
+              {t('users.delete')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </TableCell>
     </TableRow>
   )

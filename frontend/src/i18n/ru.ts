@@ -857,6 +857,8 @@ export const ru: typeof en = {
     actionFailed: 'Не удалось выполнить действие',
     you: '(вы)',
     delete: 'Удалить',
+    makeAdmin: 'Сделать администратором',
+    makeViewer: 'Сделать наблюдателем',
     table: { email: 'Эл. почта', role: 'Роль', actions: 'Действия' },
     roles: { admin: 'Администратор', viewer: 'Наблюдатель' },
     create: {
