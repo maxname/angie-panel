@@ -35,4 +35,4 @@ done
 printf 'acme.sh %s\nSource: https://github.com/acmesh-official/acme.sh (GPLv3)\nVendored: core + dnsapi/{%s}\n' \
     "$ACME_SH_REF" "$(IFS=,; echo "${PLUGINS[*]}")" > "$DEST/VENDOR.txt"
 
-echo "Done: $(ls "$DEST/dnsapi" | wc -l | tr -d ' ') plugins + core."
+echo "Done: $(find "$DEST/dnsapi" -name '*.sh' | wc -l | tr -d ' ') plugins + core."
