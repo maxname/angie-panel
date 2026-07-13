@@ -146,16 +146,59 @@ angie -T | grep -E 'resolver |server_tokens'     # тюнинг виден в э
 Ожидаемо: `angie -t` успешен, `/status` = 200, до Let's Encrypt есть HTTP/2 200,
 `System clock synchronized: yes`, `NTP service: active`.
 
-## 5. Что дальше — установка панели
+## 5. Сборка `.deb` панели (на dev-машине)
 
-Angie готов и оптимально настроен. Следующий шаг — поставить сам Angie Panel (отдельный
-`.deb` для arm64: см. [installation.md](installation.md)), который будет управлять
-`http.d/`/`stream.d/`, выпускать сертификаты через встроенный ACME и читать `/status`.
+`.deb` для arm64 собирается кросс-компиляцией (musl, через zig). На машине разработчика
+(проверено на macOS):
 
-Ничего специально доготавливать на стороне Angie не нужно: панель через root-хелпер
-(polkit) пишет в `/etc/angie/http.d`, при первом стриме сама активирует блок `stream {}`
-в `angie.conf`, а ACME-сертификаты кладёт в `/var/lib/angie/acme` (каталог уже создан
-пакетом).
+```bash
+# один раз: таргет + инструменты
+rustup target add aarch64-unknown-linux-musl
+cargo install --locked cargo-zigbuild cargo-deb      # zig ставится отдельно (brew install zig)
+
+# перед каждой сборкой .deb
+(cd frontend && npm run build)                        # фронт вшивается в бинарь (rust-embed)
+./scripts/vendor-acme-dnsapi.sh packaging/acme.sh     # вендорим acme.sh + 11 dnsapi-плагинов (обязательно)
+./scripts/build-geoip-data.sh backend/data/geoip-countries.csv || true   # полный geo-датасет (best-effort)
+
+cd backend
+cargo zigbuild --release --target aarch64-unknown-linux-musl
+cargo deb --target aarch64-unknown-linux-musl --no-build --no-strip
+# → target/aarch64-unknown-linux-musl/debian/angie-panel_<ver>_arm64.deb
+```
+
+> Предупреждение `No usable systemd units found … in packaging/debian` от cargo-deb —
+> ожидаемо: postinst не включает сервис сам, это делает `install.sh` (или шаги ниже).
+
+## 6. Установка панели на NanoPi (локальный `.deb`)
+
+Скопировать `.deb` на устройство и поставить. `install.sh` умеет ставить локальный файл
+(`sudo ./install.sh ./angie-panel_*.deb`), но он интерактивный (спрашивает про default-сайт
+и bind-адрес). Ниже — те же шаги вручную/неинтерактивно (проверено вживую):
+
+```bash
+scp angie-panel_*_arm64.deb root@192.168.8.4:/root/          # с dev-машины
+
+ssh root@192.168.8.4
+chmod 644 /root/angie-panel_*_arm64.deb
+apt-get install -y /root/angie-panel_*_arm64.deb             # тянет polkitd, создаёт юзера angie-panel + /var/lib/angie-panel
+systemctl daemon-reload                                       # postinst не делает это сам
+
+# Пакетный default-сайт Angie конфликтует с :80-сервером, который генерит панель — удаляем:
+rm -f /etc/angie/http.d/default.conf && systemctl reload angie
+
+# Адрес веб-панели (LAN, чтобы открывать из локалки; НЕ 0.0.0.0 и не WAN):
+sed -i 's|^bind_addr = .*|bind_addr = "192.168.8.4"|' /etc/angie-panel.toml
+
+systemctl enable --now angie-panel && systemctl restart angie-panel
+cat /var/lib/angie-panel/setup-token                          # одноразовый токен
+```
+
+Готово: открыть `http://192.168.8.4:8080/setup`, ввести токен, создать админа. Дашборд
+покажет «status недоступен», пока не сделаете первый **Apply** — панель генерит свой
+`00-panel.conf` (default-сайт + `/status` на :8100), активирует `stream {}` при первом
+стриме и кладёт ACME-серты в `/var/lib/angie/acme` (всё уже подготовлено пакетом Angie).
+Если токен потерян: `angie-panel reset-password`.
 
 ### Замечания по безопасности
 
