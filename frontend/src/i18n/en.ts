@@ -215,11 +215,25 @@ export const en = {
         locations: 'Locations',
         upstreams: 'Upstreams',
         rateLimit: 'Rate limit',
+        proxyTuning: 'Proxy tuning',
         headers: 'Headers',
         gzip: 'Compression',
         errorPages: 'Error pages',
         maintenance: 'Maintenance',
         advanced: 'Advanced',
+      },
+      proxyTuning: {
+        title: 'Proxy fine-tuning',
+        description:
+          'Override Angie’s defaults for this host: request body size, upstream timeouts, and response buffering. Leave a field blank to keep the default.',
+        bodySize: 'Max request body',
+        bodySizeHint:
+          'e.g. 50m, 1g. 0 = unlimited. Blank uses Angie’s default (1m). Large uploads fail with 413 without this.',
+        connectTimeout: 'Connect (s)',
+        readTimeout: 'Read (s)',
+        sendTimeout: 'Send (s)',
+        timeoutHint: 'Upstream timeouts in seconds. Blank = Angie’s default (60s).',
+        disableBuffering: 'Disable response buffering',
       },
       gzip: {
         title: 'gzip compression',

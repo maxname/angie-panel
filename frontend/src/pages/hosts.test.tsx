@@ -55,6 +55,13 @@ const sampleHost: Host = {
     not_found: { enabled: false, title: '', message: '' },
     server_error: { enabled: false, title: '', message: '' },
   },
+  proxy_tuning: {
+    client_max_body_size: '',
+    connect_timeout_secs: 0,
+    read_timeout_secs: 0,
+    send_timeout_secs: 0,
+    disable_buffering: false,
+  },
   enabled: true,
   created_at: 1751700000,
   updated_at: 1751700000,

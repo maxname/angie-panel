@@ -176,6 +176,18 @@ export interface Gzip {
   types: string[]
 }
 
+/** Per-host proxy fine-tuning. Empty / zero fields fall back to Angie defaults. */
+export interface ProxyTuning {
+  /** nginx size token ("50m", "1g", "0" = unlimited, "" = default). */
+  client_max_body_size: string
+  /** Whole seconds; 0 = omit (Angie default). */
+  connect_timeout_secs: number
+  read_timeout_secs: number
+  send_timeout_secs: number
+  /** Emit `proxy_buffering off`. */
+  disable_buffering: boolean
+}
+
 /** One custom error page: a plain-text title + message rendered into a template. */
 export interface ErrorPage {
   enabled: boolean
@@ -228,6 +240,7 @@ export interface Host {
   maintenance: Maintenance
   gzip: Gzip
   error_pages: ErrorPages
+  proxy_tuning: ProxyTuning
   enabled: boolean
   /** Unix timestamp, seconds. */
   created_at: number
@@ -262,6 +275,7 @@ export interface HostInput {
   maintenance?: Maintenance
   gzip?: Gzip
   error_pages?: ErrorPages
+  proxy_tuning?: ProxyTuning
   enabled?: boolean
 }
 

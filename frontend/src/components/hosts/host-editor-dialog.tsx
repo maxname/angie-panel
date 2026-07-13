@@ -10,6 +10,7 @@ import {
   Plus,
   Route,
   Server,
+  SlidersHorizontal,
   Tags,
   Terminal,
   Wrench,
@@ -120,6 +121,11 @@ interface FormState {
   error_5xx_enabled: boolean
   error_5xx_title: string
   error_5xx_message: string
+  proxy_body_size: string
+  proxy_connect_timeout: string
+  proxy_read_timeout: string
+  proxy_send_timeout: string
+  proxy_disable_buffering: boolean
 }
 
 function initialState(host: Host | null): FormState {
@@ -172,10 +178,16 @@ function initialState(host: Host | null): FormState {
       error_5xx_enabled: false,
       error_5xx_title: '',
       error_5xx_message: '',
+      proxy_body_size: '',
+      proxy_connect_timeout: '',
+      proxy_read_timeout: '',
+      proxy_send_timeout: '',
+      proxy_disable_buffering: false,
     }
   }
   const rl = host.rate_limit
   const up = host.upstream
+  const pt = host.proxy_tuning
   return {
     domains: [...host.domains],
     forward_scheme: host.forward_scheme,
@@ -236,6 +248,11 @@ function initialState(host: Host | null): FormState {
     error_5xx_enabled: host.error_pages.server_error.enabled,
     error_5xx_title: host.error_pages.server_error.title,
     error_5xx_message: host.error_pages.server_error.message,
+    proxy_body_size: pt.client_max_body_size,
+    proxy_connect_timeout: pt.connect_timeout_secs > 0 ? String(pt.connect_timeout_secs) : '',
+    proxy_read_timeout: pt.read_timeout_secs > 0 ? String(pt.read_timeout_secs) : '',
+    proxy_send_timeout: pt.send_timeout_secs > 0 ? String(pt.send_timeout_secs) : '',
+    proxy_disable_buffering: pt.disable_buffering,
   }
 }
 
@@ -255,6 +272,7 @@ const EDITOR_SECTIONS: { key: string; Icon: LucideIcon }[] = [
   { key: 'locations', Icon: Route },
   { key: 'upstreams', Icon: Server },
   { key: 'rateLimit', Icon: Gauge },
+  { key: 'proxyTuning', Icon: SlidersHorizontal },
   { key: 'headers', Icon: Tags },
   { key: 'gzip', Icon: FileArchive },
   { key: 'errorPages', Icon: OctagonAlert },
@@ -506,6 +524,13 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           title: form.error_5xx_title.trim(),
           message: form.error_5xx_message.trim(),
         },
+      },
+      proxy_tuning: {
+        client_max_body_size: form.proxy_body_size.trim(),
+        connect_timeout_secs: Number.parseInt(form.proxy_connect_timeout, 10) || 0,
+        read_timeout_secs: Number.parseInt(form.proxy_read_timeout, 10) || 0,
+        send_timeout_secs: Number.parseInt(form.proxy_send_timeout, 10) || 0,
+        disable_buffering: form.proxy_disable_buffering,
       },
       enabled: host === null ? true : host.enabled,
     }
@@ -1449,6 +1474,92 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
             <Plus aria-hidden="true" />
             {t('hosts.editor.headers.add')}
           </Button>
+        </TabsContent>
+
+        <TabsContent value="proxyTuning" className="space-y-4">
+          <div className="space-y-1">
+            <span className="text-sm font-medium">
+              {t('hosts.editor.proxyTuning.title')}
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.proxyTuning.description')}
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="host-proxy-body">
+              {t('hosts.editor.proxyTuning.bodySize')}
+            </Label>
+            <Input
+              id="host-proxy-body"
+              className="font-mono text-xs"
+              spellCheck={false}
+              placeholder="50m"
+              value={form.proxy_body_size}
+              onChange={(event) => patch({ proxy_body_size: event.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('hosts.editor.proxyTuning.bodySizeHint')}
+            </p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label htmlFor="host-proxy-connect">
+                {t('hosts.editor.proxyTuning.connectTimeout')}
+              </Label>
+              <Input
+                id="host-proxy-connect"
+                inputMode="numeric"
+                placeholder="—"
+                value={form.proxy_connect_timeout}
+                onChange={(event) =>
+                  patch({
+                    proxy_connect_timeout: event.target.value.replace(/[^0-9]/g, ''),
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="host-proxy-read">
+                {t('hosts.editor.proxyTuning.readTimeout')}
+              </Label>
+              <Input
+                id="host-proxy-read"
+                inputMode="numeric"
+                placeholder="—"
+                value={form.proxy_read_timeout}
+                onChange={(event) =>
+                  patch({
+                    proxy_read_timeout: event.target.value.replace(/[^0-9]/g, ''),
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="host-proxy-send">
+                {t('hosts.editor.proxyTuning.sendTimeout')}
+              </Label>
+              <Input
+                id="host-proxy-send"
+                inputMode="numeric"
+                placeholder="—"
+                value={form.proxy_send_timeout}
+                onChange={(event) =>
+                  patch({
+                    proxy_send_timeout: event.target.value.replace(/[^0-9]/g, ''),
+                  })
+                }
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t('hosts.editor.proxyTuning.timeoutHint')}
+          </p>
+          <ToggleRow
+            id="host-proxy-buffering"
+            label={t('hosts.editor.proxyTuning.disableBuffering')}
+            checked={form.proxy_disable_buffering}
+            onChange={(checked) => patch({ proxy_disable_buffering: checked })}
+          />
         </TabsContent>
 
         <TabsContent value="gzip" className="space-y-4">

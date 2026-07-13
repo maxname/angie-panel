@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use super::*;
 use crate::model::{
     BalanceMethod, CustomHeader, CustomLocation, DeadHost, ErrorPage, ErrorPages, ForwardAuth,
-    GeoMode, GeoPolicy, Gzip, HeaderDirection, Maintenance, Mtls, ProxyHost, RateLimit,
-    RedirectHost, RedirectScheme, Scheme, SniRoute, SniRouter, Stream, StreamTls, Upstream,
-    UpstreamServer,
+    GeoMode, GeoPolicy, Gzip, HeaderDirection, Maintenance, Mtls, ProxyHost, ProxyTuning,
+    RateLimit, RedirectHost, RedirectScheme, Scheme, SniRoute, SniRouter, Stream, StreamTls,
+    Upstream, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -60,6 +60,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         maintenance: Maintenance::default(),
         gzip: Gzip::default(),
         error_pages: ErrorPages::default(),
+        proxy_tuning: ProxyTuning::default(),
         enabled: true,
         created_at: 0,
         updated_at: 0,
@@ -739,6 +740,32 @@ fn golden_gzip() {
     let (_, body) = only_host_file(&files);
     assert!(body.contains("gzip_proxied any;"));
     assert_golden("20-host-gzip.conf", body);
+}
+
+#[test]
+fn golden_proxy_tuning() {
+    // Body size + timeouts + buffering off at server scope. Every directive was
+    // verified by angie -t on real Angie (and client_max_body_size enforced at
+    // runtime: 413 over the limit, passthrough under it).
+    let mut host = base_host(23, "app.example.com");
+    host.proxy_tuning = ProxyTuning {
+        client_max_body_size: "50m".into(),
+        connect_timeout_secs: 30,
+        read_timeout_secs: 120,
+        send_timeout_secs: 30,
+        disable_buffering: true,
+    };
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(body.contains("client_max_body_size 50m;"));
+    assert!(body.contains("proxy_read_timeout 120s;"));
+    assert!(body.contains("proxy_buffering off;"));
+    assert_golden("20-host-proxy-tuning.conf", body);
 }
 
 #[test]

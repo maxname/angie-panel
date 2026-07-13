@@ -177,6 +177,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         maintenance: h.maintenance.clone(),
         gzip: h.gzip.clone(),
         error_pages: h.error_pages.clone(),
+        proxy_tuning: h.proxy_tuning.clone(),
         enabled,
     }
 }

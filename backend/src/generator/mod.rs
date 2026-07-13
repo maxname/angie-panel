@@ -860,6 +860,33 @@ fn emit_gzip(out: &mut String, host: &ProxyHost) {
     let _ = writeln!(out, "    gzip_types {};", types.join(" "));
 }
 
+/// Per-host proxy fine-tuning at server scope (inherited by the proxy
+/// locations). Only non-default fields are emitted so Angie's defaults
+/// otherwise apply. Values are model-validated (`\d+[kmg]?` size, capped
+/// integer seconds), so there is no injection surface.
+fn emit_proxy_tuning(out: &mut String, host: &ProxyHost) {
+    let p = &host.proxy_tuning;
+    if !p.client_max_body_size.is_empty() {
+        let _ = writeln!(out, "    client_max_body_size {};", p.client_max_body_size);
+    }
+    if p.connect_timeout_secs > 0 {
+        let _ = writeln!(
+            out,
+            "    proxy_connect_timeout {}s;",
+            p.connect_timeout_secs
+        );
+    }
+    if p.read_timeout_secs > 0 {
+        let _ = writeln!(out, "    proxy_read_timeout {}s;", p.read_timeout_secs);
+    }
+    if p.send_timeout_secs > 0 {
+        let _ = writeln!(out, "    proxy_send_timeout {}s;", p.send_timeout_secs);
+    }
+    if p.disable_buffering {
+        let _ = writeln!(out, "    proxy_buffering off;");
+    }
+}
+
 // -------------------------------------------------------------- 12-geo.conf
 
 /// The variable the geo block sets and each proxy host tests (1 ⇒ 403).
@@ -1284,6 +1311,9 @@ fn host_features(
 
     // gzip response compression (server scope → applies to every location).
     emit_gzip(out, host);
+
+    // Proxy fine-tuning (body size, timeouts, buffering) at server scope.
+    emit_proxy_tuning(out, host);
 
     // Custom error pages (server scope): proxy_intercept_errors + error_page +
     // named error locations. Not reachable for a maintenance host (that path

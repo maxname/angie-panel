@@ -215,11 +215,25 @@ export const ru: typeof en = {
         locations: 'Локации',
         upstreams: 'Апстримы',
         rateLimit: 'Лимиты',
+        proxyTuning: 'Проксирование',
         headers: 'Заголовки',
         gzip: 'Сжатие',
         errorPages: 'Страницы ошибок',
         maintenance: 'Обслуживание',
         advanced: 'Расширенно',
+      },
+      proxyTuning: {
+        title: 'Тонкая настройка проксирования',
+        description:
+          'Переопределить дефолты Angie для этого хоста: размер тела запроса, таймауты к апстриму и буферизацию ответа. Пустое поле — оставить дефолт.',
+        bodySize: 'Макс. размер тела запроса',
+        bodySizeHint:
+          'например, 50m, 1g. 0 = без лимита. Пусто — дефолт Angie (1m). Без этого большие загрузки падают с 413.',
+        connectTimeout: 'Соединение (с)',
+        readTimeout: 'Чтение (с)',
+        sendTimeout: 'Отправка (с)',
+        timeoutHint: 'Таймауты к апстриму в секундах. Пусто — дефолт Angie (60с).',
+        disableBuffering: 'Отключить буферизацию ответа',
       },
       gzip: {
         title: 'Сжатие gzip',

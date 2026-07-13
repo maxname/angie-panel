@@ -768,9 +768,66 @@ pub struct ProxyHost {
     pub maintenance: Maintenance,
     pub gzip: Gzip,
     pub error_pages: ErrorPages,
+    pub proxy_tuning: ProxyTuning,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// Per-host proxy fine-tuning. Empty / zero fields are omitted so Angie's
+/// defaults apply. `client_max_body_size` is an nginx size token ("50m", "1g",
+/// or "0" = unlimited); timeouts are whole seconds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyTuning {
+    #[serde(default)]
+    pub client_max_body_size: String,
+    #[serde(default)]
+    pub connect_timeout_secs: u32,
+    #[serde(default)]
+    pub read_timeout_secs: u32,
+    #[serde(default)]
+    pub send_timeout_secs: u32,
+    #[serde(default)]
+    pub disable_buffering: bool,
+}
+
+pub const MAX_PROXY_TIMEOUT_SECS: u32 = 3600;
+
+/// Validate + normalize proxy tuning. The body size must be a number optionally
+/// followed by k/m/g (or "0"/empty); each timeout is capped so it can't be an
+/// absurd value. Values are only interpolated as `<digits>[kmg]` / `<digits>s`,
+/// so there's no injection surface.
+pub fn validate_proxy_tuning(mut p: ProxyTuning) -> Result<ProxyTuning, ApiError> {
+    let size = p.client_max_body_size.trim().to_ascii_lowercase();
+    if size.is_empty() {
+        p.client_max_body_size = String::new();
+    } else {
+        let split = size
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(size.len());
+        let (digits, unit) = size.split_at(split);
+        let unit_ok = matches!(unit, "" | "k" | "m" | "g");
+        if digits.is_empty() || digits.parse::<u64>().is_err() || !unit_ok {
+            return Err(bad(
+                "invalid_proxy_tuning",
+                "body size must be a number optionally followed by k, m, or g (or 0)",
+            ));
+        }
+        p.client_max_body_size = size;
+    }
+    for (label, secs) in [
+        ("connect", p.connect_timeout_secs),
+        ("read", p.read_timeout_secs),
+        ("send", p.send_timeout_secs),
+    ] {
+        if secs > MAX_PROXY_TIMEOUT_SECS {
+            return Err(bad(
+                "invalid_proxy_tuning",
+                format!("{label} timeout must be at most {MAX_PROXY_TIMEOUT_SECS} seconds"),
+            ));
+        }
+    }
+    Ok(p)
 }
 
 /// Create/update payload; validation normalizes it in place.
@@ -822,6 +879,8 @@ pub struct ProxyHostInput {
     pub gzip: Gzip,
     #[serde(default)]
     pub error_pages: ErrorPages,
+    #[serde(default)]
+    pub proxy_tuning: ProxyTuning,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -1076,6 +1135,7 @@ pub fn validate_host_input(
     input.maintenance = validate_maintenance(input.maintenance)?;
     input.gzip = validate_gzip(input.gzip)?;
     input.error_pages = validate_error_pages(input.error_pages)?;
+    input.proxy_tuning = validate_proxy_tuning(input.proxy_tuning)?;
 
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
@@ -2365,6 +2425,7 @@ mod tests {
             maintenance: Maintenance::default(),
             gzip: Gzip::default(),
             error_pages: ErrorPages::default(),
+            proxy_tuning: ProxyTuning::default(),
             enabled: true,
         };
         let err = validate_host_input(input.clone(), false, &policy()).unwrap_err();
@@ -2577,6 +2638,52 @@ mod tests {
                 "should reject ({name:?}, {value:?})"
             );
         }
+    }
+
+    #[test]
+    fn proxy_tuning_validation() {
+        // Valid: size lower-cased, timeouts kept.
+        let ok = validate_proxy_tuning(ProxyTuning {
+            client_max_body_size: "50M".into(),
+            connect_timeout_secs: 30,
+            read_timeout_secs: 120,
+            send_timeout_secs: 30,
+            disable_buffering: true,
+        })
+        .unwrap();
+        assert_eq!(ok.client_max_body_size, "50m");
+        assert_eq!(ok.read_timeout_secs, 120);
+
+        // "0" (unlimited) and empty (omit) are both accepted.
+        assert_eq!(
+            validate_proxy_tuning(ProxyTuning {
+                client_max_body_size: "0".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .client_max_body_size,
+            "0"
+        );
+        assert!(validate_proxy_tuning(ProxyTuning::default()).is_ok());
+
+        // Bad size tokens rejected.
+        for bad_size in ["50mb", "m50", "50 m", "-5", "abc", "50k5"] {
+            assert!(
+                validate_proxy_tuning(ProxyTuning {
+                    client_max_body_size: bad_size.into(),
+                    ..Default::default()
+                })
+                .is_err(),
+                "expected {bad_size} to be rejected"
+            );
+        }
+
+        // Timeout over the cap rejected.
+        assert!(validate_proxy_tuning(ProxyTuning {
+            read_timeout_secs: MAX_PROXY_TIMEOUT_SECS + 1,
+            ..Default::default()
+        })
+        .is_err());
     }
 
     #[test]
