@@ -41,6 +41,7 @@ export const en = {
     closeMenu: 'Close menu',
     collapseSidebar: 'Collapse sidebar',
     expandSidebar: 'Expand sidebar',
+    pendingChanges: 'Unapplied changes: {{count}}',
   },
   audit: {
     title: 'Audit log',

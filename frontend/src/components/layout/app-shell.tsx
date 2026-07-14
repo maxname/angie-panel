@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useRouter } from '@tanstack/react-router'
 import {
   Cloud,
@@ -86,10 +86,29 @@ const NAV_SECTIONS = [
 
 const COLLAPSE_KEY = 'sidebar-collapsed'
 
+/** Number of staged-but-unapplied config changes (added + modified + removed
+ *  managed files), polled from the apply preview. Drives the "unapplied
+ *  changes" badge so a created host/cert isn't silently left un-applied.
+ *  Shares the ['apply','preview'] cache with the Apply page. */
+function usePendingChanges(): number {
+  const { data } = useQuery({
+    queryKey: ['apply', 'preview'],
+    queryFn: () => api.getApplyPreview(),
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
+  })
+  if (!data) {
+    return 0
+  }
+  return data.diff.added + data.diff.modified + data.diff.removed
+}
+
 export function AppShell() {
   const { t } = useTranslation()
   const { data: me } = useMe()
   const isAdmin = me?.role === 'admin'
+  const pending = usePendingChanges()
 
   // Desktop: collapse to an icon rail (persisted). Mobile: an off-canvas drawer.
   const [collapsed, setCollapsed] = useState(() => {
@@ -132,14 +151,16 @@ export function AppShell() {
         collapsed={collapsed}
         isAdmin={isAdmin}
         onToggle={toggleCollapsed}
+        pending={pending}
       />
       <MobileDrawer
         open={mobileOpen}
         isAdmin={isAdmin}
         onClose={() => setMobileOpen(false)}
+        pending={pending}
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <MobileHeader onOpenMenu={() => setMobileOpen(true)} />
+        <MobileHeader onOpenMenu={() => setMobileOpen(true)} pending={pending} />
         <main className="flex-1 overflow-y-auto p-4 lg:p-6">
           {me?.role === 'viewer' && (
             <div
@@ -162,10 +183,12 @@ function DesktopSidebar({
   collapsed,
   isAdmin,
   onToggle,
+  pending,
 }: {
   collapsed: boolean
   isAdmin: boolean
   onToggle: () => void
+  pending: number
 }) {
   const { t } = useTranslation()
 
@@ -207,7 +230,7 @@ function DesktopSidebar({
           </>
         )}
       </div>
-      <NavSections collapsed={collapsed} isAdmin={isAdmin} />
+      <NavSections collapsed={collapsed} isAdmin={isAdmin} pending={pending} />
       <div className="mt-auto border-t p-2">
         <SidebarUser compact={collapsed} />
       </div>
@@ -220,10 +243,12 @@ function MobileDrawer({
   open,
   isAdmin,
   onClose,
+  pending,
 }: {
   open: boolean
   isAdmin: boolean
   onClose: () => void
+  pending: number
 }) {
   const { t } = useTranslation()
   if (!open) {
@@ -242,7 +267,12 @@ function MobileDrawer({
           <Waypoints className="size-5 shrink-0" aria-hidden="true" />
           {t('app.name')}
         </div>
-        <NavSections collapsed={false} isAdmin={isAdmin} onNavigate={onClose} />
+        <NavSections
+          collapsed={false}
+          isAdmin={isAdmin}
+          pending={pending}
+          onNavigate={onClose}
+        />
         <div className="mt-auto border-t p-2">
           <SidebarUser />
         </div>
@@ -257,10 +287,12 @@ function MobileDrawer({
 function NavSections({
   collapsed,
   isAdmin,
+  pending,
   onNavigate,
 }: {
   collapsed: boolean
   isAdmin: boolean
+  pending: number
   onNavigate?: () => void
 }) {
   const { t } = useTranslation()
@@ -283,26 +315,55 @@ function NavSections({
             )}
             {items.map((item) => {
               const label = t(item.labelKey)
+              // The Apply item carries a badge when config changes are staged
+              // but not yet applied, so a created host/cert isn't silently left
+              // inactive (this is the only place the user pushes changes live).
+              const showBadge = item.to === '/apply' && pending > 0
+              const pendingLabel = showBadge
+                ? t('nav.pendingChanges', { count: pending })
+                : undefined
               const link = (
                 <Link
                   to={item.to}
                   activeOptions={{ exact: item.exact }}
                   onClick={onNavigate}
-                  aria-label={collapsed ? label : undefined}
+                  aria-label={
+                    collapsed
+                      ? showBadge
+                        ? `${label} — ${pendingLabel}`
+                        : label
+                      : undefined
+                  }
                   className={cn(
-                    'flex items-center gap-2 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                    'relative flex items-center gap-2 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
                     collapsed ? 'justify-center px-2' : 'px-3',
                   )}
                   activeProps={{ className: 'bg-muted text-foreground' }}
                 >
                   <item.icon className="size-4 shrink-0" aria-hidden="true" />
                   {!collapsed && <span className="truncate">{label}</span>}
+                  {showBadge && !collapsed && (
+                    <span
+                      className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-xs font-semibold tabular-nums text-white"
+                      title={pendingLabel}
+                    >
+                      {pending}
+                    </span>
+                  )}
+                  {showBadge && collapsed && (
+                    <span
+                      className="absolute right-1 top-1 size-2 rounded-full bg-amber-500 ring-2 ring-background"
+                      aria-hidden="true"
+                    />
+                  )}
                 </Link>
               )
               return collapsed ? (
                 <Tooltip key={item.to}>
                   <TooltipTrigger asChild>{link}</TooltipTrigger>
-                  <TooltipContent side="right">{label}</TooltipContent>
+                  <TooltipContent side="right">
+                    {showBadge ? `${label} — ${pendingLabel}` : label}
+                  </TooltipContent>
                 </Tooltip>
               ) : (
                 <div key={item.to}>{link}</div>
@@ -329,7 +390,13 @@ function useLogout() {
 
 /** A compact top bar for mobile (the sidebar is off-canvas there): a menu
  *  button, the app name, and the user menu. */
-function MobileHeader({ onOpenMenu }: { onOpenMenu: () => void }) {
+function MobileHeader({
+  onOpenMenu,
+  pending,
+}: {
+  onOpenMenu: () => void
+  pending: number
+}) {
   const { t } = useTranslation()
 
   return (
@@ -338,10 +405,21 @@ function MobileHeader({ onOpenMenu }: { onOpenMenu: () => void }) {
         <Button
           variant="ghost"
           size="icon"
-          aria-label={t('nav.openMenu')}
+          className="relative"
+          aria-label={
+            pending > 0
+              ? `${t('nav.openMenu')} — ${t('nav.pendingChanges', { count: pending })}`
+              : t('nav.openMenu')
+          }
           onClick={onOpenMenu}
         >
           <Menu className="size-5" aria-hidden="true" />
+          {pending > 0 && (
+            <span
+              className="absolute right-1 top-1 size-2 rounded-full bg-amber-500 ring-2 ring-background"
+              aria-hidden="true"
+            />
+          )}
         </Button>
         <div className="flex items-center gap-2 font-semibold">
           <Waypoints className="size-5" aria-hidden="true" />

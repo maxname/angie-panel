@@ -43,6 +43,7 @@ export const ru: typeof en = {
     closeMenu: 'Закрыть меню',
     collapseSidebar: 'Свернуть меню',
     expandSidebar: 'Развернуть меню',
+    pendingChanges: 'Непримененные изменения: {{count}}',
   },
   audit: {
     title: 'Журнал аудита',
