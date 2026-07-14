@@ -209,8 +209,13 @@ struct Propagation {
 /// negative-caching: a recursive resolver can pin "no record" for the zone's
 /// negative-TTL long after the record is live.
 async fn wait_for_txt_propagation(fqdn: &str, value: &str, base_domain: &str) -> Propagation {
-    const TIMEOUT: Duration = Duration::from_secs(170);
-    const INTERVAL: Duration = Duration::from_secs(4);
+    // Budget generous enough for slow providers: reg.ru was measured at ~128s
+    // for one record and >170s for a second one issued right after (apex +
+    // wildcard both challenge _acme-challenge.<domain>, back to back — the churn
+    // slows the authoritative NS). Kept below the hook location's
+    // proxy_read_timeout (set by the generator) so Angie waits for us.
+    const TIMEOUT: Duration = Duration::from_secs(240);
+    const INTERVAL: Duration = Duration::from_secs(5);
     let start = Instant::now();
 
     // v4-only public meta-resolver to discover the zone's authoritative NS and
