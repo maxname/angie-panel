@@ -237,17 +237,18 @@ fn golden_acme_dns_provider_hook() {
         "provider certs must not self-answer DNS"
     );
     assert!(acme.contains("location @acme_hook_location"));
-    assert!(acme.contains("acme_hook web;"));
-    // The URL goes through a variable so proxy_pass carries no literal URI part
-    // — Angie forbids that inside a named location (verified on real Angie).
-    assert!(acme.contains(
-        "set $ap_acme_hook_url \"http://127.0.0.1:8080/acme/hook?t=testtoken&provider=7\";"
-    ));
-    assert!(acme.contains("proxy_pass $ap_acme_hook_url;"));
+    // The hook's URI (path + query) lives on the acme_hook directive's `uri=`
+    // parameter — evaluated by the ACME module at hook time — so proxy_pass
+    // carries no URI part, which Angie forbids inside a named location. This is
+    // the documented Angie pattern and works at runtime (a `set` variable does
+    // not: it isn't populated in the hook's internal request).
+    assert!(acme.contains("acme_hook web uri=/acme/hook?t=testtoken&provider=7;"));
+    assert!(acme.contains("proxy_pass http://127.0.0.1:8080;"));
     assert!(acme.contains("proxy_set_header X-Acme-Keyauth $acme_hook_keyauth;"));
     assert_golden("10-acme-hook.conf", acme);
-    // The variable proxy_pass passes the linter (it isn't a literal loopback
-    // target) — the whole fileset is lint-clean.
+    // The hook's proxy_pass targets the panel's own /acme/hook endpoint; the
+    // linter exempts it via the preceding acme_hook directive (only the status
+    // port stays denied) — the whole fileset is lint-clean.
     let policy = lint::LintPolicy {
         snippets_dir: snippets_dir(),
         public_dir: public_dir(),

@@ -606,19 +606,19 @@ fn gen_acme(input: &GeneratorInput) -> String {
         // _acme-challenge TXT via the provider API. Verified on real Angie.
         if let Some(provider) = &cert.dns_provider {
             let _ = writeln!(out, "    location @acme_hook_location {{");
-            let _ = writeln!(out, "        acme_hook {};", cert.name);
-            // The provider id in the URL tells the hook which acme.sh plugin +
-            // stored credentials to use (validated registry id, safe). The URL
-            // goes through a variable so proxy_pass carries no literal URI part:
-            // Angie forbids a URI on proxy_pass inside a named location. A
-            // variable target needs a resolver, which the panel emits itself in
-            // 00-panel.conf.
+            // The hook's request URI (path + query) is set via acme_hook's `uri=`
+            // parameter — evaluated by the ACME module at hook time — and
+            // proxy_pass then forwards it. This keeps proxy_pass free of a URI
+            // part, which Angie forbids inside a named location, without a `set`
+            // variable (that isn't populated in the hook's internal request).
+            // The provider id selects the acme.sh plugin + stored creds; token
+            // and id are validated (safe). Documented Angie pattern.
             let _ = writeln!(
                 out,
-                "        set $ap_acme_hook_url \"http://{}/acme/hook?t={}&provider={}\";",
-                input.acme_hook_target, input.acme_hook_token, provider
+                "        acme_hook {} uri=/acme/hook?t={}&provider={};",
+                cert.name, input.acme_hook_token, provider
             );
-            let _ = writeln!(out, "        proxy_pass $ap_acme_hook_url;");
+            let _ = writeln!(out, "        proxy_pass http://{};", input.acme_hook_target);
             let _ = writeln!(out, "        proxy_set_header X-Acme-Hook $acme_hook_name;");
             let _ = writeln!(
                 out,

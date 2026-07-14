@@ -89,6 +89,12 @@ fn check_file(name: &str, body: &str, policy: &LintPolicy, out: &mut Vec<LintVio
         }
     };
 
+    // A proxy_pass that immediately follows an `acme_hook` directive is the
+    // panel's own DNS-01 hook target. The hook's URI now lives on the
+    // `acme_hook … uri=` directive (Angie forbids a URI on proxy_pass inside a
+    // named location), so the proxy_pass carries no telltale `/acme/hook` path.
+    // Track that context so the loopback exemption can key off it.
+    let mut after_acme_hook = false;
     for st in &statements {
         let directive = st.directive.to_ascii_lowercase();
         let args = st.args.trim();
@@ -162,13 +168,14 @@ fn check_file(name: &str, body: &str, policy: &LintPolicy, out: &mut Vec<LintVio
 
             // --- upstream targets ---
             "proxy_pass" | "grpc_pass" | "fastcgi_pass" | "uwsgi_pass" | "scgi_pass" => {
-                if let Some(v) = check_proxy_pass(&directive, args) {
+                if let Some(v) = check_proxy_pass(&directive, args, after_acme_hook) {
                     push(out, st.line, v);
                 }
             }
 
             _ => {}
         }
+        after_acme_hook = directive == "acme_hook";
     }
 
     // Defence in depth: the generator always emits balanced braces. A snippet
@@ -350,13 +357,13 @@ fn check_ssl_cert(directive: &str, args: &str) -> Option<String> {
 
 /// proxy_pass (and friends) must not target a unix socket, a loopback/link-local
 /// address, or a management port (status API / panel).
-fn check_proxy_pass(directive: &str, args: &str) -> Option<String> {
+fn check_proxy_pass(directive: &str, args: &str, after_acme_hook: bool) -> Option<String> {
     let target = args.trim();
     if target.is_empty() {
         return Some(format!("{directive} with no target"));
     }
     // unix: sockets can reach arbitrary local services (including privileged
-    // ones) — always denied.
+    // ones) — always denied, hook or not.
     if target.contains("unix:") {
         return Some(format!(
             "{directive} to a unix socket is forbidden: {target:?}"
@@ -374,14 +381,16 @@ fn check_proxy_pass(directive: &str, args: &str) -> Option<String> {
     let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
     let path = &after_scheme[authority.len()..];
 
-    // Exempt the panel's own DNS-01 ACME hook: it is a deliberate loopback
-    // proxy_pass (emitted for provider certs) to a TOKEN-GATED endpoint. This is
-    // the only sanctioned loopback target. Safe because the path reaches nothing
-    // else privileged and the hook returns 403 without the secret token — so
-    // even a hand-written snippet aimed here cannot drive it.
-    if directive == "proxy_pass" && path.trim_start_matches('/').starts_with("acme/hook") {
-        return None;
-    }
+    // The panel's own DNS-01 ACME hook is the one sanctioned loopback target: a
+    // deliberate proxy_pass to the panel's TOKEN-GATED /acme/hook endpoint.
+    // Two shapes mark it: the current generator puts the URI on the preceding
+    // `acme_hook … uri=` directive (so `after_acme_hook` is set and proxy_pass
+    // has no path), while older confs carried the `/acme/hook` path on
+    // proxy_pass itself. Either way the endpoint returns 403 without the secret
+    // token, so even a hand-written snippet aimed here cannot drive it. The
+    // status API stays off-limits regardless (handled below).
+    let is_acme_hook = (directive == "proxy_pass")
+        && (after_acme_hook || path.trim_start_matches('/').starts_with("acme/hook"));
 
     if let Some((host, port)) = split_host_port(authority) {
         let is_local = match host.parse::<IpAddr>() {
@@ -398,15 +407,28 @@ fn check_proxy_pass(directive: &str, args: &str) -> Option<String> {
         // allowed.
         if is_local {
             if let Some(p) = port {
-                if p == STATUS_PORT || p == PANEL_PORT {
+                // The status API is never a legitimate proxy target — not even
+                // for the ACME hook.
+                if p == STATUS_PORT {
+                    return Some(format!(
+                        "{directive} targets a local management port ({p}): {target:?}"
+                    ));
+                }
+                // The panel port is a management port too, except for the hook,
+                // whose whole purpose is to reach the panel over loopback.
+                if p == PANEL_PORT && !is_acme_hook {
                     return Some(format!(
                         "{directive} targets a local management port ({p}): {target:?}"
                     ));
                 }
             }
-            return Some(format!(
-                "{directive} targets a loopback/link-local address: {target:?}"
-            ));
+            // A bare loopback target (no port, or a non-management port) is only
+            // sanctioned for the hook.
+            if !is_acme_hook {
+                return Some(format!(
+                    "{directive} targets a loopback/link-local address: {target:?}"
+                ));
+            }
         }
     }
     None
