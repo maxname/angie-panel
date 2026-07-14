@@ -608,12 +608,17 @@ fn gen_acme(input: &GeneratorInput) -> String {
             let _ = writeln!(out, "    location @acme_hook_location {{");
             let _ = writeln!(out, "        acme_hook {};", cert.name);
             // The provider id in the URL tells the hook which acme.sh plugin +
-            // stored credentials to use. It is a validated registry id (safe).
+            // stored credentials to use (validated registry id, safe). The URL
+            // goes through a variable so proxy_pass carries no literal URI part:
+            // Angie forbids a URI on proxy_pass inside a named location. A
+            // variable target needs a resolver, which the panel emits itself in
+            // 00-panel.conf.
             let _ = writeln!(
                 out,
-                "        proxy_pass http://{}/acme/hook?t={}&provider={};",
+                "        set $ap_acme_hook_url \"http://{}/acme/hook?t={}&provider={}\";",
                 input.acme_hook_target, input.acme_hook_token, provider
             );
+            let _ = writeln!(out, "        proxy_pass $ap_acme_hook_url;");
             let _ = writeln!(out, "        proxy_set_header X-Acme-Hook $acme_hook_name;");
             let _ = writeln!(
                 out,
