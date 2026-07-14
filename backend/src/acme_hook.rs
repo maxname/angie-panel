@@ -226,14 +226,28 @@ async fn wait_for_txt_propagation(fqdn: &str, value: &str, base_domain: &str) ->
     opts.cache_size = 0;
     let meta = TokioAsyncResolver::tokio(ResolverConfig::cloudflare(), opts.clone());
 
-    // A resolver aimed straight at the authoritative NS; if we can't discover
-    // them, fall back to the recursive meta-resolver (better than not waiting).
-    let auth = authoritative_resolver(&meta, base_domain, &opts)
-        .await
-        .unwrap_or(meta);
+    // One resolver per authoritative NS. The CA may query ANY of the zone's
+    // nameservers, and slow providers publish inconsistently across them
+    // (reg.ru: two datacenters, ~8 NS IPs — the record showed on one server
+    // while the CA hit a lagging one and failed). So we require the value on
+    // EVERY authoritative server before telling Angie to proceed. If the NS
+    // can't be discovered, fall back to the recursive meta-resolver.
+    let ns_resolvers = authoritative_ns_resolvers(&meta, base_domain, &opts).await;
+    let resolvers: Vec<&TokioAsyncResolver> = if ns_resolvers.is_empty() {
+        vec![&meta]
+    } else {
+        ns_resolvers.iter().collect()
+    };
 
     loop {
-        if txt_contains(&auth, fqdn, value).await {
+        let mut all_live = true;
+        for r in &resolvers {
+            if !txt_contains(r, fqdn, value).await {
+                all_live = false;
+                break;
+            }
+        }
+        if all_live {
             return Propagation {
                 confirmed: true,
                 waited: start.elapsed(),
@@ -249,17 +263,20 @@ async fn wait_for_txt_propagation(fqdn: &str, value: &str, base_domain: &str) ->
     }
 }
 
-/// Build a resolver that queries the zone's authoritative nameservers directly
-/// (no recursion, caching disabled). Returns None if the NS can't be found.
-async fn authoritative_resolver(
+/// One direct resolver per authoritative nameserver IP of the zone (no
+/// recursion, caching disabled). Empty if the NS can't be discovered, so the
+/// caller can fall back. Querying each server individually — rather than one
+/// resolver over the whole set — lets us insist every server serves the value.
+async fn authoritative_ns_resolvers(
     meta: &TokioAsyncResolver,
     base_domain: &str,
     opts: &ResolverOpts,
-) -> Option<TokioAsyncResolver> {
-    let ns = meta
-        .lookup(format!("{base_domain}."), RecordType::NS)
-        .await
-        .ok()?;
+) -> Vec<TokioAsyncResolver> {
+    let mut out = Vec::new();
+    let ns = match meta.lookup(format!("{base_domain}."), RecordType::NS).await {
+        Ok(n) => n,
+        Err(_) => return out,
+    };
     let mut ips: Vec<IpAddr> = Vec::new();
     for rdata in ns.iter() {
         if let RData::NS(name) = rdata {
@@ -268,18 +285,15 @@ async fn authoritative_resolver(
             }
         }
     }
-    if ips.is_empty() {
-        return None;
-    }
-    let mut group = NameServerConfigGroup::new();
+    ips.sort();
+    ips.dedup();
     for ip in ips {
-        group.push(NameServerConfig::new(
-            SocketAddr::new(ip, 53),
-            Protocol::Udp,
-        ));
+        let mut group = NameServerConfigGroup::new();
+        group.push(NameServerConfig::new(SocketAddr::new(ip, 53), Protocol::Udp));
+        let cfg = ResolverConfig::from_parts(None, vec![], group);
+        out.push(TokioAsyncResolver::tokio(cfg, opts.clone()));
     }
-    let cfg = ResolverConfig::from_parts(None, vec![], group);
-    Some(TokioAsyncResolver::tokio(cfg, opts.clone()))
+    out
 }
 
 /// True if the fqdn's TXT RRset contains exactly `value`.
