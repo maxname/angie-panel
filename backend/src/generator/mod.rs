@@ -619,7 +619,7 @@ fn gen_acme(input: &GeneratorInput) -> String {
             // and id are validated (safe). Documented Angie pattern.
             let _ = writeln!(
                 out,
-                "        acme_hook {} uri=/acme/hook?t={}&provider={};",
+                "        acme_hook {} uri=/api/acme/hook?t={}&provider={};",
                 cert.name, input.acme_hook_token, provider
             );
             let _ = writeln!(out, "        proxy_pass http://{};", input.acme_hook_target);

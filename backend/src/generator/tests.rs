@@ -242,7 +242,9 @@ fn golden_acme_dns_provider_hook() {
     // carries no URI part, which Angie forbids inside a named location. This is
     // the documented Angie pattern and works at runtime (a `set` variable does
     // not: it isn't populated in the hook's internal request).
-    assert!(acme.contains("acme_hook web uri=/acme/hook?t=testtoken&provider=7;"));
+    // The hook URI must match the real route: the API router is nested under
+    // /api, so it is /api/acme/hook (is_acme_hook gates exactly that path).
+    assert!(acme.contains("acme_hook web uri=/api/acme/hook?t=testtoken&provider=7;"));
     assert!(acme.contains("proxy_pass http://127.0.0.1:8080;"));
     // The hook blocks until the TXT propagates; Angie must wait for it.
     assert!(acme.contains("proxy_read_timeout 185s;"));
