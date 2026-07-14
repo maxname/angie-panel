@@ -43,8 +43,13 @@ pub async fn apply_now(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiR
 #[derive(Clone, Copy)]
 pub enum ApplyTrigger {
     Manual,
-    /// Auto-apply after a certificate became ready (M3 reconciler).
-    AutoCertReady,
+    /// Auto-apply after a certificate became ready (M3 reconciler). Carries the
+    /// DB revision the reconciler validated as "already live / no pending user
+    /// edits" so `perform_apply` can re-check it under the apply lock and refuse
+    /// to auto-push a user edit that landed in the TOCTOU window.
+    AutoCertReady {
+        expected_revision: i64,
+    },
 }
 
 /// The full apply path shared by the HTTP handler and the background
@@ -64,6 +69,21 @@ pub async fn perform_apply(
     })?;
 
     let revision = repo::hosts_revision(&state.db).await?;
+
+    // TOCTOU guard: the reconciler checked "no pending user edits" WITHOUT the
+    // lock. Now that we hold it, re-verify the revision hasn't moved — otherwise
+    // a user edit slipped in between that check and here, and auto-applying it
+    // would push un-reviewed changes. The next manual apply will pick them up.
+    if let ApplyTrigger::AutoCertReady { expected_revision } = trigger {
+        if revision != expected_revision {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "revision_changed",
+                "a user edit landed after the reconciler's check; skipping auto-apply",
+            ));
+        }
+    }
+
     let fileset = settings::build_fileset(state).await?;
 
     apply::write_staging(&fileset, &state.cfg.data_dir, &state.cfg.angie)
@@ -72,12 +92,12 @@ pub async fn perform_apply(
     let started = now_epoch();
     let report = trigger_helper(state, started).await?;
 
-    let result_label = match trigger {
-        ApplyTrigger::Manual => format!("{:?}", report.result),
-        ApplyTrigger::AutoCertReady => format!("{:?} (auto: cert ready)", report.result),
-    };
+    // Store the canonical snake_case result token so the UI badge matches (it
+    // compares against "ok"/"validation_failed"/… exactly). Manual vs auto is
+    // logged by the reconciler; it must not corrupt this column's value.
+    let result_label = report.result.as_str();
     let report_json = serde_json::to_string(&report).unwrap_or_default();
-    repo::record_apply(&state.db, revision, &result_label, &report_json).await?;
+    repo::record_apply(&state.db, revision, result_label, &report_json).await?;
 
     // Remember the revision that is now live so the reconciler can tell
     // "cert became ready" (external) from "user has pending edits" (internal).
@@ -231,9 +251,37 @@ pub async fn put_settings(
         if k == settings::KEY_DEFAULT_SITE_REDIRECT && !v.is_empty() {
             validate_redirect_url(v)?;
         }
+        // The resolver override is split on space/comma and emitted verbatim into
+        // `resolver <list> valid=300s ipv6=off;` — require each token be an IP so
+        // it can't inject directives or a bogus address into the generated conf.
+        if k == settings::KEY_RESOLVER_OVERRIDE && !v.trim().is_empty() {
+            validate_resolver_override(v)?;
+        }
         repo::set_setting(&state.db, k, v).await?;
     }
     get_settings(_u, State(state)).await
+}
+
+fn validate_resolver_override(v: &str) -> ApiResult<()> {
+    let mut count = 0;
+    for tok in v.split([' ', ',']).filter(|s| !s.is_empty()) {
+        if tok.parse::<std::net::IpAddr>().is_err() {
+            return Err(ApiError::bad_request(
+                "invalid_resolver",
+                format!(
+                    "resolver override must be space/comma-separated IPs; '{tok}' is not an IP"
+                ),
+            ));
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Err(ApiError::bad_request(
+            "invalid_resolver",
+            "resolver override must list at least one IP",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_redirect_url(url: &str) -> ApiResult<()> {

@@ -67,7 +67,14 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         "reconciler: config changed with no pending user edits (a certificate \
          likely became ready) — auto-applying to activate HTTPS"
     );
-    match perform_apply(state, ApplyTrigger::AutoCertReady).await {
+    match perform_apply(
+        state,
+        ApplyTrigger::AutoCertReady {
+            expected_revision: current,
+        },
+    )
+    .await
+    {
         Ok(report) if report.result.is_ok() => {
             tracing::info!("reconciler: auto-apply succeeded ({})", report.summary);
         }

@@ -22,6 +22,12 @@ pub struct PanelConfig {
     /// Permit proxying to loopback/link-local upstreams (SSRF guard opt-out).
     #[serde(default)]
     pub allow_loopback_upstreams: bool,
+    /// Add the `Secure` attribute to the session cookie so browsers never send
+    /// it over plain HTTP. Enable whenever the panel is reachable over HTTPS
+    /// (directly or behind a TLS front). Left off by default so the documented
+    /// LAN-over-HTTP access mode keeps working; production HTTPS should set it.
+    #[serde(default)]
+    pub secure_cookies: bool,
     #[serde(default)]
     pub angie: AngieConfig,
 }

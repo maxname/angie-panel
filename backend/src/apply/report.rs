@@ -46,6 +46,19 @@ impl ApplyResult {
     pub fn is_ok(self) -> bool {
         matches!(self, ApplyResult::Ok)
     }
+
+    /// Canonical snake_case token stored in the `apply_history.result` column
+    /// (matches the values enumerated in migrations/0002_hosts.sql and the
+    /// serde representation). The UI matches these exactly.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ApplyResult::Ok => "ok",
+            ApplyResult::LintFailed => "lint_failed",
+            ApplyResult::ValidationFailed => "validation_failed",
+            ApplyResult::ReloadFailed => "reload_failed",
+            ApplyResult::Error => "error",
+        }
+    }
 }
 
 /// Maps an Angie `angie -t` error back to a staged filename where possible

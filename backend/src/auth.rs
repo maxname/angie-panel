@@ -171,14 +171,16 @@ pub async fn bootstrap_setup_token(state: &AppState) -> anyhow::Result<()> {
         tracing::info!("setup token already present, reusing it");
         return Ok(());
     }
-    let token = write_setup_token(&state.cfg.data_dir)?;
+    let _token = write_setup_token(&state.cfg.data_dir)?;
+    // Do NOT log the token itself — journald is typically readable by more
+    // principals than the 0600 token file, and this token is the sole gate on
+    // the break-glass /setup path (which wipes all users). Point at the file.
     tracing::info!(
-        "no admin account yet — setup token generated: {token}\n\
-         open http://{}:{}/setup to create the admin \
-         (token file: {})",
+        "no admin account yet — setup token written to {} (mode 0600); \
+         open http://{}:{}/setup to create the admin",
+        state.cfg.data_dir.join(TOKEN_FILE).display(),
         state.cfg.bind_addr,
         state.cfg.port,
-        state.cfg.data_dir.join(TOKEN_FILE).display()
     );
     Ok(())
 }
@@ -209,16 +211,18 @@ async fn create_session(state: &AppState, user_id: i64) -> ApiResult<Cookie<'sta
     let cookie = Cookie::build((SESSION_COOKIE, id))
         .http_only(true)
         .same_site(SameSite::Lax)
+        .secure(state.cfg.secure_cookies)
         .path("/")
         .max_age(time::Duration::seconds(SESSION_TTL))
         .build();
     Ok(cookie)
 }
 
-fn removal_cookie() -> Cookie<'static> {
+fn removal_cookie(secure: bool) -> Cookie<'static> {
     Cookie::build((SESSION_COOKIE, ""))
         .http_only(true)
         .same_site(SameSite::Lax)
+        .secure(secure)
         .path("/")
         .max_age(time::Duration::seconds(0))
         .build()
@@ -435,7 +439,10 @@ pub async fn logout(
             .execute(&state.db)
             .await;
     }
-    Ok((jar.add(removal_cookie()), Json(json!({ "ok": true }))))
+    Ok((
+        jar.add(removal_cookie(state.cfg.secure_cookies)),
+        Json(json!({ "ok": true })),
+    ))
 }
 
 pub async fn me(user: AuthUser) -> Json<Value> {

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -99,6 +99,48 @@ describe('SNI routers page', () => {
     renderPage()
 
     expect(await screen.findByText(/No SNI routers yet/i)).toBeInTheDocument()
+  })
+
+  it('preserves the disabled state when editing a router', async () => {
+    const user = userEvent.setup()
+    const disabled: SniRouter = { ...sampleRouter, enabled: false }
+    const puts: Array<{ enabled?: boolean }> = []
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (input === '/api/sni-routers' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ sni_routers: [disabled] }))
+      }
+      if (input === '/api/dashboard') {
+        return Promise.resolve(
+          jsonResponse({
+            angie: { up: false, version: null, generation: null, load_time: null, connections: null },
+            hosts: [],
+            certificates: [],
+            streams: { configured: 1, enabled: 0, context_active: true },
+            drift: { detected: false, foreign_files: [] },
+            pending_changes: false,
+            alerts: [],
+          }),
+        )
+      }
+      if (input === '/api/sni-routers/1' && method === 'PUT') {
+        puts.push(JSON.parse(init?.body as string))
+        return Promise.resolve(jsonResponse({ ...disabled }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${method} ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    // Open the row actions, then Edit.
+    await user.click(await screen.findByRole('button', { name: 'Actions' }))
+    await user.click(await screen.findByText('Edit'))
+    // Save without touching the enabled toggle.
+    await user.click(await screen.findByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(puts).toHaveLength(1))
+    // The editor form must resend enabled:false, not silently re-enable it.
+    expect(puts[0].enabled).toBe(false)
   })
 
   it('warns about the 443 conflict in the editor', async () => {

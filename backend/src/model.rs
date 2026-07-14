@@ -969,6 +969,25 @@ pub fn validate_forward_host(raw: &str, policy: &UpstreamPolicy) -> Result<Strin
             format!("'{raw}' is not a bare IP or hostname (no scheme/port/path here)"),
         ));
     }
+    // Names that resolve to loopback bypass the IP-literal SSRF guard above.
+    // Block the well-known ones (RFC 6761 reserves `localhost` and everything
+    // under it for loopback) unless loopback upstreams are explicitly allowed.
+    if !policy.allow_loopback {
+        let loopback_name = s == "localhost"
+            || s.ends_with(".localhost")
+            || s == "ip6-localhost"
+            || s == "ip6-loopback";
+        if loopback_name {
+            return Err(bad(
+                "forbidden_forward_host",
+                format!(
+                    "'{s}' resolves to loopback; it can expose the panel or the Angie \
+                     status API. Set allow_loopback_upstreams = true in \
+                     /etc/angie-panel.toml to permit it deliberately"
+                ),
+            ));
+        }
+    }
     Ok(s)
 }
 
@@ -981,6 +1000,12 @@ pub struct UpstreamPolicy {
 impl UpstreamPolicy {
     fn check_ip(&self, ip: std::net::IpAddr) -> Result<(), ApiError> {
         use std::net::IpAddr;
+        // Unwrap IPv4-mapped IPv6 (::ffff:127.0.0.1) to its v4 view first — it
+        // reaches the same host but v6.is_loopback() is false for it.
+        let ip = match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+            v4 => v4,
+        };
         let blocked = match ip {
             IpAddr::V4(v4) => {
                 v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast()
@@ -1345,6 +1370,14 @@ pub fn validate_cert_input(mut input: CertificateInput) -> Result<CertificateInp
         if e.is_empty() {
             input.email = None;
         } else if !e.contains('@') || e.len() < 3 || e.len() > 254 {
+            return Err(bad("invalid_email", "invalid contact email"));
+        } else if !e
+            .chars()
+            .all(|c| c.is_ascii_graphic() && !matches!(c, ';' | '{' | '}' | '\\' | '"' | '\''))
+        {
+            // The value is emitted verbatim into `acme_client ... email=<e>;` in
+            // 10-acme.conf. Reject whitespace/control chars and Angie config
+            // metacharacters so a contact email can't inject config directives.
             return Err(bad("invalid_email", "invalid contact email"));
         } else {
             input.email = Some(e.to_lowercase());
@@ -2227,10 +2260,47 @@ mod tests {
         assert!(validate_forward_host("127.0.0.1", &policy()).is_err());
         assert!(validate_forward_host("::1", &policy()).is_err());
         assert!(validate_forward_host("169.254.1.1", &policy()).is_err());
+        // IPv4-mapped IPv6 must not slip past the loopback/link-local guard.
+        assert!(validate_forward_host("::ffff:127.0.0.1", &policy()).is_err());
+        assert!(validate_forward_host("::ffff:169.254.1.1", &policy()).is_err());
+        // Names that resolve to loopback are blocked too.
+        assert!(validate_forward_host("localhost", &policy()).is_err());
+        assert!(validate_forward_host("ip6-localhost", &policy()).is_err());
+        assert!(validate_forward_host("anything.localhost", &policy()).is_err());
         let permissive = UpstreamPolicy {
             allow_loopback: true,
         };
         assert!(validate_forward_host("127.0.0.1", &permissive).is_ok());
+        assert!(validate_forward_host("::ffff:127.0.0.1", &permissive).is_ok());
+        assert!(validate_forward_host("localhost", &permissive).is_ok());
+    }
+
+    #[test]
+    fn cert_email_rejects_config_injection() {
+        // A benign email is accepted and lowercased.
+        let ok = validate_cert_input(cert_input_with_email("Admin@Example.COM")).unwrap();
+        assert_eq!(ok.email.as_deref(), Some("admin@example.com"));
+        // The email is emitted verbatim into `acme_client ... email=<e>;`, so
+        // Angie config metacharacters / whitespace must be rejected.
+        for evil in [
+            "a@a.a;}server{listen 8888;location /{proxy_pass http://evil;}",
+            "a@a.a foo",
+            "a@a.a;",
+            "a@a.a{",
+            "a@a.a\nserver_name x;",
+            "a@a.a\"",
+        ] {
+            assert!(
+                validate_cert_input(cert_input_with_email(evil)).is_err(),
+                "should reject email {evil:?}"
+            );
+        }
+    }
+
+    fn cert_input_with_email(email: &str) -> CertificateInput {
+        let mut c = cert_input("c1", &["example.com"], Challenge::Http);
+        c.email = Some(email.to_string());
+        c
     }
 
     fn base_stream_input() -> StreamInput {

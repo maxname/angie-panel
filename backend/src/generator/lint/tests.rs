@@ -65,6 +65,13 @@ fn denies_proxy_pass_to_management_port() {
     assert_violates("proxy_pass http://[::1]:9000;", "loopback");
     assert_violates("proxy_pass http://localhost:3000;", "loopback");
     assert_violates("proxy_pass http://169.254.1.1:80;", "link-local");
+    // IPv4-mapped IPv6 reaches the same host — must not bypass the guard.
+    assert_violates(
+        "proxy_pass http://[::ffff:127.0.0.1]:8100;",
+        "management port",
+    );
+    assert_violates("proxy_pass http://[::ffff:127.0.0.1]:3000;", "loopback");
+    assert_violates("proxy_pass http://[::ffff:169.254.1.1]:80;", "link-local");
     // unix sockets.
     assert_violates("proxy_pass http://unix:/var/run/x.sock;", "unix socket");
     assert_violates("proxy_pass unix:/var/run/docker.sock:;", "unix socket");

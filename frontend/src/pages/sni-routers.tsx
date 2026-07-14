@@ -505,6 +505,10 @@ function RouterEditorForm({
       routes,
       default_host: form.default_host.trim(),
       default_port: Number.parseInt(form.default_port, 10) || 0,
+      // Preserve the current enabled state on edit — the backend replaces the
+      // row wholesale and defaults a missing `enabled` to true, which would
+      // silently re-enable a disabled router (matches hosts/streams editors).
+      enabled: router === null ? true : router.enabled,
     }
     mutation.mutate(input)
   }

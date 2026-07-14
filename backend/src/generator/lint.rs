@@ -462,6 +462,12 @@ fn is_management_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_link_local() || v4.is_unspecified(),
         IpAddr::V6(v6) => {
+            // An IPv4-mapped address (::ffff:127.0.0.1) reaches the same host as
+            // the bare IPv4 would, but is_loopback()/is_link_local() are false
+            // for it — unwrap to the v4 view so the guard can't be bypassed.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_management_ip(IpAddr::V4(v4));
+            }
             v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
         }
     }

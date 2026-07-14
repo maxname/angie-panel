@@ -58,7 +58,10 @@ fn to_values<T: Serialize>(items: &[T]) -> Vec<Value> {
 /// GET /api/export → the full config as a JSON document (downloaded by the UI).
 /// NOTE: contains secrets (advanced snippets, access-list password hashes) —
 /// treated as sensitive in the docs.
-pub async fn export(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+pub async fn export(u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    // The export carries secrets (advanced snippets, access-list password
+    // hashes). GET is not covered by the method-based role gate, so guard here.
+    u.require_admin()?;
     let hosts = repo::list_hosts(&state.db).await?;
     let certs = repo::list_certs(&state.db).await?;
     let redirects = repo::list_redirects(&state.db).await?;

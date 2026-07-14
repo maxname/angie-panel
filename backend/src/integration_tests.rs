@@ -1549,6 +1549,22 @@ async fn roles_gate_mutations_and_protect_last_admin() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 
+    // Viewer cannot export: it carries secrets (access-list password hashes) and
+    // GET is not covered by the method-based gate, so the handler guards it.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/export", None, Some(&viewer)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // Admin still can.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/export", None, Some(&admin)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
     // Viewer CAN change their own password (self-service allowlist).
     let res = app
         .clone()
@@ -1699,4 +1715,31 @@ async fn audit_log_records_mutations_and_is_admin_only() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn hosts_revision_tracks_sni_router_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    // Fresh DB: no host-like rows, so the revision is 0.
+    assert_eq!(crate::repo::hosts_revision(&state.db).await.unwrap(), 0);
+    // An SNI router is a user-editable entity; its edits must move the revision
+    // so the reconciler doesn't treat them as "no pending user changes" and
+    // silently auto-apply them (audit finding).
+    let input = crate::model::SniRouterInput {
+        name: "r1".into(),
+        incoming_port: 443,
+        routes: vec![crate::model::SniRoute {
+            sni: "app.example.com".into(),
+            forward_host: "10.0.0.2".into(),
+            forward_port: 443,
+        }],
+        default_host: String::new(),
+        default_port: 0,
+        enabled: true,
+    };
+    crate::repo::insert_sni_router(&state.db, &input)
+        .await
+        .unwrap();
+    assert!(crate::repo::hosts_revision(&state.db).await.unwrap() > 0);
 }

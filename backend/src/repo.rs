@@ -356,6 +356,7 @@ pub async fn hosts_revision(db: &SqlitePool) -> anyhow::Result<i64> {
          UNION ALL SELECT MAX(updated_at) FROM redirect_hosts \
          UNION ALL SELECT MAX(updated_at) FROM dead_hosts \
          UNION ALL SELECT MAX(updated_at) FROM streams \
+         UNION ALL SELECT MAX(updated_at) FROM sni_routers \
          UNION ALL SELECT MAX(created_at) FROM bans)",
     )
     .fetch_one(db)
