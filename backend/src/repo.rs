@@ -1725,8 +1725,21 @@ pub async fn record_apply(
     .bind(report_json)
     .execute(db)
     .await?;
+    // Prune to the newest rows — each report embeds the full diff, so on a
+    // long-lived device (the reconciler applies whenever a cert becomes ready)
+    // this table would otherwise grow unbounded (audit finding). Mirrors the
+    // audit_log cap.
+    sqlx::query(
+        "DELETE FROM apply_history WHERE id NOT IN \
+         (SELECT id FROM apply_history ORDER BY id DESC LIMIT ?)",
+    )
+    .bind(APPLY_HISTORY_KEEP)
+    .execute(db)
+    .await?;
     Ok(())
 }
+
+const APPLY_HISTORY_KEEP: i64 = 500;
 
 pub struct ApplyHistoryEntry {
     pub id: i64,

@@ -115,16 +115,21 @@ pub fn stage(files: &FileSet, data_dir: &Path, angie: &AngieConfig) -> anyhow::R
     })
 }
 
-/// Write `files` into `dir` atomically, clearing stale *.conf from a previous
-/// staging run first (this is our own scratch dir, not /etc). Appends written
-/// names to `written`.
+/// Write `files` into `dir` atomically, clearing EVERY stale file from a
+/// previous staging run first so the staged set is exactly `files` (this is our
+/// own scratch dir, not /etc). Appends written names to `written`.
+///
+/// Clearing only `*.conf` used to leave stale `access-<id>.htpasswd` behind;
+/// `load_staged_fileset` then re-picked them up and the live sync wrote them
+/// back into /etc forever, so removing basic-auth never removed the password
+/// file (audit finding). Wiping the whole scratch dir fixes it: the orphaned
+/// htpasswd is absent from the staged set and the live sync deletes it.
 fn stage_dir(dir: &Path, files: &FileSet, written: &mut Vec<String>) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("creating staging dir {}", dir.display()))?;
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".conf") || name.starts_with(atomic::TMP_PREFIX) {
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             let _ = std::fs::remove_file(entry.path());
         }
     }

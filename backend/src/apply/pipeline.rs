@@ -164,8 +164,16 @@ pub async fn run_apply(ctx: &ApplyCtx<'_>) -> anyhow::Result<ApplyReport> {
         }
     }
 
-    set_in_progress(data_dir, false)?;
+    // Write the report FIRST: the apply itself already happened (success or
+    // rollback), and the panel polls for this file. If clearing the in-progress
+    // marker failed via `?` before the report was written, the panel would time
+    // out waiting for a report that describes work that actually ran. Clearing
+    // the marker is best-effort — a stale marker is self-correcting on the next
+    // apply and must not swallow the report.
     write_report(data_dir, &report)?;
+    if let Err(e) = set_in_progress(data_dir, false) {
+        tracing::warn!(error = %e, "failed to clear the apply in-progress marker");
+    }
     Ok(report)
 }
 
@@ -353,8 +361,27 @@ fn sync_into_live(staged: &FileSet, http_d: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(http_d)
         .with_context(|| format!("ensuring http.d {}", http_d.display()))?;
 
+    let live = scan_dir(http_d)?;
+
+    // Honour the "foreign files are never touched" invariant BEFORE mutating
+    // anything: if a staged name collides with an operator-created foreign file
+    // (no MANAGED-BY header), refuse rather than silently overwrite it. Bailing
+    // here — before any delete/write — leaves the live dir untouched, so the
+    // pipeline reports the error and rolls nothing back.
+    for f in &live {
+        if !f.managed && staged.contains_key(&f.name) {
+            anyhow::bail!(
+                "refusing to overwrite foreign file {name} in {dir} (it has no \
+                 MANAGED-BY header, so the panel did not create it); rename or \
+                 remove it to let the panel manage {name}",
+                name = f.name,
+                dir = http_d.display(),
+            );
+        }
+    }
+
     // Delete managed files that are no longer wanted (preserve foreign files).
-    for f in scan_dir(http_d)? {
+    for f in &live {
         if f.managed && !staged.contains_key(&f.name) {
             atomic::remove_in_dir(http_d, &f.name)
                 .with_context(|| format!("removing stale {}", f.name))?;
@@ -961,6 +988,76 @@ mod tests {
             foreign_body("operator's own")
         );
         assert!(fx.cfg.angie.http_d_dir.join("10-a.conf").exists());
+    }
+
+    #[tokio::test]
+    async fn foreign_name_collision_aborts_apply() {
+        let fx = fixture();
+        // The operator hand-created a file with the SAME name the generator
+        // emits. The apply must refuse rather than clobber it.
+        std::fs::write(
+            fx.cfg.angie.http_d_dir.join("20-a.conf"),
+            foreign_body("operator's own 20-a"),
+        )
+        .unwrap();
+        stage_files(&fx, &[("20-a.conf", "generated")]);
+
+        let runner = FakeRunner::new().with_tests(&[(true, "")]);
+        let lint = noop_lint();
+        let report = run_apply(&ctx(&fx, &runner, &lint)).await.unwrap();
+
+        assert_eq!(
+            report.result,
+            ApplyResult::Error,
+            "summary={}",
+            report.summary
+        );
+        assert!(
+            report.summary.contains("foreign"),
+            "summary={}",
+            report.summary
+        );
+        // The operator's file is untouched.
+        assert_eq!(
+            std::fs::read_to_string(fx.cfg.angie.http_d_dir.join("20-a.conf")).unwrap(),
+            foreign_body("operator's own 20-a")
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_htpasswd_removed_when_basic_auth_dropped() {
+        let fx = fixture();
+        let live = fx.cfg.angie.http_d_dir.clone();
+        let lint = noop_lint();
+
+        // First apply: a host plus its basic-auth password file.
+        stage_files(&fx, &[("20-a.conf", "a"), ("access-5.htpasswd", "u:hash")]);
+        let r1 = run_apply(&ctx(
+            &fx,
+            &FakeRunner::new().with_tests(&[(true, "")]),
+            &lint,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(r1.result, ApplyResult::Ok, "summary={}", r1.summary);
+        assert!(live.join("access-5.htpasswd").exists());
+
+        // Second apply after basic-auth was removed: the fileset no longer emits
+        // the htpasswd. It must not linger in staging and get re-synced — the
+        // orphaned password file has to disappear from /etc.
+        stage_files(&fx, &[("20-a.conf", "a")]);
+        let r2 = run_apply(&ctx(
+            &fx,
+            &FakeRunner::new().with_tests(&[(true, "")]),
+            &lint,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(r2.result, ApplyResult::Ok, "summary={}", r2.summary);
+        assert!(
+            !live.join("access-5.htpasswd").exists(),
+            "stale htpasswd must be removed from the live dir"
+        );
     }
 
     #[tokio::test]
