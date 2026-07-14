@@ -626,10 +626,11 @@ fn gen_acme(input: &GeneratorInput) -> String {
             // The hook blocks on the `add` step until the challenge TXT is live
             // on the authoritative nameservers (Angie has no propagation wait of
             // its own and validates right after the hook returns). Give it well
-            // over the hook's internal ~240s poll budget so Angie doesn't cut the
-            // request short.
-            let _ = writeln!(out, "        proxy_read_timeout 260s;");
-            let _ = writeln!(out, "        proxy_send_timeout 260s;");
+            // over the hook's internal ~540s poll budget so Angie doesn't cut the
+            // request short (slow providers like reg.ru need minutes to converge
+            // across their whole nameserver fleet).
+            let _ = writeln!(out, "        proxy_read_timeout 560s;");
+            let _ = writeln!(out, "        proxy_send_timeout 560s;");
             let _ = writeln!(out, "        proxy_set_header X-Acme-Hook $acme_hook_name;");
             let _ = writeln!(
                 out,

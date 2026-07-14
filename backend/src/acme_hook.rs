@@ -209,13 +209,14 @@ struct Propagation {
 /// negative-caching: a recursive resolver can pin "no record" for the zone's
 /// negative-TTL long after the record is live.
 async fn wait_for_txt_propagation(fqdn: &str, value: &str, base_domain: &str) -> Propagation {
-    // Budget generous enough for slow providers: reg.ru was measured at ~128s
-    // for one record and >170s for a second one issued right after (apex +
-    // wildcard both challenge _acme-challenge.<domain>, back to back — the churn
-    // slows the authoritative NS). Kept below the hook location's
-    // proxy_read_timeout (set by the generator) so Angie waits for us.
-    const TIMEOUT: Duration = Duration::from_secs(240);
-    const INTERVAL: Duration = Duration::from_secs(5);
+    // Budget generous enough for slow providers. reg.ru is a known-bad case: a
+    // freshly-added TXT reaches its ~8 authoritative servers very unevenly
+    // (~75s on the fastest, >240s across the whole fleet), and the CA fails if it
+    // hits a lagging one — so we wait for full-fleet convergence. Kept below the
+    // hook location's proxy_read_timeout (set by the generator) so Angie waits
+    // for us. `waited_secs` in the success log is the real convergence time.
+    const TIMEOUT: Duration = Duration::from_secs(540);
+    const INTERVAL: Duration = Duration::from_secs(10);
     let start = Instant::now();
 
     // v4-only public meta-resolver to discover the zone's authoritative NS and
@@ -289,7 +290,10 @@ async fn authoritative_ns_resolvers(
     ips.dedup();
     for ip in ips {
         let mut group = NameServerConfigGroup::new();
-        group.push(NameServerConfig::new(SocketAddr::new(ip, 53), Protocol::Udp));
+        group.push(NameServerConfig::new(
+            SocketAddr::new(ip, 53),
+            Protocol::Udp,
+        ));
         let cfg = ResolverConfig::from_parts(None, vec![], group);
         out.push(TokioAsyncResolver::tokio(cfg, opts.clone()));
     }

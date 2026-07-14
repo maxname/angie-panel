@@ -247,7 +247,7 @@ fn golden_acme_dns_provider_hook() {
     assert!(acme.contains("acme_hook web uri=/api/acme/hook?t=testtoken&provider=7;"));
     assert!(acme.contains("proxy_pass http://127.0.0.1:8080;"));
     // The hook blocks until the TXT propagates; Angie must wait for it.
-    assert!(acme.contains("proxy_read_timeout 260s;"));
+    assert!(acme.contains("proxy_read_timeout 560s;"));
     assert!(acme.contains("proxy_set_header X-Acme-Keyauth $acme_hook_keyauth;"));
     assert_golden("10-acme-hook.conf", acme);
     // The hook's proxy_pass targets the panel's own /acme/hook endpoint; the
