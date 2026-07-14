@@ -61,6 +61,7 @@ interface LocationDraft {
   forward_host: string
   forward_port: string
   rewrite: string
+  snippet: string
 }
 
 interface ServerDraft {
@@ -210,6 +211,7 @@ function initialState(host: Host | null): FormState {
       forward_host: location.forward_host,
       forward_port: String(location.forward_port),
       rewrite: location.rewrite ?? '',
+      snippet: location.snippet ?? '',
     })),
     advanced_snippet: host.advanced_snippet ?? '',
     rate_limit_enabled: rl.enabled,
@@ -435,6 +437,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       forward_host: location.forward_host.trim(),
       forward_port: Number.parseInt(location.forward_port, 10) || 0,
       rewrite: location.rewrite.trim() === '' ? null : location.rewrite.trim(),
+      snippet: location.snippet.trim() === '' ? null : location.snippet,
     }))
 
     const input: HostInput = {
@@ -1063,6 +1066,24 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
                   }
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor={`loc-snippet-${index}`}>
+                  {t('hosts.editor.locations.snippet')}
+                </Label>
+                <Textarea
+                  id={`loc-snippet-${index}`}
+                  className="min-h-20 font-mono text-xs"
+                  value={location.snippet}
+                  spellCheck={false}
+                  onChange={(event) =>
+                    patch({
+                      locations: form.locations.map((item, i) =>
+                        i === index ? { ...item, snippet: event.target.value } : item,
+                      ),
+                    })
+                  }
+                />
+              </div>
             </div>
           ))}
           <Button
@@ -1078,6 +1099,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
                     forward_host: '',
                     forward_port: '80',
                     rewrite: '',
+                    snippet: '',
                   },
                 ],
               })

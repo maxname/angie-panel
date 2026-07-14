@@ -17,6 +17,11 @@ export const ru: typeof en = {
     error: 'Что-то пошло не так',
     save: 'Сохранить',
     cancel: 'Отмена',
+    close: 'Закрыть',
+  },
+  toaster: {
+    region: 'Уведомления',
+    dismiss: 'Закрыть',
   },
   nav: {
     dashboard: 'Обзор',
@@ -357,6 +362,7 @@ export const ru: typeof en = {
         remove: 'Удалить локацию',
         path: 'Путь',
         rewrite: 'Rewrite (необязательно)',
+        snippet: 'Сниппет (необязательно, продвинутое)',
         add: 'Добавить локацию',
       },
       upstreams: {
@@ -872,6 +878,10 @@ export const ru: typeof en = {
     actionFailed: 'Не удалось выполнить действие',
     you: '(вы)',
     delete: 'Удалить',
+    deleteConfirm: {
+      title: 'Удалить пользователя?',
+      body: 'Аккаунт «{{email}}» будет удалён безвозвратно. Это действие нельзя отменить.',
+    },
     makeAdmin: 'Сделать администратором',
     makeViewer: 'Сделать наблюдателем',
     table: { email: 'Эл. почта', role: 'Роль', actions: 'Действия' },

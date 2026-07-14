@@ -1,4 +1,5 @@
 import { X } from "lucide-react"
+import { useTranslation } from "react-i18next"
 
 import { cn } from "@/lib/utils"
 import { dismissToast, useToasts, type ToastVariant } from "@/lib/toast"
@@ -13,6 +14,7 @@ const variantClasses: Record<ToastVariant, string> = {
 
 export function Toaster() {
   const toasts = useToasts()
+  const { t } = useTranslation()
 
   if (toasts.length === 0) {
     return null
@@ -22,7 +24,7 @@ export function Toaster() {
     <div
       className="pointer-events-none fixed inset-x-0 bottom-0 z-[100] flex flex-col items-center gap-2 p-4 sm:right-0 sm:left-auto sm:items-end"
       role="region"
-      aria-label="Notifications"
+      aria-label={t("toaster.region")}
     >
       {toasts.map((toast) => (
         <div
@@ -43,7 +45,7 @@ export function Toaster() {
             type="button"
             onClick={() => dismissToast(toast.id)}
             className="-mr-1 shrink-0 rounded-md opacity-70 transition-opacity hover:opacity-100"
-            aria-label="Dismiss"
+            aria-label={t("toaster.dismiss")}
           >
             <X className="size-4" aria-hidden="true" />
           </button>

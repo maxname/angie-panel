@@ -15,6 +15,11 @@ export const en = {
     error: 'Something went wrong',
     save: 'Save',
     cancel: 'Cancel',
+    close: 'Close',
+  },
+  toaster: {
+    region: 'Notifications',
+    dismiss: 'Dismiss',
   },
   nav: {
     dashboard: 'Dashboard',
@@ -357,6 +362,7 @@ export const en = {
         remove: 'Remove location',
         path: 'Path',
         rewrite: 'Rewrite (optional)',
+        snippet: 'Snippet (optional, advanced)',
         add: 'Add location',
       },
       upstreams: {
@@ -870,6 +876,10 @@ export const en = {
     actionFailed: 'Action failed',
     you: '(you)',
     delete: 'Delete',
+    deleteConfirm: {
+      title: 'Delete user?',
+      body: 'This permanently deletes the account “{{email}}”. This cannot be undone.',
+    },
     makeAdmin: 'Make admin',
     makeViewer: 'Make viewer',
     table: { email: 'Email', role: 'Role', actions: 'Actions' },

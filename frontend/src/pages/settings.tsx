@@ -118,14 +118,26 @@ function BackupRestore() {
   const importMutation = useMutation({
     mutationFn: (doc: unknown) => api.importConfig(doc),
     onSuccess: (result: ImportResult) => {
-      setPendingImport(null)
+      // Keep the dialog open so the success alert + "go to Apply" link render
+      // (closing here made that block unreachable — the import creates pending
+      // changes the user must apply).
+      // Import replaces the ENTIRE config, so invalidate every dependent query
+      // — including bans/settings/geo/sni-routers, which the import also touches
+      // and which are edited from this very page.
       for (const key of [
         'hosts',
         'redirect-hosts',
         'dead-hosts',
         'streams',
+        'sni-routers',
         'certificates',
         'access-lists',
+        'bans',
+        'settings',
+        'geo',
+        'dns-providers',
+        'dns-credentials',
+        'apply',
         'dashboard',
       ]) {
         void queryClient.invalidateQueries({ queryKey: [key] })
@@ -215,7 +227,12 @@ function BackupRestore() {
       <Dialog
         open={pendingImport !== null}
         onOpenChange={(open) => {
-          if (!open) setPendingImport(null)
+          if (!open) {
+            setPendingImport(null)
+            // Reset so a later import doesn't reopen showing the previous
+            // success state.
+            importMutation.reset()
+          }
         }}
       >
         <DialogContent>
@@ -240,26 +257,41 @@ function BackupRestore() {
             </Alert>
           ) : null}
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setPendingImport(null)}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={importMutation.isPending}
-              onClick={() => {
-                if (pendingImport !== null) importMutation.mutate(pendingImport)
-              }}
-            >
-              {importMutation.isPending && (
-                <Loader2 className="animate-spin" aria-hidden="true" />
-              )}
-              {t('settings.backup.confirmImport')}
-            </Button>
+            {importMutation.isSuccess ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setPendingImport(null)
+                  importMutation.reset()
+                }}
+              >
+                {t('common.close')}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setPendingImport(null)}
+                >
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={importMutation.isPending}
+                  onClick={() => {
+                    if (pendingImport !== null) importMutation.mutate(pendingImport)
+                  }}
+                >
+                  {importMutation.isPending && (
+                    <Loader2 className="animate-spin" aria-hidden="true" />
+                  )}
+                  {t('settings.backup.confirmImport')}
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

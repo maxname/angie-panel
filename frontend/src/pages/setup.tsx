@@ -52,7 +52,9 @@ export function SetupPage() {
       return null
     }
     const error = mutation.error
-    if (error instanceof ApiError && error.status === 401) {
+    // The backend returns 403 for an invalid/expired token or a disabled setup
+    // path (never 401), so match 403 to show the localized hint.
+    if (error instanceof ApiError && error.status === 403) {
       return t('setup.invalidToken')
     }
     if (error instanceof ApiError) {

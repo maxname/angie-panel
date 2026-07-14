@@ -115,6 +115,7 @@ function UserRow({ user, selfEmail }: { user: User; selfEmail?: string }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const isSelf = user.email === selfEmail
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['users'] })
   const onError = (error: unknown) =>
@@ -131,7 +132,10 @@ function UserRow({ user, selfEmail }: { user: User; selfEmail?: string }) {
   })
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteUser(user.id),
-    onSuccess: () => void invalidate(),
+    onSuccess: () => {
+      void invalidate()
+      setConfirmDelete(false)
+    },
     onError,
   })
 
@@ -181,12 +185,42 @@ function UserRow({ user, selfEmail }: { user: User; selfEmail?: string }) {
             <DropdownMenuItem
               variant="destructive"
               disabled={isSelf || deleteMutation.isPending}
-              onSelect={() => deleteMutation.mutate()}
+              onSelect={() => setConfirmDelete(true)}
             >
               {t('users.delete')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{t('users.deleteConfirm.title')}</DialogTitle>
+              <DialogDescription>
+                {t('users.deleteConfirm.body', { email: user.email })}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleteMutation.isPending}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteMutation.isPending}
+              >
+                {deleteMutation.isPending && (
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                )}
+                {t('users.delete')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </TableCell>
     </TableRow>
   )
@@ -225,8 +259,20 @@ function CreateUserDialog({
     mutation.mutate()
   }
 
+  // Reset the form whenever the dialog closes, so reopening never shows a stale
+  // email/password or a previous error (and no password lingers in the field).
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      setEmail('')
+      setPassword('')
+      setRole('viewer')
+      setError(null)
+    }
+    onOpenChange(next)
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>{t('users.create.title')}</DialogTitle>
@@ -273,7 +319,7 @@ function CreateUserDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
               disabled={mutation.isPending}
             >
               {t('common.cancel')}
