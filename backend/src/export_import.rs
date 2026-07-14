@@ -148,6 +148,10 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     crate::settings::KEY_IPV6_ENABLED,
     crate::settings::KEY_RESOLVER_OVERRIDE,
     crate::settings::KEY_ACME_EMAIL,
+    // The geo policy is exported (it is not secret), so it must import back or
+    // a backup with country blocking configured can't be restored.
+    crate::settings::KEY_GEO_MODE,
+    crate::settings::KEY_GEO_COUNTRIES,
 ];
 
 /// One access list as it appears in an import document — like `AccessListInput`
@@ -474,6 +478,42 @@ pub async fn import(
             ));
         }
         settings.insert(k.clone(), val.clone());
+    }
+    // Validate the geo policy as a unit (mode + countries) and store its
+    // normalized form, mirroring the /geo endpoint — an import must not smuggle
+    // an unknown mode or a bad country list past validation.
+    if settings.contains_key(crate::settings::KEY_GEO_MODE)
+        || settings.contains_key(crate::settings::KEY_GEO_COUNTRIES)
+    {
+        let mode = match settings
+            .get(crate::settings::KEY_GEO_MODE)
+            .map(String::as_str)
+        {
+            None | Some("off") => model::GeoMode::Off,
+            Some("deny") => model::GeoMode::Deny,
+            Some("allow") => model::GeoMode::Allow,
+            Some(other) => {
+                return Err(ApiError::bad_request(
+                    "invalid_setting",
+                    format!("invalid geo_mode in import: {other}"),
+                ))
+            }
+        };
+        let countries = match settings.get(crate::settings::KEY_GEO_COUNTRIES) {
+            Some(s) => serde_json::from_str::<Vec<String>>(s).map_err(|_| {
+                ApiError::bad_request("invalid_setting", "geo_countries must be a JSON array")
+            })?,
+            None => Vec::new(),
+        };
+        let policy = model::validate_geo_policy(model::GeoPolicy { mode, countries })?;
+        settings.insert(
+            crate::settings::KEY_GEO_MODE.to_string(),
+            policy.mode.as_str().to_string(),
+        );
+        settings.insert(
+            crate::settings::KEY_GEO_COUNTRIES.to_string(),
+            serde_json::to_string(&policy.countries).unwrap_or_else(|_| "[]".into()),
+        );
     }
 
     repo::import_replace(

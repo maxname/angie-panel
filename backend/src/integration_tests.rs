@@ -321,6 +321,21 @@ async fn export_import_roundtrip_and_rejects_injection() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
+    // Configure a geo policy so the export must carry it and the import must
+    // accept it back (regression: geo_mode/geo_countries were exported but not
+    // in the import allowlist, so restoring any geo-configured backup 400'd).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/geo",
+            Some(json!({"mode":"deny","countries":["ru","cn"]})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
     // Export the full config.
     let res = app
         .clone()
@@ -382,6 +397,16 @@ async fn export_import_roundtrip_and_rejects_injection() {
         json!(5432)
     );
 
+    // The geo policy round-tripped (normalized to upper-case ISO codes).
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/geo", None, Some(&cookie)))
+        .await
+        .unwrap();
+    let geo = body_json(res).await;
+    assert_eq!(geo["mode"], json!("deny"));
+    assert_eq!(geo["countries"], json!(["RU", "CN"]));
+
     // An import with an injected forward_host is rejected — validation runs on
     // untrusted import exactly like the API.
     let malicious = json!({
@@ -438,6 +463,42 @@ async fn export_import_roundtrip_and_rejects_injection() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn host_create_rejects_dangling_cert_and_acl_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // A non-existent certificate_id is rejected (would emit a dangling
+    // $acme_cert_* reference in the generated config).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({"domains":["a.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.2","forward_port":80,"certificate_id":999})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // A non-existent access_list_id is rejected too (a bad ref would silently
+    // drop the intended IP/basic-auth restriction — fail-open).
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({"domains":["b.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.3","forward_port":80,"access_list_id":999})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

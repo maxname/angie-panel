@@ -14,6 +14,18 @@ use crate::model::{self, DeadHostInput, RedirectHostInput};
 use crate::repo::{self, HostKind};
 use crate::state::AppState;
 
+/// Reject a reference to a certificate that doesn't exist — otherwise the
+/// generator emits a dangling `$acme_cert_<name>` reference (matches the checks
+/// in streams/proxy hosts).
+async fn check_cert(state: &AppState, certificate_id: Option<i64>) -> ApiResult<()> {
+    if let Some(cid) = certificate_id {
+        if repo::get_cert(&state.db, cid).await?.is_none() {
+            return Err(ApiError::not_found(format!("no certificate #{cid}")));
+        }
+    }
+    Ok(())
+}
+
 /// Reject any domain already owned by another enabled host of any type.
 async fn check_domains_unique(
     state: &AppState,
@@ -77,6 +89,7 @@ pub async fn create_redirect(
         (HostKind::Redirect, 0),
     )
     .await?;
+    check_cert(&state, input.certificate_id).await?;
     let id = repo::insert_redirect(&state.db, &input).await?;
     let h = repo::get_redirect(&state.db, id)
         .await?
@@ -98,6 +111,7 @@ pub async fn update_redirect(
         (HostKind::Redirect, id),
     )
     .await?;
+    check_cert(&state, input.certificate_id).await?;
     if !repo::update_redirect(&state.db, id, &input).await? {
         return Err(ApiError::not_found(format!("no redirect host #{id}")));
     }
@@ -178,6 +192,7 @@ pub async fn create_dead(
 ) -> ApiResult<Json<Value>> {
     let input = model::validate_dead_input(raw, state.cfg.allow_advanced_snippets)?;
     check_domains_unique(&state, &input.domains, input.enabled, (HostKind::Dead, 0)).await?;
+    check_cert(&state, input.certificate_id).await?;
     let id = repo::insert_dead(&state.db, &input).await?;
     let h = repo::get_dead(&state.db, id).await?.expect("just inserted");
     Ok(Json(serde_json::to_value(&h).unwrap_or(Value::Null)))
@@ -191,6 +206,7 @@ pub async fn update_dead(
 ) -> ApiResult<Json<Value>> {
     let input = model::validate_dead_input(raw, state.cfg.allow_advanced_snippets)?;
     check_domains_unique(&state, &input.domains, input.enabled, (HostKind::Dead, id)).await?;
+    check_cert(&state, input.certificate_id).await?;
     if !repo::update_dead(&state.db, id, &input).await? {
         return Err(ApiError::not_found(format!("no 404 host #{id}")));
     }

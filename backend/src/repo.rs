@@ -1208,6 +1208,15 @@ pub async fn import_replace(
             .await?;
     }
 
+    // Imported credential profiles keep their ids but arrive WITHOUT secrets
+    // (creds are never exported). Purge stale `dns_cred:*` values so a restored
+    // profile can't silently inherit the previous install's credentials for the
+    // same id. `delete_dns_credential` does this per-profile; the bulk import
+    // must too.
+    sqlx::query("DELETE FROM settings WHERE key LIKE 'dns_cred:%'")
+        .execute(&mut *tx)
+        .await?;
+
     for (id, c) in certs {
         sqlx::query(
             "INSERT INTO certificates (id, name, domains, challenge, key_type, email, staging, \

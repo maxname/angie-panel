@@ -46,6 +46,25 @@ async fn check_domain_uniqueness(
     Ok(())
 }
 
+/// Reject a create/update that references a certificate or access list which
+/// doesn't exist. Without this the generator would emit a dangling
+/// `$acme_cert_<name>` reference, or (for a bad access_list_id) the host would
+/// silently lose its intended IP/basic-auth restriction — a fail-open. Streams
+/// already do the cert check; hosts must too.
+async fn check_refs(state: &AppState, input: &ProxyHostInput) -> ApiResult<()> {
+    if let Some(cid) = input.certificate_id {
+        if repo::get_cert(&state.db, cid).await?.is_none() {
+            return Err(ApiError::not_found(format!("no certificate #{cid}")));
+        }
+    }
+    if let Some(aid) = input.access_list_id {
+        if repo::get_access_list(&state.db, aid).await?.is_none() {
+            return Err(ApiError::not_found(format!("no access list #{aid}")));
+        }
+    }
+    Ok(())
+}
+
 fn host_json(h: &ProxyHost) -> Value {
     serde_json::to_value(h).unwrap_or(Value::Null)
 }
@@ -78,6 +97,7 @@ pub async fn create(
         &upstream_policy(&state),
     )?;
     check_domain_uniqueness(&state, &input, None).await?;
+    check_refs(&state, &input).await?;
     let id = repo::insert_host(&state.db, &input).await?;
     let host = repo::get_host(&state.db, id).await?.expect("just inserted");
     Ok(Json(host_json(&host)))
@@ -95,6 +115,7 @@ pub async fn update(
         &upstream_policy(&state),
     )?;
     check_domain_uniqueness(&state, &input, Some(id)).await?;
+    check_refs(&state, &input).await?;
     if !repo::update_host(&state.db, id, &input).await? {
         return Err(ApiError::not_found(format!("no host #{id}")));
     }
