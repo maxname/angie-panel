@@ -398,11 +398,15 @@ fn gen_panel(input: &GeneratorInput) -> String {
     // resolver: required by upstreams that use hostnames and by the ACME
     // module. Skipping it when empty is intentional (an empty `resolver;` is a
     // config error) — but we log so the operator can spot a missing resolv.conf.
+    // `ipv6=off`: many self-hosted boxes have no working IPv6, and without this
+    // Angie resolves AAAA and burns connect attempts on unreachable v6 addresses
+    // (seen live: ACME upstream + hostname proxy_pass failing "Network is
+    // unreachable" on v6). v4-only resolution is the safe default here.
     if input.settings.resolvers.is_empty() {
         tracing::warn!("no resolvers configured; omitting the `resolver` directive");
     } else {
         let list = input.settings.resolvers.join(" ");
-        let _ = writeln!(out, "resolver {list} valid=300s;");
+        let _ = writeln!(out, "resolver {list} valid=300s ipv6=off;");
         out.push('\n');
     }
 
@@ -619,6 +623,13 @@ fn gen_acme(input: &GeneratorInput) -> String {
                 cert.name, input.acme_hook_token, provider
             );
             let _ = writeln!(out, "        proxy_pass http://{};", input.acme_hook_target);
+            // The hook blocks on the `add` step until the challenge TXT is live
+            // on the authoritative nameservers (Angie has no propagation wait of
+            // its own and validates right after the hook returns). Give it well
+            // over the hook's internal ~170s poll budget so Angie doesn't cut the
+            // request short.
+            let _ = writeln!(out, "        proxy_read_timeout 185s;");
+            let _ = writeln!(out, "        proxy_send_timeout 185s;");
             let _ = writeln!(out, "        proxy_set_header X-Acme-Hook $acme_hook_name;");
             let _ = writeln!(
                 out,

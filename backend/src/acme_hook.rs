@@ -17,12 +17,20 @@
 //! endpoints. Credentials live only in the hook child's environment.
 
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
+use hickory_resolver::config::{
+    LookupIpStrategy, NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig,
+    ResolverOpts,
+};
+use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::TokioAsyncResolver;
 use serde_json::{json, Value};
 
 use crate::auth::AuthUser;
@@ -142,12 +150,147 @@ pub async fn hook(
         }
     };
 
-    match run_dnsapi(&state, ptype, fn_action, domain, keyauth, &creds).await {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, profile_id, domain, "ACME dnsapi hook failed");
-            (StatusCode::BAD_GATEWAY, "hook failed").into_response()
+    if let Err(e) = run_dnsapi(&state, ptype, fn_action, domain, keyauth, &creds).await {
+        tracing::error!(error = %e, profile_id, domain, action, "ACME dnsapi hook failed");
+        return (StatusCode::BAD_GATEWAY, "hook failed").into_response();
+    }
+
+    // For an `add`, block until the TXT is actually live on the zone's
+    // authoritative nameservers before returning. Angie validates the DNS-01
+    // challenge immediately after the hook returns and has no propagation wait
+    // of its own; every renewal retry uses a fresh keyauth, so a slow DNS
+    // provider (e.g. reg.ru, minutes to publish) would otherwise never issue.
+    // `rm` needs no wait. The hook's proxy_read_timeout (set by the generator)
+    // is sized above PROPAGATION_TIMEOUT so Angie waits for us.
+    if fn_action == "add" {
+        let fqdn = challenge_fqdn(domain);
+        let base = domain.strip_prefix("*.").unwrap_or(domain);
+        let p = wait_for_txt_propagation(&fqdn, keyauth, base).await;
+        if p.confirmed {
+            tracing::info!(
+                domain,
+                profile_id,
+                waited_secs = p.waited.as_secs(),
+                "ACME hook: TXT published + visible on authoritative NS"
+            );
+        } else {
+            tracing::warn!(
+                domain,
+                profile_id,
+                waited_secs = p.waited.as_secs(),
+                "ACME hook: TXT set but not visible on authoritative NS before timeout — \
+                 the CA check may fail; DNS provider may be slow to propagate"
+            );
         }
+    } else {
+        tracing::info!(domain, profile_id, "ACME hook: TXT removed");
+    }
+    StatusCode::OK.into_response()
+}
+
+/// The `_acme-challenge` FQDN for a (possibly wildcard) domain.
+fn challenge_fqdn(domain: &str) -> String {
+    format!(
+        "_acme-challenge.{}",
+        domain.strip_prefix("*.").unwrap_or(domain)
+    )
+}
+
+/// How long the challenge TXT took to become visible on the authoritative
+/// nameservers (or that it did not, before the timeout).
+struct Propagation {
+    confirmed: bool,
+    waited: Duration,
+}
+
+/// Block until `value` is served for `fqdn`'s TXT by the zone's authoritative
+/// nameservers — the source of truth the CA will query — or a timeout. Polling
+/// the authoritative servers directly (not a recursive resolver) avoids
+/// negative-caching: a recursive resolver can pin "no record" for the zone's
+/// negative-TTL long after the record is live.
+async fn wait_for_txt_propagation(fqdn: &str, value: &str, base_domain: &str) -> Propagation {
+    const TIMEOUT: Duration = Duration::from_secs(170);
+    const INTERVAL: Duration = Duration::from_secs(4);
+    let start = Instant::now();
+
+    // v4-only public meta-resolver to discover the zone's authoritative NS and
+    // their addresses. Many self-hosted boxes have no working IPv6, and trying
+    // AAAA there just wastes time.
+    let mut opts = ResolverOpts::default();
+    opts.ip_strategy = LookupIpStrategy::Ipv4Only;
+    opts.cache_size = 0;
+    let meta = TokioAsyncResolver::tokio(ResolverConfig::cloudflare(), opts.clone());
+
+    // A resolver aimed straight at the authoritative NS; if we can't discover
+    // them, fall back to the recursive meta-resolver (better than not waiting).
+    let auth = authoritative_resolver(&meta, base_domain, &opts)
+        .await
+        .unwrap_or(meta);
+
+    loop {
+        if txt_contains(&auth, fqdn, value).await {
+            return Propagation {
+                confirmed: true,
+                waited: start.elapsed(),
+            };
+        }
+        if start.elapsed() >= TIMEOUT {
+            return Propagation {
+                confirmed: false,
+                waited: start.elapsed(),
+            };
+        }
+        tokio::time::sleep(INTERVAL).await;
+    }
+}
+
+/// Build a resolver that queries the zone's authoritative nameservers directly
+/// (no recursion, caching disabled). Returns None if the NS can't be found.
+async fn authoritative_resolver(
+    meta: &TokioAsyncResolver,
+    base_domain: &str,
+    opts: &ResolverOpts,
+) -> Option<TokioAsyncResolver> {
+    let ns = meta
+        .lookup(format!("{base_domain}."), RecordType::NS)
+        .await
+        .ok()?;
+    let mut ips: Vec<IpAddr> = Vec::new();
+    for rdata in ns.iter() {
+        if let RData::NS(name) = rdata {
+            if let Ok(addrs) = meta.lookup_ip(name.0.to_utf8()).await {
+                ips.extend(addrs.iter());
+            }
+        }
+    }
+    if ips.is_empty() {
+        return None;
+    }
+    let mut group = NameServerConfigGroup::new();
+    for ip in ips {
+        group.push(NameServerConfig::new(
+            SocketAddr::new(ip, 53),
+            Protocol::Udp,
+        ));
+    }
+    let cfg = ResolverConfig::from_parts(None, vec![], group);
+    Some(TokioAsyncResolver::tokio(cfg, opts.clone()))
+}
+
+/// True if the fqdn's TXT RRset contains exactly `value`.
+async fn txt_contains(resolver: &TokioAsyncResolver, fqdn: &str, value: &str) -> bool {
+    let name = format!("{fqdn}.");
+    match resolver.lookup(name, RecordType::TXT).await {
+        Ok(lookup) => lookup.iter().any(|rdata| {
+            if let RData::TXT(txt) = rdata {
+                // A TXT record is one or more character-strings; concatenate.
+                let joined: Vec<u8> = txt.iter().flatten().copied().collect();
+                joined == value.as_bytes()
+            } else {
+                false
+            }
+        }),
+        Err(_) => false,
     }
 }
 
@@ -172,10 +315,7 @@ async fn run_dnsapi(
     let home = state.cfg.data_dir.join("acme-home");
     tokio::fs::create_dir_all(&home).await.ok();
 
-    let fqdn = format!(
-        "_acme-challenge.{}",
-        domain.strip_prefix("*.").unwrap_or(domain)
-    );
+    let fqdn = challenge_fqdn(domain);
 
     // Script uses positional args ($1 plugin, $2 action) so nothing is
     // interpolated. acme.sh core (sourced) provides _get/_post/… the plugins
