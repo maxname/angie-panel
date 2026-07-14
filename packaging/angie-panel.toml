@@ -42,6 +42,12 @@ allow_advanced_snippets = false
 # knowingly proxy to a service on this same machine.
 allow_loopback_upstreams = false
 
+# Add the `Secure` attribute to the session cookie so browsers never send it
+# over plain HTTP. Leave off for the default LAN-over-HTTP access; set to true
+# whenever the panel is reachable over HTTPS (published through Angie, or any
+# TLS front) so the admin session token can't leak over a downgraded request.
+# secure_cookies = true
+
 [angie]
 # Path to the Angie binary (used for `angie -t` and version/module checks).
 bin = "/usr/sbin/angie"

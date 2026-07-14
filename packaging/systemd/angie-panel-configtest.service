@@ -6,16 +6,16 @@
 # StartUnit; the polkit rule 10-angie-panel.rules authorizes exactly this
 # unit name with verb "start" and nothing else.
 #
-# ExecStart is intentionally FIXED. The helper takes NO arguments: it reads
-# only the staging directory under /var/lib/angie-panel and validates it
-# with `angie -t` against a staging copy of angie.conf. NEVER add arguments,
-# templating ("@" instances), EnvironmentFile, or anything else the panel
-# process could influence — any panel-controlled input to this command line
-# would become arbitrary code execution as root.
+# ExecStart is intentionally FIXED. The helper takes NO arguments: it runs
+# `angie -t` against the LIVE /etc/angie configuration and writes the result
+# for the panel to read. NEVER add arguments, templating ("@" instances),
+# EnvironmentFile, or anything else the panel process could influence — any
+# panel-controlled input to this command line would become arbitrary code
+# execution as root.
 # ============================================================================
 #
-# configtest = validation only: lint allowlist + `angie -t` on staging.
-# It must not modify /etc/angie or reload Angie (that is apply's job).
+# configtest = validation only: `angie -t` on the live config (no lint, no
+# staging — that is apply's job). It must not modify /etc/angie or reload Angie.
 
 [Unit]
 Description=Angie Panel root helper — validate staged Angie configuration

@@ -15,10 +15,13 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# TODO: replace OWNER, REPO and VERSION with the real GitHub release
-# coordinates before publishing this script. {ARCH} is substituted at
-# runtime with arm64 or amd64.
-PANEL_DEB_URL_TEMPLATE="https://github.com/maxname/angie-panel/releases/download/vTODO-VERSION/angie-panel_TODO-VERSION_{ARCH}.deb"
+# The release version is substituted into this line by the release workflow
+# (packaging/install.sh is copied into each release with __PANEL_VERSION__
+# replaced by the tag). A checked-out copy keeps the sentinel, so the download
+# path below refuses to run and asks for a local .deb instead. {ARCH} is
+# substituted at runtime with arm64 or amd64.
+PANEL_VERSION="__PANEL_VERSION__"
+PANEL_DEB_URL_TEMPLATE="https://github.com/maxname/angie-panel/releases/download/v${PANEL_VERSION}/angie-panel_${PANEL_VERSION}_{ARCH}.deb"
 # ---------------------------------------------------------------------------
 
 PANEL_CONF=/etc/angie-panel.toml
@@ -133,7 +136,15 @@ apt-get update
 apt-get install -y ca-certificates curl
 
 info "Скачиваем ключ подписи репозитория Angie..."
-curl -o /etc/apt/trusted.gpg.d/angie-signing.gpg https://angie.software/keys/angie-signing.gpg
+# -fsSL so an HTTP error/redirect fails loudly instead of writing an error page
+# into the keyring. Scoped to /etc/apt/keyrings + signed-by (below) so the key
+# is trusted only for the Angie repo, not every apt source on the system.
+install -d -m 0755 /etc/apt/keyrings
+if ! curl -fsSL https://angie.software/keys/angie-signing.gpg \
+        -o /etc/apt/keyrings/angie-signing.gpg; then
+    die "Не удалось скачать ключ подписи Angie (https://angie.software/keys/angie-signing.gpg).
+Проверьте доступ в интернет с этого устройства."
+fi
 
 REPO_BASE="https://download.angie.software/angie/${OS_ID}/${VERSION_ID}"
 info "Проверяем доступность репозитория Angie: ${REPO_BASE}"
@@ -143,7 +154,8 @@ if ! curl -fsI "${REPO_BASE}/dists/${CODENAME}/Release" >/dev/null; then
 сверьте адреса репозиториев с документацией: https://angie.software/"
 fi
 
-echo "deb ${REPO_BASE} ${CODENAME} main" > /etc/apt/sources.list.d/angie.list
+echo "deb [signed-by=/etc/apt/keyrings/angie-signing.gpg] ${REPO_BASE} ${CODENAME} main" \
+    > /etc/apt/sources.list.d/angie.list
 
 info "Устанавливаем Angie..."
 apt-get update
@@ -159,6 +171,12 @@ if [ -n "$DEB_PATH" ]; then
     fi
     DEB_PATH=$(realpath "$DEB_PATH")
 else
+    if [ "$PANEL_VERSION" = "__PANEL_VERSION__" ]; then
+        die "Эта копия install.sh не привязана к релизу (версия не подставлена).
+Запустите install.sh из релиза (releases/latest/download/install.sh) или
+передайте путь к локальному .deb:
+  sudo ./install.sh ./angie-panel_<версия>_${ARCH}.deb"
+    fi
     PANEL_DEB_URL="${PANEL_DEB_URL_TEMPLATE//\{ARCH\}/$ARCH}"
     TMP_DIR=$(mktemp -d)
     # Let apt's sandbox user (_apt) read the downloaded file.

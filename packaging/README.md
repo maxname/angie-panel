@@ -9,9 +9,10 @@ reverse proxy, deployed as a native systemd service on Debian 12/13
 | File | Installed to | Purpose |
 |---|---|---|
 | `systemd/angie-panel.service` | `/usr/lib/systemd/system/` | The panel itself. Runs as the unprivileged `angie-panel` user with full sandboxing. |
-| `systemd/angie-panel-configtest.service` | `/usr/lib/systemd/system/` | Root oneshot helper: validates the staged config (`angie -t`), touches nothing. |
+| `systemd/angie-panel-configtest.service` | `/usr/lib/systemd/system/` | Root oneshot helper: validates the live Angie config (`angie -t`), touches nothing. |
 | `systemd/angie-panel-apply.service` | `/usr/lib/systemd/system/` | Root oneshot helper: full apply pipeline (lint, validate, snapshot, atomic sync, reload, rollback on failure). |
-| `polkit/10-angie-panel.rules` | `/usr/share/polkit-1/rules.d/` | Authorizes the `angie-panel` user to start exactly the two helper units — nothing else. |
+| `systemd/angie-panel-enable-streams.service` | `/usr/lib/systemd/system/` | Root oneshot helper: activates the `stream {}` context in angie.conf (needed before TCP/UDP streams apply). |
+| `polkit/10-angie-panel.rules` | `/usr/share/polkit-1/rules.d/` | Authorizes the `angie-panel` user to start exactly the three helper units — nothing else. |
 | `angie-panel.toml` | `/etc/angie-panel.toml` (dpkg conffile) | Default panel configuration. Root-owned; privilege-relevant switches live here, not in the panel DB. |
 | `debian/postinst`, `debian/prerm`, `debian/postrm` | maintainer scripts | For `cargo-deb` (with the `systemd-units` feature, which fills in the `#DEBHELPER#` token). Create/remove the service account and `/var/lib/angie-panel`. |
 | `install.sh` | run by the user | End-user installer: preflight checks, Angie apt repo, both packages, safe bind-address selection, setup token output. Messages are in Russian (target audience). |
@@ -110,8 +111,12 @@ On systems where polkit is unavailable, the same "only these two fixed
 commands" property can be approximated with sudo:
 
 ```
-angie-panel ALL=(root) NOPASSWD: /usr/bin/systemctl start angie-panel-configtest.service, /usr/bin/systemctl start angie-panel-apply.service
+angie-panel ALL=(root) NOPASSWD: /usr/bin/systemctl start angie-panel-configtest.service, /usr/bin/systemctl start angie-panel-apply.service, /usr/bin/systemctl start angie-panel-enable-streams.service
 ```
+
+(the polkit rule authorizes three units — configtest, apply and
+enable-streams — so the sudo fallback must cover all three, or the "Enable
+streams" action breaks.)
 
 (put it in `/etc/sudoers.d/angie-panel`, mode `0440`, validate with
 `visudo -c`).
@@ -122,9 +127,10 @@ sandbox options in the unit (`SystemCallFilter=`, `SystemCallArchitectures=`,
 `RestrictAddressFamilies=`, `RestrictNamespaces=`, `PrivateDevices=`,
 `MemoryDenyWriteExecute=`, `RestrictRealtime=`, `RestrictSUIDSGID=`,
 `LockPersonality=`, `ProtectKernelModules=`, `ProtectKernelLogs=`,
-`ProtectClock=`, `ProtectHostname=`) *implicitly enable* NoNewPrivileges for
-non-root services — they must be reset in the override too (see
-`systemd.exec(5)`). Example drop-in
+`ProtectKernelTunables=`, `ProtectControlGroups=`, `ProtectClock=`,
+`ProtectHostname=`) *implicitly enable* NoNewPrivileges for non-root
+services — they must be reset in the override too (see `systemd.exec(5)`).
+Example drop-in
 (`/etc/systemd/system/angie-panel.service.d/sudo-fallback.conf`):
 
 ```ini
@@ -141,6 +147,8 @@ RestrictSUIDSGID=no
 LockPersonality=no
 ProtectKernelModules=no
 ProtectKernelLogs=no
+ProtectKernelTunables=no
+ProtectControlGroups=no
 ProtectClock=no
 ProtectHostname=no
 ```

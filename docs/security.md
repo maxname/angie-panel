@@ -49,6 +49,10 @@ allow_advanced_snippets = true` (веб-сессия не может его пе
   constant-time сравнение).
 - **CSRF** — обязательный заголовок `X-AP-Request` + проверка `Origin`; cookie HttpOnly +
   SameSite=Lax; **CORS не выдаётся вовсе** (урок CVE-2025-50579).
+- **Session cookie `Secure`** — по умолчанию выключен, чтобы работал доступ по LAN-HTTP.
+  Если панель доступна по HTTPS (опубликована через Angie или за TLS-фронтом), поставьте
+  `secure_cookies = true` в `/etc/angie-panel.toml`, чтобы токен сессии не уходил по
+  открытому HTTP (downgrade/mixed-content).
 - **DNS-rebinding** — allowlist `Host`-заголовка.
 - **SSRF** — `forward_host` на loopback/link-local запрещён без явного opt-in (иначе можно
   опубликовать неаутентифицированный `/status` API).

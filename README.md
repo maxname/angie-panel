@@ -16,7 +16,7 @@
 - **Встроенный ACME вместо certbot** — Angie сам выпускает и продлевает сертификаты (http-01, tls-alpn-01, dns-01/wildcard); никаких certbot/pip/cron.
 - **Честный apply-пайплайн** — diff перед применением, валидация staging-конфига через `angie -t`, атомарная запись и автоматический откат по снапшоту при любой ошибке.
 - **Панель без root** — конфиги генерирует непривилегированный пользователь; в `/etc` пишет только маленький аудируемый root-хелпер (oneshot systemd-юнит, доступ строго через polkit).
-- **arm64 SBC — first-class target** — разрабатывается под NanoPi R4S (Armbian, Debian 12/13); один статический musl-бинарник, ~10–20 МБ RAM.
+- **arm64 SBC — first-class target** — разрабатывается под NanoPi R-серию (R4S/R6S, Armbian/Debian 12/13; на живом железе проверяется на R6S); один статический musl-бинарник, ~10–20 МБ RAM.
 
 ## Архитектура (кратко)
 
@@ -69,7 +69,7 @@ sudo bash install.sh
 | **M3** | Дашборд: /status-поллинг, метрики по хостам, статусы сертификатов, детект дрейфа, авто-включение HTTPS после выпуска | ✅ |
 | **M4** | Экспорт/импорт конфигурации (JSON), документация RU/EN, GPG-подпись артефактов | ✅ |
 
-Осталось: e2e-прогон на реальном NanoPi R4S (systemd-reload и выпуск на живом железе).
+Осталось: e2e-прогон на реальном NanoPi R6S (systemd-reload и выпуск на живом железе).
 Полная дорожная карта — в [PLAN.md](PLAN.md), §10.
 
 ## Лицензия
@@ -95,7 +95,7 @@ Key differentiators:
 - **Built-in ACME instead of certbot** — Angie itself issues and renews certificates (http-01, tls-alpn-01, dns-01/wildcard).
 - **Honest apply pipeline** — diff preview, staged `angie -t` validation, atomic sync, automatic snapshot rollback on any failure.
 - **The panel never runs as root** — config generation is unprivileged; only a small auditable root helper (oneshot systemd unit behind polkit) writes to `/etc`.
-- **arm64 SBCs are a first-class target** — developed for the NanoPi R4S (Armbian, Debian 12/13); a single static musl binary.
+- **arm64 SBCs are a first-class target** — developed for the NanoPi R-series (R4S/R6S, Armbian/Debian 12/13; on-device validation on the R6S); a single static musl binary.
 
 Architecture in short: a Rust (axum) backend with an embedded React UI stores everything in SQLite; Angie config files are a deterministic projection of the database, applied through the root helper (lint → staged `angie -t` → snapshot → atomic sync into `/etc/angie/http.d/` → graceful reload, rollback on failure). Details: [PLAN.md](PLAN.md) (Russian) and [docs/research/](docs/research/).
 
@@ -116,11 +116,9 @@ password — read the one-time setup token (`sudo cat /var/lib/angie-panel/setup
 create the admin at `/setup`.
 
 Roadmap: **M0** skeleton & privilege model → **M1** proxy hosts & apply pipeline → **M2**
-certificates via built-in ACME → **M3** live dashboard & auto-HTTPS → **M4** export/import,
-docs, signed artifacts — all ✅. On-device e2e on the NanoPi R4S is what remains.
-See [PLAN.md](PLAN.md) §10.
-
-Roadmap: **M0** skeleton & privilege model → **M1** proxy hosts & apply pipeline → **M2** certificates via built-in ACME → **M3** live dashboard & drift detection → **M4** v1.0 release (export/import, docs, signed artifacts). See [PLAN.md](PLAN.md) §10.
+certificates via built-in ACME → **M3** live dashboard, drift detection & auto-HTTPS → **M4**
+v1.0 release (export/import, docs, signed artifacts) — all ✅. On-device e2e on the NanoPi
+R6S is what remains. See [PLAN.md](PLAN.md) §10.
 
 License: [MIT](LICENSE). The vendored `acme.sh` (bundled in the `.deb` for DNS-01 via
 provider APIs) keeps its own GPLv3 license as separate scripts invoked as a subprocess.

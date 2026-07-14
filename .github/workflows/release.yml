@@ -137,6 +137,14 @@ jobs:
       - name: Add install.sh and generate checksums
         run: |
           cp packaging/install.sh dist/
+          # Pin the installer to this release's version so the documented
+          # `releases/latest/download/install.sh` flow downloads the matching
+          # .deb (GITHUB_REF_NAME is the tag, e.g. v0.1.0).
+          sed -i "s/__PANEL_VERSION__/${GITHUB_REF_NAME#v}/g" dist/install.sh
+          if grep -q __PANEL_VERSION__ dist/install.sh; then
+            echo "install.sh version substitution failed" >&2
+            exit 1
+          fi
           cd dist
           sha256sum -- *.deb install.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
