@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, MoreHorizontal, Plus } from 'lucide-react'
+import { Loader2, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -30,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api, ApiError, type Host } from '@/lib/api'
+import { api, ApiError, type Cert, type Host } from '@/lib/api'
 import { toast } from '@/lib/toast'
 
 export function HostsPage() {
@@ -43,6 +43,14 @@ export function HostsPage() {
     queryKey: ['hosts'],
     queryFn: () => api.listHosts(),
   })
+  // Needed to resolve each host's certificate_id to the cert it serves.
+  const certsQuery = useQuery({
+    queryKey: ['certificates'],
+    queryFn: () => api.listCertificates(),
+  })
+  const certsById = new Map(
+    (certsQuery.data?.certificates ?? []).map((cert) => [cert.id, cert]),
+  )
 
   const openCreate = () => {
     setEditing(null)
@@ -106,6 +114,11 @@ export function HostsPage() {
                   <HostRow
                     key={host.id}
                     host={host}
+                    cert={
+                      host.certificate_id != null
+                        ? certsById.get(host.certificate_id)
+                        : undefined
+                    }
                     onEdit={() => openEdit(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
@@ -131,11 +144,12 @@ export function HostsPage() {
 
 interface HostRowProps {
   host: Host
+  cert: Cert | undefined
   onEdit: () => void
   onDelete: () => void
 }
 
-function HostRow({ host, onEdit, onDelete }: HostRowProps) {
+function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -175,7 +189,28 @@ function HostRow({ host, onEdit, onDelete }: HostRowProps) {
         <span className="font-mono text-xs">{target}</span>
       </TableCell>
       <TableCell>
-        <span className="text-muted-foreground">—</span>
+        {cert ? (
+          <span
+            className="inline-flex items-center gap-1.5 text-sm"
+            title={cert.domains.join(', ')}
+          >
+            <ShieldCheck
+              className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+              aria-hidden="true"
+            />
+            <span className="truncate">
+              {cert.domains[0]}
+              {cert.domains.length > 1 && (
+                <span className="text-muted-foreground">
+                  {' '}
+                  +{cert.domains.length - 1}
+                </span>
+              )}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
       </TableCell>
       <TableCell>
         {host.enabled ? (
