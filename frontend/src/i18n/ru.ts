@@ -184,6 +184,7 @@ export const ru: typeof en = {
     unappliedBody: 'Перейдите в «Применение», чтобы записать и перезагрузить конфигурацию.',
     actionFailed: 'Не удалось выполнить действие',
     table: {
+      route: 'Домен ── upstream',
       domains: 'Домены',
       target: 'Назначение',
       certificate: 'Сертификат',

@@ -184,6 +184,7 @@ export const en = {
     unappliedBody: 'Go to Apply to write and reload the configuration.',
     actionFailed: 'Action failed',
     table: {
+      route: 'Domain ── upstream',
       domains: 'Domains',
       target: 'Forward target',
       certificate: 'Certificate',

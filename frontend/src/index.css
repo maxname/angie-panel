@@ -1,13 +1,25 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+/* Routing Console identity: Space Grotesk (display) + IBM Plex Sans (UI) +
+   IBM Plex Mono (data). Bundled — no CDN, so LAN-offline installs still work. */
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource-variable/ibm-plex-sans";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
+    --font-sans: 'IBM Plex Sans Variable', system-ui, sans-serif;
+    --font-heading: 'Space Grotesk Variable', var(--font-sans);
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+    /* Equipment-LED status palette (patch-bay rows, badges, dashboard). */
+    --color-status-live: var(--status-live);
+    --color-status-pending: var(--status-pending);
+    --color-status-down: var(--status-down);
+    --color-wire: var(--wire);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,75 +60,88 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ============================================================================
+   Routing Console — copper on slate. Cool slate ink is the rack/enclosure;
+   copper is the single brand accent (wires, primary actions, the material of
+   the SBC's traces). Equipment-LED colors carry status and nothing else.
+   ========================================================================== */
 :root {
     color-scheme: light;
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --background: #F4F6F8;
+    --foreground: #16202B;
+    --card: #FFFFFF;
+    --card-foreground: #16202B;
+    --popover: #FFFFFF;
+    --popover-foreground: #16202B;
+    --primary: #A85F28;
+    --primary-foreground: #FFFFFF;
+    --secondary: #EAEDF1;
+    --secondary-foreground: #26313D;
+    --muted: #EDEFF3;
+    --muted-foreground: #566473;
+    --accent: #EAEDF1;
+    --accent-foreground: #26313D;
+    --destructive: #C4413A;
+    --border: #E0E4E9;
+    --input: #D3D9DF;
+    --ring: #A85F28;
+    --chart-1: #B4682E;
+    --chart-2: #2C8C86;
+    --chart-3: #2FA757;
+    --chart-4: #C08A16;
+    --chart-5: #5B6B7C;
+    --status-live: #2E9E52;
+    --status-pending: #A9760C;
+    --status-down: #C4413A;
+    --wire: #C88A54;
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --sidebar: #EEF1F4;
+    --sidebar-foreground: #16202B;
+    --sidebar-primary: #A85F28;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #E3E7EC;
+    --sidebar-accent-foreground: #26313D;
+    --sidebar-border: #DDE1E6;
+    --sidebar-ring: #A85F28;
 }
 
 .dark {
     color-scheme: dark;
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --background: #0E141E;
+    --foreground: #E7ECF3;
+    --card: #141C28;
+    --card-foreground: #E7ECF3;
+    --popover: #171F2B;
+    --popover-foreground: #E7ECF3;
+    --primary: #D98A4E;
+    --primary-foreground: #201509;
+    --secondary: #1E2937;
+    --secondary-foreground: #E7ECF3;
+    --muted: #1A2431;
+    --muted-foreground: #8B98AA;
+    --accent: #1E2937;
+    --accent-foreground: #E7ECF3;
+    --destructive: #E15A50;
+    --border: #26333F;
+    --input: #2B3846;
+    --ring: #D98A4E;
+    --chart-1: #D98A4E;
+    --chart-2: #57C4B4;
+    --chart-3: #49C46B;
+    --chart-4: #E4B443;
+    --chart-5: #7C8BA0;
+    --status-live: #49C46B;
+    --status-pending: #E4B443;
+    --status-down: #E15A50;
+    --wire: #C67F45;
+    --sidebar: #111823;
+    --sidebar-foreground: #E7ECF3;
+    --sidebar-primary: #D98A4E;
+    --sidebar-primary-foreground: #201509;
+    --sidebar-accent: #1E2937;
+    --sidebar-accent-foreground: #E7ECF3;
+    --sidebar-border: #26333F;
+    --sidebar-ring: #D98A4E;
 }
 
 @layer base {
@@ -134,6 +159,17 @@
 /* Respect the user's reduced-motion preference: neutralize transitions and
    animations (spinners, dialog/toast motion, hover transitions) for people with
    vestibular sensitivity. */
+/* Patch-bay route cable: renders a proxy/redirect/stream row as a physical
+   connection — domain(s) ──● upstream. The jack (LED) carries live/off state;
+   an adjacent text label carries it accessibly. */
+.route-wire{flex:1 1 24px; min-width:18px; height:2px; border-radius:2px;
+  background:linear-gradient(90deg, color-mix(in oklab, var(--wire), transparent 60%), var(--wire));}
+.route-wire.is-off{background:var(--border)}
+.route-jack{width:10px; height:10px; border-radius:50%; flex:none}
+.route-jack.is-live{background:var(--status-live); box-shadow:0 0 9px -1px var(--status-live)}
+.route-jack.is-pending{background:var(--status-pending); box-shadow:0 0 9px -1px var(--status-pending)}
+.route-jack.is-off{background:var(--muted-foreground)}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
