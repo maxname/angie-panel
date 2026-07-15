@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { HostEditorDialog } from '@/components/hosts/host-editor-dialog'
-import { RouteCable } from '@/components/routing/route-cable'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -101,7 +100,8 @@ export function HostsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('hosts.table.route')}</TableHead>
+                  <TableHead>{t('hosts.table.domains')}</TableHead>
+                  <TableHead>{t('hosts.table.target')}</TableHead>
                   <TableHead>{t('hosts.table.certificate')}</TableHead>
                   <TableHead>{t('hosts.table.status')}</TableHead>
                   <TableHead className="w-0 text-right">
@@ -177,15 +177,16 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <RouteCable
-          state={host.enabled ? 'live' : 'off'}
-          left={host.domains.map((domain) => (
+        <div className="flex flex-wrap gap-1">
+          {host.domains.map((domain) => (
             <Badge key={domain} variant="secondary" className="font-mono font-normal">
               {domain}
             </Badge>
           ))}
-          right={target}
-        />
+        </div>
+      </TableCell>
+      <TableCell>
+        <span className="font-mono text-xs">{target}</span>
       </TableCell>
       <TableCell>
         {cert ? (

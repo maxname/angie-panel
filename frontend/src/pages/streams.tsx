@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next'
 
 import { ToggleRow } from '@/components/hosts/host-editor-fields'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { RouteCable } from '@/components/routing/route-cable'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -130,7 +129,8 @@ export function StreamsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('streams.table.route')}</TableHead>
+                  <TableHead>{t('streams.table.incomingPort')}</TableHead>
+                  <TableHead>{t('streams.table.forward')}</TableHead>
                   <TableHead>{t('streams.table.protocol')}</TableHead>
                   <TableHead>{t('streams.table.status')}</TableHead>
                   <TableHead className="w-0 text-right">
@@ -255,15 +255,12 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <RouteCable
-          state={stream.enabled ? 'live' : 'off'}
-          left={
-            <Badge variant="secondary" className="font-mono font-normal">
-              {stream.incoming_port}
-            </Badge>
-          }
-          right={`${stream.forward_host}:${stream.forward_port}`}
-        />
+        <span className="font-mono text-sm">{stream.incoming_port}</span>
+      </TableCell>
+      <TableCell>
+        <span className="font-mono text-xs">
+          {stream.forward_host}:{stream.forward_port}
+        </span>
       </TableCell>
       <TableCell>
         <div className="flex flex-wrap items-center gap-1">

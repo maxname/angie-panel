@@ -11,7 +11,6 @@ import {
   type SslToggles,
 } from '@/components/hosts/host-editor-fields'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { RouteCable } from '@/components/routing/route-cable'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -103,7 +102,8 @@ export function DeadHostsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('deadHosts.table.route')}</TableHead>
+                  <TableHead>{t('deadHosts.table.domains')}</TableHead>
+                  <TableHead>{t('deadHosts.table.behaviour')}</TableHead>
                   <TableHead>{t('deadHosts.table.ssl')}</TableHead>
                   <TableHead>{t('deadHosts.table.status')}</TableHead>
                   <TableHead className="w-0 text-right">
@@ -171,15 +171,16 @@ function DeadHostRow({ host, onEdit, onDelete }: DeadHostRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <RouteCable
-          state={host.enabled ? 'live' : 'off'}
-          left={host.domains.map((domain) => (
+        <div className="flex flex-wrap gap-1">
+          {host.domains.map((domain) => (
             <Badge key={domain} variant="secondary" className="font-mono font-normal">
               {domain}
             </Badge>
           ))}
-          right={t('deadHosts.table.returns404')}
-        />
+        </div>
+      </TableCell>
+      <TableCell>
+        <span className="text-muted-foreground">{t('deadHosts.table.returns404')}</span>
       </TableCell>
       <TableCell>
         <SslBadge hasCertificate={host.certificate_id !== null} />

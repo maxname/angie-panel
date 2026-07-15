@@ -184,7 +184,6 @@ export const en = {
     unappliedBody: 'Go to Apply to write and reload the configuration.',
     actionFailed: 'Action failed',
     table: {
-      route: 'Domain ── upstream',
       domains: 'Domains',
       target: 'Forward target',
       certificate: 'Certificate',
@@ -737,7 +736,6 @@ export const en = {
     unappliedBody: 'Go to Apply to write and reload the configuration.',
     actionFailed: 'Action failed',
     table: {
-      route: 'Domain ── redirect',
       domains: 'Domains',
       target: 'Redirects to',
       ssl: 'SSL',
@@ -796,7 +794,6 @@ export const en = {
     unappliedBody: 'Go to Apply to write and reload the configuration.',
     actionFailed: 'Action failed',
     table: {
-      route: 'Domain ── 404',
       domains: 'Domains',
       behaviour: 'Behaviour',
       returns404: 'Returns 404',
@@ -912,7 +909,6 @@ export const en = {
     protocol: { tcp: 'TCP', udp: 'UDP', both: 'TCP + UDP' },
     tlsBadge: 'TLS',
     table: {
-      route: 'Port ── upstream',
       incomingPort: 'Incoming port',
       forward: 'Forwards to',
       protocol: 'Protocol',

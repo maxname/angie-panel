@@ -14,11 +14,6 @@
     --font-sans: 'IBM Plex Sans Variable', system-ui, sans-serif;
     --font-heading: 'Space Grotesk Variable', var(--font-sans);
     --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
-    /* Equipment-LED status palette (patch-bay rows, badges, dashboard). */
-    --color-status-live: var(--status-live);
-    --color-status-pending: var(--status-pending);
-    --color-status-down: var(--status-down);
-    --color-wire: var(--wire);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -60,9 +55,8 @@
 }
 
 /* ============================================================================
-   Routing Console — copper on slate. Cool slate ink is the rack/enclosure;
-   copper is the single brand accent (wires, primary actions, the material of
-   the SBC's traces). Equipment-LED colors carry status and nothing else.
+   Copper on slate. Cool slate ink is the enclosure; copper is the single brand
+   accent (primary actions, active nav) — the material of the SBC's traces.
    ========================================================================== */
 :root {
     color-scheme: light;
@@ -89,10 +83,6 @@
     --chart-3: #2FA757;
     --chart-4: #C08A16;
     --chart-5: #5B6B7C;
-    --status-live: #2E9E52;
-    --status-pending: #A9760C;
-    --status-down: #C4413A;
-    --wire: #C88A54;
     --radius: 0.625rem;
     --sidebar: #EEF1F4;
     --sidebar-foreground: #16202B;
@@ -129,10 +119,6 @@
     --chart-3: #49C46B;
     --chart-4: #E4B443;
     --chart-5: #7C8BA0;
-    --status-live: #49C46B;
-    --status-pending: #E4B443;
-    --status-down: #E15A50;
-    --wire: #C67F45;
     --sidebar: #111823;
     --sidebar-foreground: #E7ECF3;
     --sidebar-primary: #D98A4E;
@@ -158,17 +144,6 @@
 /* Respect the user's reduced-motion preference: neutralize transitions and
    animations (spinners, dialog/toast motion, hover transitions) for people with
    vestibular sensitivity. */
-/* Patch-bay route cable: renders a proxy/redirect/stream row as a physical
-   connection — domain(s) ──● upstream. The jack (LED) carries live/off state;
-   an adjacent text label carries it accessibly. */
-.route-wire{flex:1 1 24px; min-width:18px; height:2px; border-radius:2px;
-  background:linear-gradient(90deg, color-mix(in oklab, var(--wire), transparent 60%), var(--wire));}
-.route-wire.is-off{background:var(--border)}
-.route-jack{width:10px; height:10px; border-radius:50%; flex:none}
-.route-jack.is-live{background:var(--status-live); box-shadow:0 0 9px -1px var(--status-live)}
-.route-jack.is-pending{background:var(--status-pending); box-shadow:0 0 9px -1px var(--status-pending)}
-.route-jack.is-off{background:var(--muted-foreground)}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
