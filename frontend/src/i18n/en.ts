@@ -39,11 +39,8 @@ export const en = {
       security: 'Security',
       admin: 'Administration',
     },
-    openMenu: 'Open menu',
-    closeMenu: 'Close menu',
     skipToContent: 'Skip to content',
-    collapseSidebar: 'Collapse sidebar',
-    expandSidebar: 'Expand sidebar',
+    toggleSidebar: 'Toggle sidebar',
     pendingChanges: 'Unapplied changes: {{count}}',
   },
   audit: {

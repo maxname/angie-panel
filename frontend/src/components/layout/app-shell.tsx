@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, Outlet, useRouter } from '@tanstack/react-router'
+import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router'
 import {
   Cloud,
   CornerUpRight,
@@ -9,25 +9,21 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
-  Menu,
   MoreVertical,
-  PanelLeftClose,
-  ScrollText,
-  ShieldBan,
   Moon,
   Network,
   Rocket,
+  ScrollText,
   Settings,
+  ShieldBan,
   ShieldCheck,
   Split,
   Sun,
   Users,
   Waypoints,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,11 +31,27 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/toaster'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
-import { cn } from '@/lib/utils'
 import { useTheme } from '@/theme/theme-context'
 
 // The sidebar is grouped into labelled sections. The first section has no
@@ -84,8 +96,6 @@ const NAV_SECTIONS = [
   },
 ] as const
 
-const COLLAPSE_KEY = 'sidebar-collapsed'
-
 /** Number of staged-but-unapplied config changes (added + modified + removed
  *  managed files), polled from the apply preview. Drives the "unapplied
  *  changes" badge so a created host/cert isn't silently left un-applied.
@@ -110,67 +120,28 @@ export function AppShell() {
   const isAdmin = me?.role === 'admin'
   const pending = usePendingChanges()
 
-  // Desktop: collapse to an icon rail (persisted). Mobile: an off-canvas drawer.
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(COLLAPSE_KEY) === '1'
-    } catch {
-      return false
-    }
-  })
-  const [mobileOpen, setMobileOpen] = useState(false)
-
-  const toggleCollapsed = () =>
-    setCollapsed((prev) => {
-      const next = !prev
-      try {
-        localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0')
-      } catch {
-        // ignore storage failures (private mode etc.)
-      }
-      return next
-    })
-
-  // Cmd/Ctrl+B toggles the desktop sidebar; Escape closes the mobile drawer.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'b' && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault()
-        toggleCollapsed()
-      } else if (event.key === 'Escape') {
-        setMobileOpen(false)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
   return (
-    <div className="flex h-svh overflow-hidden">
+    <SidebarProvider className="h-svh">
       <a
         href="#main-content"
         className="sr-only focus-visible:absolute focus-visible:top-2 focus-visible:left-2 focus-visible:z-50 focus-visible:rounded-md focus-visible:bg-background focus-visible:px-3 focus-visible:py-2 focus-visible:text-sm focus-visible:font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:not-sr-only"
       >
         {t('nav.skipToContent')}
       </a>
-      <DesktopSidebar
-        collapsed={collapsed}
-        isAdmin={isAdmin}
-        onToggle={toggleCollapsed}
-        pending={pending}
-      />
-      <MobileDrawer
-        open={mobileOpen}
-        isAdmin={isAdmin}
-        onClose={() => setMobileOpen(false)}
-        pending={pending}
-      />
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <MobileHeader onOpenMenu={() => setMobileOpen(true)} pending={pending} />
+
+      <AppSidebar isAdmin={isAdmin} pending={pending} />
+
+      <SidebarInset className="overflow-hidden">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+          <SidebarTrigger aria-label={t('nav.toggleSidebar')} />
+        </header>
         {/* The scroll container stays full-width so the scrollbar sits at the
             viewport edge; the content inside is capped and centred so it never
             stretches uncomfortably wide on large screens. */}
-        <main id="main-content" className="flex-1 overflow-y-auto overscroll-contain p-4 lg:p-6">
+        <div
+          id="main-content"
+          className="flex-1 overflow-y-auto overscroll-contain p-4 lg:p-6"
+        >
           <div className="mx-auto w-full max-w-5xl">
             {me?.role === 'viewer' && (
               <div
@@ -182,210 +153,96 @@ export function AppShell() {
             )}
             <Outlet />
           </div>
-        </main>
-      </div>
+        </div>
+      </SidebarInset>
+
       <Toaster />
-    </div>
+    </SidebarProvider>
   )
 }
 
-/** The desktop sidebar — full width, or a narrow icon rail with tooltips. */
-function DesktopSidebar({
-  collapsed,
-  isAdmin,
-  onToggle,
-  pending,
-}: {
-  collapsed: boolean
-  isAdmin: boolean
-  onToggle: () => void
-  pending: number
-}) {
+function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number }) {
   const { t } = useTranslation()
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+
+  const isActive = (to: string, exact: boolean) =>
+    exact ? pathname === to : pathname === to || pathname.startsWith(`${to}/`)
 
   return (
-    <aside
-      className={cn(
-        'hidden shrink-0 flex-col border-r bg-muted/20 md:flex',
-        collapsed ? 'w-16' : 'w-60',
-      )}
-    >
-      <div className="flex h-14 items-center gap-2 border-b px-3">
-        {collapsed ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="mx-auto"
-                aria-label={t('nav.expandSidebar')}
-                onClick={onToggle}
-              >
-                <Waypoints className="size-5" aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">{t('nav.expandSidebar')}</TooltipContent>
-          </Tooltip>
-        ) : (
-          <>
-            <Waypoints className="size-5 shrink-0" aria-hidden="true" />
-            <span className="flex-1 truncate font-semibold" translate="no">
-              {t('app.name')}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t('nav.collapseSidebar')}
-              onClick={onToggle}
-            >
-              <PanelLeftClose className="size-4" aria-hidden="true" />
-            </Button>
-          </>
-        )}
-      </div>
-      <NavSections collapsed={collapsed} isAdmin={isAdmin} pending={pending} />
-      <div className="mt-auto border-t p-2">
-        <SidebarUser compact={collapsed} />
-      </div>
-    </aside>
-  )
-}
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="lg" asChild>
+              <Link to="/">
+                <Waypoints className="!size-5" aria-hidden="true" />
+                <span className="text-base font-semibold" translate="no">
+                  {t('app.name')}
+                </span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
 
-/** Off-canvas sidebar for mobile, opened from the top bar. */
-function MobileDrawer({
-  open,
-  isAdmin,
-  onClose,
-  pending,
-}: {
-  open: boolean
-  isAdmin: boolean
-  onClose: () => void
-  pending: number
-}) {
-  const { t } = useTranslation()
-  if (!open) {
-    return null
-  }
-  return (
-    <div className="fixed inset-0 z-50 md:hidden">
-      <button
-        type="button"
-        aria-label={t('nav.closeMenu')}
-        className="absolute inset-0 bg-black/50"
-        onClick={onClose}
-      />
-      <aside className="absolute inset-y-0 left-0 flex w-64 flex-col overscroll-contain border-r bg-background shadow-xl">
-        <div className="flex h-14 items-center gap-2 border-b px-4 font-semibold">
-          <Waypoints className="size-5 shrink-0" aria-hidden="true" />
-          <span translate="no">{t('app.name')}</span>
-        </div>
-        <NavSections
-          collapsed={false}
-          isAdmin={isAdmin}
-          pending={pending}
-          onNavigate={onClose}
-        />
-        <div className="mt-auto border-t p-2">
-          <SidebarUser />
-        </div>
-      </aside>
-    </div>
-  )
-}
+      <SidebarContent>
+        {NAV_SECTIONS.map((section) => {
+          const items = section.items.filter(
+            (item) => isAdmin || !('adminOnly' in item),
+          )
+          if (items.length === 0) {
+            return null
+          }
+          return (
+            <SidebarGroup key={section.labelKey ?? 'main'}>
+              {section.labelKey && (
+                <SidebarGroupLabel>{t(section.labelKey)}</SidebarGroupLabel>
+              )}
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {items.map((item) => {
+                    const label = t(item.labelKey)
+                    // The Apply item carries a badge when config changes are
+                    // staged but not yet applied, so a created host/cert isn't
+                    // silently left inactive.
+                    const showBadge = item.to === '/apply' && pending > 0
+                    return (
+                      <SidebarMenuItem key={item.to}>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={isActive(item.to, item.exact)}
+                          tooltip={label}
+                        >
+                          <Link to={item.to}>
+                            <item.icon aria-hidden="true" />
+                            <span>{label}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                        {showBadge && (
+                          <SidebarMenuBadge className="rounded-full bg-primary text-primary-foreground">
+                            {pending}
+                          </SidebarMenuBadge>
+                        )}
+                      </SidebarMenuItem>
+                    )
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )
+        })}
+      </SidebarContent>
 
-/** The grouped nav links, shared by the desktop rail and the mobile drawer.
- *  When collapsed, labels and section headers are hidden and each icon gets a
- *  tooltip. */
-function NavSections({
-  collapsed,
-  isAdmin,
-  pending,
-  onNavigate,
-}: {
-  collapsed: boolean
-  isAdmin: boolean
-  pending: number
-  onNavigate?: () => void
-}) {
-  const { t } = useTranslation()
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarUser />
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
 
-  return (
-    <nav className="flex flex-1 flex-col gap-4 overflow-y-auto overscroll-contain p-3">
-      {NAV_SECTIONS.map((section) => {
-        const items = section.items.filter(
-          (item) => isAdmin || !('adminOnly' in item),
-        )
-        if (items.length === 0) {
-          return null
-        }
-        return (
-          <div key={section.labelKey ?? 'main'} className="flex flex-col gap-1">
-            {section.labelKey && !collapsed && (
-              <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-                {t(section.labelKey)}
-              </div>
-            )}
-            {items.map((item) => {
-              const label = t(item.labelKey)
-              // The Apply item carries a badge when config changes are staged
-              // but not yet applied, so a created host/cert isn't silently left
-              // inactive (this is the only place the user pushes changes live).
-              const showBadge = item.to === '/apply' && pending > 0
-              const pendingLabel = showBadge
-                ? t('nav.pendingChanges', { count: pending })
-                : undefined
-              const link = (
-                <Link
-                  to={item.to}
-                  activeOptions={{ exact: item.exact }}
-                  onClick={onNavigate}
-                  aria-label={
-                    collapsed
-                      ? showBadge
-                        ? `${label} — ${pendingLabel}`
-                        : label
-                      : undefined
-                  }
-                  className={cn(
-                    'relative flex items-center gap-2 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
-                    collapsed ? 'justify-center px-2' : 'px-3',
-                  )}
-                  activeProps={{ className: 'bg-muted text-foreground' }}
-                >
-                  <item.icon className="size-4 shrink-0" aria-hidden="true" />
-                  {!collapsed && <span className="truncate">{label}</span>}
-                  {showBadge && !collapsed && (
-                    <span
-                      className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold tabular-nums text-primary-foreground"
-                      title={pendingLabel}
-                    >
-                      {pending}
-                    </span>
-                  )}
-                  {showBadge && collapsed && (
-                    <span
-                      className="absolute right-1 top-1 size-2 rounded-full bg-primary ring-2 ring-background"
-                      aria-hidden="true"
-                    />
-                  )}
-                </Link>
-              )
-              return collapsed ? (
-                <Tooltip key={item.to}>
-                  <TooltipTrigger asChild>{link}</TooltipTrigger>
-                  <TooltipContent side="right">
-                    {showBadge ? `${label} — ${pendingLabel}` : label}
-                  </TooltipContent>
-                </Tooltip>
-              ) : (
-                <div key={item.to}>{link}</div>
-              )
-            })}
-          </div>
-        )
-      })}
-    </nav>
+      <SidebarRail />
+    </Sidebar>
   )
 }
 
@@ -401,120 +258,58 @@ function useLogout() {
   })
 }
 
-/** A compact top bar for mobile (the sidebar is off-canvas there): a menu
- *  button, the app name, and the user menu. */
-function MobileHeader({
-  onOpenMenu,
-  pending,
-}: {
-  onOpenMenu: () => void
-  pending: number
-}) {
-  const { t } = useTranslation()
-
-  return (
-    <header className="flex h-14 items-center justify-between gap-2 border-b px-4 md:hidden">
-      <div className="flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative"
-          aria-label={
-            pending > 0
-              ? `${t('nav.openMenu')} — ${t('nav.pendingChanges', { count: pending })}`
-              : t('nav.openMenu')
-          }
-          onClick={onOpenMenu}
-        >
-          <Menu className="size-5" aria-hidden="true" />
-          {pending > 0 && (
-            <span
-              className="absolute right-1 top-1 size-2 rounded-full bg-primary ring-2 ring-background"
-              aria-hidden="true"
-            />
-          )}
-        </Button>
-        <div className="flex items-center gap-2 font-semibold">
-          <Waypoints className="size-5" aria-hidden="true" />
-          <span translate="no">{t('app.name')}</span>
-        </div>
-      </div>
-      <SidebarUser compact side="bottom" />
-    </header>
-  )
-}
-
 function userInitials(email: string): string {
   const local = email.split('@')[0] || email
   return (local.slice(0, 2) || '?').toUpperCase()
 }
 
-/** shadcn "nav-user": an avatar + identity row (or just the avatar, when the
- *  sidebar is collapsed / on mobile) that opens a dropdown with theme,
- *  language, and logout. */
-function SidebarUser({
-  compact = false,
-  side = 'right',
-}: {
-  compact?: boolean
-  side?: 'right' | 'bottom'
-}) {
+/** The footer identity row: an avatar + email/role that opens a dropdown with
+ *  theme, language, and logout. Collapses to just the avatar in icon mode. */
+function SidebarUser() {
   const { t, i18n } = useTranslation()
   const { data: me } = useMe()
   const { theme, toggleTheme } = useTheme()
+  const { isMobile } = useSidebar()
   const logoutMutation = useLogout()
 
   const email = me?.email ?? ''
   const roleLabel = me ? t(`users.roles.${me.role}`) : ''
-  const current = i18n.resolvedLanguage === 'ru' ? 'ru' : 'en'
-  const next = current === 'ru' ? 'en' : 'ru'
+  const next = i18n.resolvedLanguage === 'ru' ? 'en' : 'ru'
 
   const avatar = (
     <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary">
       {userInitials(email)}
     </span>
   )
-  const identity = (
-    <div className="grid min-w-0 flex-1 text-left leading-tight">
-      <span className="truncate text-sm font-medium">{email}</span>
-      <span className="truncate text-xs text-muted-foreground">{roleLabel}</span>
-    </div>
-  )
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        {compact ? (
-          <button
-            type="button"
-            aria-label={email}
-            className="mx-auto flex items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {avatar}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-lg p-2 outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {avatar}
-            {identity}
-            <MoreVertical
-              className="size-4 shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-          </button>
-        )}
+        <SidebarMenuButton
+          size="lg"
+          className="data-[state=open]:bg-sidebar-accent"
+          aria-label={email}
+        >
+          {avatar}
+          <div className="grid flex-1 text-left leading-tight">
+            <span className="truncate text-sm font-medium">{email}</span>
+            <span className="truncate text-xs text-muted-foreground">{roleLabel}</span>
+          </div>
+          <MoreVertical className="ml-auto size-4 text-muted-foreground" aria-hidden="true" />
+        </SidebarMenuButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        side={side}
+        side={isMobile ? 'bottom' : 'right'}
         align="end"
         sideOffset={8}
         className="min-w-56"
       >
         <div className="flex items-center gap-2 p-1.5">
           {avatar}
-          {identity}
+          <div className="grid min-w-0 flex-1 text-left leading-tight">
+            <span className="truncate text-sm font-medium">{email}</span>
+            <span className="truncate text-xs text-muted-foreground">{roleLabel}</span>
+          </div>
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem

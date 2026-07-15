@@ -41,11 +41,8 @@ export const ru: typeof en = {
       security: 'Безопасность',
       admin: 'Администрирование',
     },
-    openMenu: 'Открыть меню',
-    closeMenu: 'Закрыть меню',
     skipToContent: 'Перейти к содержимому',
-    collapseSidebar: 'Свернуть меню',
-    expandSidebar: 'Развернуть меню',
+    toggleSidebar: 'Свернуть/развернуть меню',
     pendingChanges: 'Непринятые изменения: {{count}}',
   },
   audit: {
