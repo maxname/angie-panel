@@ -17,7 +17,14 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { useMemo, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -288,8 +295,26 @@ export function HostEditorDialog({
   host,
 }: HostEditorDialogProps) {
   const { t } = useTranslation()
+  // Fed by the form; guards accidental closes (Escape / overlay / ✕ / Cancel)
+  // when there are unsaved edits.
+  const dirtyRef = useRef(false)
+
+  const guardedClose = useCallback(
+    (next: boolean) => {
+      if (!next && dirtyRef.current) {
+        if (!window.confirm(t('hosts.editor.unsavedConfirm'))) return
+      }
+      onOpenChange(next)
+    },
+    [onOpenChange, t],
+  )
+
+  const handleDirtyChange = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty
+  }, [])
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={guardedClose}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-3xl">
         {/* Accessible title for the dialog; the visible one is in the form. */}
         <DialogHeader className="sr-only">
@@ -304,7 +329,13 @@ export function HostEditorDialog({
         <HostEditorForm
           key={host?.id ?? 'new'}
           host={host}
-          onDone={() => onOpenChange(false)}
+          onDirtyChange={handleDirtyChange}
+          onCancel={() => guardedClose(false)}
+          onDone={() => {
+            // Save succeeded — bypass the unsaved-changes guard.
+            dirtyRef.current = false
+            onOpenChange(false)
+          }}
         />
       </DialogContent>
     </Dialog>
@@ -314,9 +345,19 @@ export function HostEditorDialog({
 interface HostEditorFormProps {
   host: Host | null
   onDone: () => void
+  /** Called when the "close" action (Cancel) is requested; the parent decides
+   *  whether to confirm discarding unsaved changes. */
+  onCancel?: () => void
+  /** Reports whether the form has unsaved edits, so the parent can guard close. */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
-export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
+export function HostEditorForm({
+  host,
+  onDone,
+  onCancel,
+  onDirtyChange,
+}: HostEditorFormProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -334,7 +375,8 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
   })
   const accessLists = accessListsQuery.data?.access_lists ?? []
 
-  const [form, setForm] = useState<FormState>(() => initialState(host))
+  const [initialForm] = useState(() => initialState(host))
+  const [form, setForm] = useState<FormState>(initialForm)
   const [domainDraft, setDomainDraft] = useState('')
   const [domainError, setDomainError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -342,6 +384,17 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
 
   const patch = (partial: Partial<FormState>) =>
     setForm((prev) => ({ ...prev, ...partial }))
+
+  // Track whether the form diverges from its initial state so the dialog can
+  // warn before an accidental close (Escape / overlay / ✕) discards edits.
+  const initialSnapshot = useMemo(() => JSON.stringify(initialForm), [initialForm])
+  const isDirty = useMemo(
+    () => JSON.stringify(form) !== initialSnapshot,
+    [form, initialSnapshot],
+  )
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
 
   const mutation = useMutation({
     mutationFn: (input: HostInput) =>
@@ -391,42 +444,57 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
     event.preventDefault()
     setFormError(null)
 
+    // Report a validation failure: show the message, jump to its tab, and focus
+    // the offending field so the user lands directly on what to fix. The rAF
+    // waits for the tab switch to commit the target field to the DOM.
+    const fail = (tabName: string, message: string, fieldId?: string) => {
+      setFormError(message)
+      setTab(tabName)
+      if (fieldId) {
+        requestAnimationFrame(() =>
+          document.getElementById(fieldId)?.focus(),
+        )
+      }
+    }
+
     if (form.domains.length === 0) {
-      setFormError(t('hosts.editor.noDomains'))
-      setTab('details')
+      fail('details', t('hosts.editor.noDomains'), 'host-domain-input')
       return
     }
     if (form.forward_host.trim() === '') {
-      setFormError(t('hosts.editor.noForwardHost'))
-      setTab('details')
+      fail('details', t('hosts.editor.noForwardHost'), 'host-forward-host')
       return
     }
     const port = Number.parseInt(form.forward_port, 10)
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setFormError(t('hosts.editor.invalidPort'))
-      setTab('details')
+      fail('details', t('hosts.editor.invalidPort'), 'host-forward-port')
       return
     }
     const rlRps = Number.parseInt(form.rate_limit_rps, 10) || 0
     const rlConn = Number.parseInt(form.rate_limit_conn, 10) || 0
     if (form.rate_limit_enabled && rlRps <= 0 && rlConn <= 0) {
-      setFormError(t('hosts.editor.rateLimit.errNoLimit'))
-      setTab('rateLimit')
+      fail('rateLimit', t('hosts.editor.rateLimit.errNoLimit'), 'host-rl-rps')
       return
     }
 
     // Additional upstream servers: each needs a host and a valid port; ip_hash
     // forbids backup peers (Angie rejects the combo).
-    for (const s of form.servers) {
+    for (const [index, s] of form.servers.entries()) {
       const sp = Number.parseInt(s.port, 10)
       if (s.host.trim() === '' || !Number.isInteger(sp) || sp < 1 || sp > 65535) {
-        setFormError(t('hosts.editor.upstreams.errServer'))
-        setTab('upstreams')
+        fail(
+          'upstreams',
+          t('hosts.editor.upstreams.errServer'),
+          `host-server-host-${index}`,
+        )
         return
       }
       if (form.balance_method === 'ip_hash' && s.backup) {
-        setFormError(t('hosts.editor.upstreams.errIpHashBackup'))
-        setTab('upstreams')
+        fail(
+          'upstreams',
+          t('hosts.editor.upstreams.errIpHashBackup'),
+          `host-server-host-${index}`,
+        )
         return
       }
     }
@@ -437,8 +505,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       form.forward_auth_enabled &&
       form.forward_auth_verify_url.trim() === ''
     ) {
-      setFormError(t('hosts.editor.forwardAuth.errNoVerifyUrl'))
-      setTab('sso')
+      fail('sso', t('hosts.editor.forwardAuth.errNoVerifyUrl'), 'host-fa-verify')
       return
     }
 
@@ -1192,6 +1259,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
                 className="flex flex-wrap items-center gap-2 border-t pt-3"
               >
                 <Input
+                  id={`host-server-host-${index}`}
                   aria-label={t('hosts.editor.upstreams.serverHost')}
                   placeholder="10.0.0.2"
                   className="h-8 w-40"
@@ -1865,7 +1933,7 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
           <Button
             type="button"
             variant="outline"
-            onClick={onDone}
+            onClick={onCancel ?? onDone}
             disabled={mutation.isPending}
           >
             {t('common.cancel')}

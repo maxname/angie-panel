@@ -209,6 +209,7 @@ export const en = {
       createTitle: 'New proxy host',
       editTitle: 'Edit proxy host',
       description: 'Forward incoming requests for your domains to an upstream server.',
+      unsavedConfirm: 'You have unsaved changes. Discard them and close?',
       tabs: {
         details: 'Details',
         ssl: 'SSL',

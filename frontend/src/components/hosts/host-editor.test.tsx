@@ -6,7 +6,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { isValidDomain } from '@/lib/domain'
 
-import { HostEditorForm } from './host-editor-dialog'
+import { HostEditorDialog, HostEditorForm } from './host-editor-dialog'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -76,6 +76,26 @@ describe('host editor validation', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/hosts', expect.anything())
   })
 
+  it('focuses the first invalid field on submit', async () => {
+    const user = userEvent.setup()
+    stubFetch()
+    renderForm()
+
+    // Empty submit → the domain entry field takes focus.
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await vi.waitFor(() =>
+      expect(screen.getByLabelText('Domain names')).toHaveFocus(),
+    )
+
+    // With a domain but no forward host, focus jumps to the forward-host field.
+    await user.type(screen.getByLabelText('Domain names'), 'example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await vi.waitFor(() =>
+      expect(screen.getByLabelText('Forward host')).toHaveFocus(),
+    )
+  })
+
   it('rejects an invalid domain when adding a chip', async () => {
     const user = userEvent.setup()
     stubFetch()
@@ -87,6 +107,59 @@ describe('host editor validation', () => {
     expect(
       await screen.findByText('That does not look like a valid domain name.'),
     ).toBeInTheDocument()
+  })
+})
+
+describe('host editor unsaved-changes guard', () => {
+  function renderDialog(onOpenChange: (open: boolean) => void) {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <HostEditorDialog open onOpenChange={onOpenChange} host={null} />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('confirms before closing when there are unsaved edits', async () => {
+    const user = userEvent.setup()
+    stubFetch()
+    const onOpenChange = vi.fn()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderDialog(onOpenChange)
+
+    // Dirty the form.
+    await user.type(screen.getByLabelText('Forward host'), '10.0.0.9')
+
+    // Cancel while dirty → confirm fires; declining keeps the dialog open.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(onOpenChange).not.toHaveBeenCalled()
+
+    // Accepting the confirm closes it.
+    confirmSpy.mockReturnValue(true)
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+
+    confirmSpy.mockRestore()
+  })
+
+  it('closes without confirming when the form is untouched', async () => {
+    const user = userEvent.setup()
+    stubFetch()
+    const onOpenChange = vi.fn()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderDialog(onOpenChange)
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+
+    confirmSpy.mockRestore()
   })
 })
 
