@@ -357,7 +357,7 @@ function NavSections({
                   {!collapsed && <span className="truncate">{label}</span>}
                   {showBadge && !collapsed && (
                     <span
-                      className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-xs font-semibold tabular-nums text-amber-950"
+                      className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold tabular-nums text-primary-foreground"
                       title={pendingLabel}
                     >
                       {pending}
@@ -365,7 +365,7 @@ function NavSections({
                   )}
                   {showBadge && collapsed && (
                     <span
-                      className="absolute right-1 top-1 size-2 rounded-full bg-amber-500 ring-2 ring-background"
+                      className="absolute right-1 top-1 size-2 rounded-full bg-primary ring-2 ring-background"
                       aria-hidden="true"
                     />
                   )}
@@ -429,7 +429,7 @@ function MobileHeader({
           <Menu className="size-5" aria-hidden="true" />
           {pending > 0 && (
             <span
-              className="absolute right-1 top-1 size-2 rounded-full bg-amber-500 ring-2 ring-background"
+              className="absolute right-1 top-1 size-2 rounded-full bg-primary ring-2 ring-background"
               aria-hidden="true"
             />
           )}
