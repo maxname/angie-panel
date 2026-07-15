@@ -491,6 +491,17 @@ function RouterEditorForm({
     event.preventDefault()
     setFormError(null)
 
+    // A row with a backend host but no SNI would be silently dropped by the
+    // filter below — flag it instead of losing the operator's input. (The port
+    // defaults to 443, so only a filled backend host signals real intent.)
+    const partialRoute = form.routes.some(
+      (r) => r.sni.trim() === '' && r.forward_host.trim() !== '',
+    )
+    if (partialRoute) {
+      setFormError(t('sniRouters.editor.errPartialRoute'))
+      return
+    }
+
     const routes: SniRoute[] = form.routes
       .filter((r) => r.sni.trim() !== '')
       .map((r) => ({

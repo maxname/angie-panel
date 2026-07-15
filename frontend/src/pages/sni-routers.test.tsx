@@ -143,6 +143,49 @@ describe('SNI routers page', () => {
     expect(puts[0].enabled).toBe(false)
   })
 
+  it('rejects a route with a backend but no SNI instead of dropping it', async () => {
+    const user = userEvent.setup()
+    const posts: string[] = []
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (input === '/api/sni-routers' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ sni_routers: [] }))
+      }
+      if (input === '/api/dashboard') {
+        return Promise.resolve(
+          jsonResponse({
+            angie: { up: false, version: null, generation: null, load_time: null, connections: null },
+            hosts: [],
+            certificates: [],
+            streams: { configured: 0, enabled: 0, context_active: true },
+            drift: { detected: false, foreign_files: [] },
+            pending_changes: false,
+            alerts: [],
+          }),
+        )
+      }
+      if (input === '/api/sni-routers' && method === 'POST') {
+        posts.push(input)
+        return Promise.resolve(jsonResponse({}))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${method} ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Add SNI router' }))
+    // Fill the route's backend host but leave its SNI blank.
+    const hostInputs = await screen.findAllByLabelText('Backend host')
+    await user.type(hostInputs[0], '10.0.0.5')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    expect(
+      await screen.findByText(/backend but no SNI hostname/i),
+    ).toBeInTheDocument()
+    // The partial row was NOT silently submitted.
+    expect(posts).toHaveLength(0)
+  })
+
   it('warns about the 443 conflict in the editor', async () => {
     const user = userEvent.setup()
     vi.stubGlobal('fetch', routedFetch([], true))

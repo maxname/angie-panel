@@ -431,6 +431,17 @@ export function HostEditorForm({ host, onDone }: HostEditorFormProps) {
       }
     }
 
+    // Forward auth needs a verification endpoint; catch it here (and jump to the
+    // SSO tab) instead of surfacing a generic server error at the bottom.
+    if (
+      form.forward_auth_enabled &&
+      form.forward_auth_verify_url.trim() === ''
+    ) {
+      setFormError(t('hosts.editor.forwardAuth.errNoVerifyUrl'))
+      setTab('sso')
+      return
+    }
+
     const locations = form.locations.map((location) => ({
       path: location.path.trim(),
       forward_scheme: location.forward_scheme,

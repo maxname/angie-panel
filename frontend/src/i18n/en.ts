@@ -8,9 +8,6 @@ export const en = {
       'You have read-only (viewer) access. Changes are disabled — ask an administrator.',
     yes: 'Yes',
     no: 'No',
-    unknown: 'Unknown',
-    ok: 'OK',
-    failed: 'Failed',
     retry: 'Retry',
     error: 'Something went wrong',
     save: 'Save',
@@ -75,8 +72,6 @@ export const en = {
     },
   },
   header: {
-    toggleTheme: 'Toggle theme',
-    switchLanguage: 'Switch language',
     themeDark: 'Dark theme',
     themeLight: 'Light theme',
     logout: 'Log out',
@@ -128,7 +123,6 @@ export const en = {
       generation: 'Config generation',
       unreachableNote: 'Angie status API unreachable — is Angie running?',
       connections: {
-        title: 'Connections',
         active: 'Active',
         idle: 'Idle',
         accepted: 'Accepted',
@@ -346,6 +340,7 @@ export const en = {
         description:
           'Gate every request behind an external auth service (oauth2-proxy, Authelia, Authentik) via auth_request.',
         enable: 'Enable forward auth',
+        errNoVerifyUrl: 'Enter a verify endpoint or disable forward auth.',
         verifyUrl: 'Verify endpoint',
         verifyUrlHint:
           "The auth service's verification URL. Must be reachable from Angie (a LAN address, not loopback).",
@@ -554,13 +549,11 @@ export const en = {
     loadFailed: 'Failed to load certificates',
     empty:
       'No certificates yet. Add one and Apply to start issuance — attach it to a host later to serve HTTPS.',
-    actionFailed: 'Action failed',
     info: {
       title: 'Certificates are issued by Angie itself (built-in ACME — no certbot)',
       body: 'Issuance starts as soon as you Apply — you don’t need to attach the certificate to a host first. Attaching it to a proxy host is what turns on HTTPS for that host, once issuance completes.',
     },
     table: {
-      name: 'Name',
       domains: 'Domains',
       challenge: 'Challenge',
       keyType: 'Key',
@@ -1012,6 +1005,8 @@ export const en = {
       routes: 'Routes',
       routesHint:
         'Match by exact hostname (app.example.com) or wildcard (*.example.com). The backend must speak TLS.',
+      errPartialRoute:
+        'A route has a backend but no SNI hostname. Add the SNI or clear the row.',
       sni: 'SNI hostname',
       backendHost: 'Backend host',
       backendPort: 'Backend port',

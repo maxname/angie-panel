@@ -10,9 +10,6 @@ export const ru: typeof en = {
       'У вас доступ только для чтения (наблюдатель). Изменения отключены — обратитесь к администратору.',
     yes: 'Да',
     no: 'Нет',
-    unknown: 'Неизвестно',
-    ok: 'ОК',
-    failed: 'Сбой',
     retry: 'Повторить',
     error: 'Что-то пошло не так',
     save: 'Сохранить',
@@ -48,7 +45,7 @@ export const ru: typeof en = {
     closeMenu: 'Закрыть меню',
     collapseSidebar: 'Свернуть меню',
     expandSidebar: 'Развернуть меню',
-    pendingChanges: 'Непримененные изменения: {{count}}',
+    pendingChanges: 'Непринятые изменения: {{count}}',
   },
   audit: {
     title: 'Журнал аудита',
@@ -77,8 +74,6 @@ export const ru: typeof en = {
     },
   },
   header: {
-    toggleTheme: 'Переключить тему',
-    switchLanguage: 'Сменить язык',
     themeDark: 'Тёмная тема',
     themeLight: 'Светлая тема',
     logout: 'Выйти',
@@ -128,7 +123,6 @@ export const ru: typeof en = {
       generation: 'Поколение конфигурации',
       unreachableNote: 'Status API Angie недоступен — запущен ли Angie?',
       connections: {
-        title: 'Соединения',
         active: 'Активные',
         idle: 'Простаивающие',
         accepted: 'Принято',
@@ -346,6 +340,7 @@ export const ru: typeof en = {
         description:
           'Пропускать каждый запрос через внешний сервис аутентификации (oauth2-proxy, Authelia, Authentik) через auth_request.',
         enable: 'Включить forward auth',
+        errNoVerifyUrl: 'Укажите endpoint проверки или отключите forward auth.',
         verifyUrl: 'Endpoint проверки',
         verifyUrlHint:
           'URL проверки у сервиса аутентификации. Должен быть доступен из Angie (адрес в сети, не loopback).',
@@ -555,13 +550,11 @@ export const ru: typeof en = {
     loadFailed: 'Не удалось загрузить сертификаты',
     empty:
       'Сертификатов пока нет. Добавьте и примените, чтобы начать выпуск — привязать к хосту для HTTPS можно позже.',
-    actionFailed: 'Не удалось выполнить действие',
     info: {
       title: 'Сертификаты выпускает сам Angie (встроенный ACME — без certbot)',
       body: 'Выпуск начинается сразу после применения изменений — привязывать сертификат к хосту для этого не нужно. Привязка к прокси-хосту включает HTTPS для этого хоста после завершения выпуска.',
     },
     table: {
-      name: 'Имя',
       domains: 'Домены',
       challenge: 'Проверка',
       keyType: 'Ключ',
@@ -1020,6 +1013,8 @@ export const ru: typeof en = {
       routes: 'Маршруты',
       routesHint:
         'Совпадение по точному имени (app.example.com) или маске (*.example.com). Бэкенд должен говорить по TLS.',
+      errPartialRoute:
+        'У маршрута задан бэкенд, но нет SNI-имени. Укажите SNI или очистите строку.',
       sni: 'SNI-имя',
       backendHost: 'Хост бэкенда',
       backendPort: 'Порт бэкенда',
