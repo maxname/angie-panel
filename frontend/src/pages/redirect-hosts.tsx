@@ -12,6 +12,7 @@ import {
   type SslToggles,
 } from '@/components/hosts/host-editor-fields'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { RouteCable } from '@/components/routing/route-cable'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -118,8 +119,7 @@ export function RedirectHostsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('redirectHosts.table.domains')}</TableHead>
-                  <TableHead>{t('redirectHosts.table.target')}</TableHead>
+                  <TableHead>{t('redirectHosts.table.route')}</TableHead>
                   <TableHead>{t('redirectHosts.table.ssl')}</TableHead>
                   <TableHead>{t('redirectHosts.table.status')}</TableHead>
                   <TableHead className="w-0 text-right">
@@ -200,16 +200,15 @@ function RedirectHostRow({ host, onEdit, onDelete }: RedirectHostRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <div className="flex flex-wrap gap-1">
-          {host.domains.map((domain) => (
-            <Badge key={domain} variant="secondary">
+        <RouteCable
+          state={host.enabled ? 'live' : 'off'}
+          left={host.domains.map((domain) => (
+            <Badge key={domain} variant="secondary" className="font-mono font-normal">
               {domain}
             </Badge>
           ))}
-        </div>
-      </TableCell>
-      <TableCell>
-        <span className="font-mono text-xs">{formatTarget(host)}</span>
+          right={formatTarget(host)}
+        />
       </TableCell>
       <TableCell>
         <SslBadge hasCertificate={host.certificate_id !== null} />

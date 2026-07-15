@@ -739,6 +739,7 @@ export const ru: typeof en = {
     unappliedBody: 'Перейдите в «Применение», чтобы записать и перезагрузить конфигурацию.',
     actionFailed: 'Не удалось выполнить действие',
     table: {
+      route: 'Домен ── редирект',
       domains: 'Домены',
       target: 'Перенаправляет на',
       ssl: 'SSL',
@@ -797,6 +798,7 @@ export const ru: typeof en = {
     unappliedBody: 'Перейдите в «Применение», чтобы записать и перезагрузить конфигурацию.',
     actionFailed: 'Не удалось выполнить действие',
     table: {
+      route: 'Домен ── 404',
       domains: 'Домены',
       behaviour: 'Поведение',
       returns404: 'Возвращает 404',
@@ -912,6 +914,7 @@ export const ru: typeof en = {
     protocol: { tcp: 'TCP', udp: 'UDP', both: 'TCP + UDP' },
     tlsBadge: 'TLS',
     table: {
+      route: 'Порт ── upstream',
       incomingPort: 'Входящий порт',
       forward: 'Проброс на',
       protocol: 'Протокол',
