@@ -4,8 +4,19 @@ import { ThemeContext, type Theme } from './theme-context'
 
 const THEME_STORAGE_KEY = 'angie-panel-theme'
 
+// localStorage throws in sandboxed iframes and "block all cookies" modes. This
+// runs during ThemeProvider's render (which wraps the whole app), so an
+// unguarded throw would blank the entire UI — fall back to the OS preference.
+function readStoredTheme(): string | null {
+  try {
+    return localStorage.getItem(THEME_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
 function getInitialTheme(): Theme {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY)
+  const stored = readStoredTheme()
   if (stored === 'light' || stored === 'dark') {
     return stored
   }
@@ -17,7 +28,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
-    localStorage.setItem(THEME_STORAGE_KEY, theme)
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme)
+    } catch {
+      // Persisting the preference is best-effort; ignore storage failures.
+    }
   }, [theme])
 
   const toggleTheme = useCallback(() => {

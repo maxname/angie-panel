@@ -335,7 +335,7 @@ function NavSections({
                       : undefined
                   }
                   className={cn(
-                    'relative flex items-center gap-2 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                    'relative flex items-center gap-2 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
                     collapsed ? 'justify-center px-2' : 'px-3',
                   )}
                   activeProps={{ className: 'bg-muted text-foreground' }}
@@ -344,7 +344,7 @@ function NavSections({
                   {!collapsed && <span className="truncate">{label}</span>}
                   {showBadge && !collapsed && (
                     <span
-                      className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-xs font-semibold tabular-nums text-white"
+                      className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-xs font-semibold tabular-nums text-amber-950"
                       title={pendingLabel}
                     >
                       {pending}
