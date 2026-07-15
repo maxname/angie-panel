@@ -35,6 +35,7 @@ import {
   type FileDiff,
   type FileStatus,
 } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 export function ApplyPage() {
   const { t, i18n } = useTranslation()
@@ -246,7 +247,14 @@ function FileDiffBlock({ file }: { file: FileDiff }) {
 
   return (
     <div className="rounded-lg border">
-      <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2">
+      {/* The muted header bar + bottom divider only make sense when a unified
+          diff follows below. Added files carry no diff, so keep the row clean. */}
+      <div
+        className={cn(
+          'flex flex-wrap items-center gap-2 px-3 py-2',
+          hasDiff && 'border-b bg-muted/40',
+        )}
+      >
         <StatusBadge status={file.status} />
         <span className="font-mono text-xs">{file.name}</span>
         {file.drift && <DriftTag />}
