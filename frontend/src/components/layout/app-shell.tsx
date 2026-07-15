@@ -167,16 +167,21 @@ export function AppShell() {
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <MobileHeader onOpenMenu={() => setMobileOpen(true)} pending={pending} />
+        {/* The scroll container stays full-width so the scrollbar sits at the
+            viewport edge; the content inside is capped and centred so it never
+            stretches uncomfortably wide on large screens. */}
         <main id="main-content" className="flex-1 overflow-y-auto overscroll-contain p-4 lg:p-6">
-          {me?.role === 'viewer' && (
-            <div
-              className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300"
-              role="status"
-            >
-              {t('common.readOnlyBanner')}
-            </div>
-          )}
-          <Outlet />
+          <div className="mx-auto w-full max-w-5xl">
+            {me?.role === 'viewer' && (
+              <div
+                className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300"
+                role="status"
+              >
+                {t('common.readOnlyBanner')}
+              </div>
+            )}
+            <Outlet />
+          </div>
         </main>
       </div>
       <Toaster />
