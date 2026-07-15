@@ -55,8 +55,8 @@
 }
 
 /* ============================================================================
-   Copper on slate. Cool slate ink is the enclosure; copper is the single brand
-   accent (primary actions, active nav) — the material of the SBC's traces.
+   Indigo on slate. Cool slate ink is the enclosure; indigo is the single brand
+   accent (primary actions, active nav, focus). Everything else stays quiet.
    ========================================================================== */
 :root {
     color-scheme: light;
@@ -66,7 +66,7 @@
     --card-foreground: #16202B;
     --popover: #FFFFFF;
     --popover-foreground: #16202B;
-    --primary: #A85F28;
+    --primary: #6D28D9;
     --primary-foreground: #FFFFFF;
     --secondary: #EAEDF1;
     --secondary-foreground: #26313D;
@@ -77,8 +77,8 @@
     --destructive: #C4413A;
     --border: #E0E4E9;
     --input: #D3D9DF;
-    --ring: #A85F28;
-    --chart-1: #B4682E;
+    --ring: #6D28D9;
+    --chart-1: #6D28D9;
     --chart-2: #2C8C86;
     --chart-3: #2FA757;
     --chart-4: #C08A16;
@@ -86,12 +86,12 @@
     --radius: 0.625rem;
     --sidebar: #EEF1F4;
     --sidebar-foreground: #16202B;
-    --sidebar-primary: #A85F28;
+    --sidebar-primary: #6D28D9;
     --sidebar-primary-foreground: #FFFFFF;
     --sidebar-accent: #E3E7EC;
     --sidebar-accent-foreground: #26313D;
     --sidebar-border: #DDE1E6;
-    --sidebar-ring: #A85F28;
+    --sidebar-ring: #6D28D9;
 }
 
 .dark {
@@ -102,8 +102,8 @@
     --card-foreground: #E7ECF3;
     --popover: #171F2B;
     --popover-foreground: #E7ECF3;
-    --primary: #D98A4E;
-    --primary-foreground: #201509;
+    --primary: #7C3AED;
+    --primary-foreground: #FFFFFF;
     --secondary: #1E2937;
     --secondary-foreground: #E7ECF3;
     --muted: #1A2431;
@@ -113,20 +113,20 @@
     --destructive: #E15A50;
     --border: #26333F;
     --input: #2B3846;
-    --ring: #D98A4E;
-    --chart-1: #D98A4E;
+    --ring: #8B5CF6;
+    --chart-1: #8B5CF6;
     --chart-2: #57C4B4;
     --chart-3: #49C46B;
     --chart-4: #E4B443;
     --chart-5: #7C8BA0;
     --sidebar: #111823;
     --sidebar-foreground: #E7ECF3;
-    --sidebar-primary: #D98A4E;
-    --sidebar-primary-foreground: #201509;
+    --sidebar-primary: #7C3AED;
+    --sidebar-primary-foreground: #FFFFFF;
     --sidebar-accent: #1E2937;
     --sidebar-accent-foreground: #E7ECF3;
     --sidebar-border: #26333F;
-    --sidebar-ring: #D98A4E;
+    --sidebar-ring: #8B5CF6;
 }
 
 @layer base {
