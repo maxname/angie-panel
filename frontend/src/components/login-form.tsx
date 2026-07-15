@@ -48,6 +48,8 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
           id="login-email"
           type="email"
           autoComplete="email"
+          spellCheck={false}
+          autoCapitalize="off"
           required
           value={email}
           onChange={(event) => setEmail(event.target.value)}

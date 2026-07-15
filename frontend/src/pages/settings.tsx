@@ -438,6 +438,9 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
               id="acme-email"
               type="email"
               inputMode="email"
+              autoComplete="email"
+              spellCheck={false}
+              autoCapitalize="off"
               placeholder="admin@example.com"
               value={acmeEmail}
               onChange={(event) => setAcmeEmail(event.target.value)}

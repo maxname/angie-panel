@@ -41,6 +41,7 @@ export const en = {
     },
     openMenu: 'Open menu',
     closeMenu: 'Close menu',
+    skipToContent: 'Skip to content',
     collapseSidebar: 'Collapse sidebar',
     expandSidebar: 'Expand sidebar',
     pendingChanges: 'Unapplied changes: {{count}}',

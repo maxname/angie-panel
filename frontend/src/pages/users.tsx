@@ -284,6 +284,9 @@ function CreateUserDialog({
             <Input
               id="new-user-email"
               type="email"
+              autoComplete="email"
+              spellCheck={false}
+              autoCapitalize="off"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />

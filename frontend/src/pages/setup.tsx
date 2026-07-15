@@ -67,7 +67,7 @@ export function SetupPage() {
     <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted/40 p-4">
       <div className="flex items-center gap-2 text-lg font-semibold">
         <Waypoints className="size-5" aria-hidden="true" />
-        {t('app.name')}
+        <span translate="no">{t('app.name')}</span>
       </div>
       <Card className="w-full max-w-sm">
         <CardHeader>
@@ -93,6 +93,8 @@ export function SetupPage() {
                 id="setup-email"
                 type="email"
                 autoComplete="email"
+                spellCheck={false}
+                autoCapitalize="off"
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}

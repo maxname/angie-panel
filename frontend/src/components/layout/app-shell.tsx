@@ -147,6 +147,12 @@ export function AppShell() {
 
   return (
     <div className="flex h-svh overflow-hidden">
+      <a
+        href="#main-content"
+        className="sr-only focus-visible:absolute focus-visible:top-2 focus-visible:left-2 focus-visible:z-50 focus-visible:rounded-md focus-visible:bg-background focus-visible:px-3 focus-visible:py-2 focus-visible:text-sm focus-visible:font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:not-sr-only"
+      >
+        {t('nav.skipToContent')}
+      </a>
       <DesktopSidebar
         collapsed={collapsed}
         isAdmin={isAdmin}
@@ -161,7 +167,7 @@ export function AppShell() {
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <MobileHeader onOpenMenu={() => setMobileOpen(true)} pending={pending} />
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <main id="main-content" className="flex-1 overflow-y-auto overscroll-contain p-4 lg:p-6">
           {me?.role === 'viewer' && (
             <div
               className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300"
@@ -195,7 +201,7 @@ function DesktopSidebar({
   return (
     <aside
       className={cn(
-        'hidden shrink-0 flex-col border-r bg-muted/20 transition-[width] duration-200 md:flex',
+        'hidden shrink-0 flex-col border-r bg-muted/20 md:flex',
         collapsed ? 'w-16' : 'w-60',
       )}
     >
@@ -218,7 +224,9 @@ function DesktopSidebar({
         ) : (
           <>
             <Waypoints className="size-5 shrink-0" aria-hidden="true" />
-            <span className="flex-1 truncate font-semibold">{t('app.name')}</span>
+            <span className="flex-1 truncate font-semibold" translate="no">
+              {t('app.name')}
+            </span>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -262,10 +270,10 @@ function MobileDrawer({
         className="absolute inset-0 bg-black/50"
         onClick={onClose}
       />
-      <aside className="absolute inset-y-0 left-0 flex w-64 flex-col border-r bg-background shadow-xl">
+      <aside className="absolute inset-y-0 left-0 flex w-64 flex-col overscroll-contain border-r bg-background shadow-xl">
         <div className="flex h-14 items-center gap-2 border-b px-4 font-semibold">
           <Waypoints className="size-5 shrink-0" aria-hidden="true" />
-          {t('app.name')}
+          <span translate="no">{t('app.name')}</span>
         </div>
         <NavSections
           collapsed={false}
@@ -298,7 +306,7 @@ function NavSections({
   const { t } = useTranslation()
 
   return (
-    <nav className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
+    <nav className="flex flex-1 flex-col gap-4 overflow-y-auto overscroll-contain p-3">
       {NAV_SECTIONS.map((section) => {
         const items = section.items.filter(
           (item) => isAdmin || !('adminOnly' in item),
@@ -423,7 +431,7 @@ function MobileHeader({
         </Button>
         <div className="flex items-center gap-2 font-semibold">
           <Waypoints className="size-5" aria-hidden="true" />
-          {t('app.name')}
+          <span translate="no">{t('app.name')}</span>
         </div>
       </div>
       <SidebarUser compact side="bottom" />

@@ -43,6 +43,7 @@ export const ru: typeof en = {
     },
     openMenu: 'Открыть меню',
     closeMenu: 'Закрыть меню',
+    skipToContent: 'Перейти к содержимому',
     collapseSidebar: 'Свернуть меню',
     expandSidebar: 'Развернуть меню',
     pendingChanges: 'Непринятые изменения: {{count}}',
