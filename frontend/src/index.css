@@ -115,7 +115,7 @@
        .012 (the step's worth) it was invisible. Level with dark's .027, so the
        two themes shade by the same amount. */
     --header-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0) 40%, rgb(40 33 29 / 0.04));
-    --field-inset: inset 0 1px 2px rgb(40 33 29 / 0.07), inset 0 -2px 3px rgb(255 255 255 / 0.25);
+    --field-inset: inset 0 1px 2px rgb(40 33 29 / 0.05), inset 0 -2px 3px rgb(255 255 255 / 0.2);
     /* Light at the top fading out — never a dark wash at the bottom. Dark
        text on a tint loses contrast as the tint darkens, and the destructive
        alert has none to spare (3.72:1 as it stands, see --destructive). */
@@ -173,7 +173,7 @@
         inset 0 1px 0 rgb(255 255 255 / 0.04);
     --control-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.07);
     --header-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0.026), rgb(255 255 255 / 0) 60%);
-    --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.32), inset 0 -2px 3px rgb(255 255 255 / 0.07);
+    --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.22), inset 0 -2px 3px rgb(255 255 255 / 0.05);
     /* 4%, not 5%: light text on the destructive tint has the least room
        (5.16:1), and the extra point would leave the top edge at 4.60 — over
        the line, but not by enough to spend on a gradient nobody can see. */
