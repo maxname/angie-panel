@@ -293,10 +293,10 @@ function diffLineClass(line: string): string {
     return 'block bg-sky-500/10 px-3 text-sky-700 dark:text-sky-300'
   }
   if (line.startsWith('+')) {
-    return 'block bg-emerald-500/10 px-3 text-emerald-700 dark:text-emerald-300'
+    return 'block bg-success/10 px-3 text-success'
   }
   if (line.startsWith('-')) {
-    return 'block bg-red-500/10 px-3 text-red-700 dark:text-red-300'
+    return 'block bg-destructive/10 px-3 text-destructive'
   }
   return 'block px-3 text-muted-foreground'
 }
@@ -306,7 +306,7 @@ function ApplyResultCard({ report }: { report: ApplyReport }) {
 
   if (report.result === 'ok') {
     return (
-      <Alert variant="info" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+      <Alert variant="success">
         <CheckCircle2 aria-hidden="true" />
         <AlertTitle>{t('apply.result.okTitle')}</AlertTitle>
         <AlertDescription>{report.summary}</AlertDescription>
@@ -421,9 +421,9 @@ function CountPill({
   tone: 'added' | 'modified' | 'removed' | 'unchanged'
 }) {
   const toneClass = {
-    added: 'text-emerald-700 dark:text-emerald-400',
-    modified: 'text-amber-700 dark:text-amber-400',
-    removed: 'text-red-700 dark:text-red-400',
+    added: 'text-success',
+    modified: 'text-warning',
+    removed: 'text-destructive',
     unchanged: 'text-muted-foreground',
   }[tone]
 
@@ -438,9 +438,9 @@ function CountPill({
 function StatusBadge({ status }: { status: FileStatus }) {
   const { t } = useTranslation()
   const map: Record<FileStatus, string> = {
-    added: 'bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400',
-    modified: 'bg-amber-600/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-400',
-    removed: 'bg-red-600/15 text-red-700 dark:bg-red-400/15 dark:text-red-400',
+    added: 'bg-success/10 text-success',
+    modified: 'bg-warning/10 text-warning',
+    removed: 'bg-destructive/10 text-destructive',
     unchanged: 'text-muted-foreground',
   }
   return <Badge className={map[status]}>{t(`apply.status.${status}`)}</Badge>
@@ -469,7 +469,7 @@ function ResultBadge({ result }: { result: string }) {
 
   if (result === 'ok') {
     return (
-      <Badge className="bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400">
+      <Badge variant="success">
         {label}
       </Badge>
     )

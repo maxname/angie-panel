@@ -190,7 +190,7 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
             title={cert.domains.join(', ')}
           >
             <ShieldCheck
-              className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+              className="size-4 shrink-0 text-success"
               aria-hidden="true"
             />
             <span className="truncate">
@@ -209,7 +209,7 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
       </TableCell>
       <TableCell>
         {host.enabled ? (
-          <Badge className="bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400">
+          <Badge variant="success">
             {t('hosts.status.enabled')}
           </Badge>
         ) : (

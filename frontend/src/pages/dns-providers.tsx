@@ -139,7 +139,7 @@ export function DnsProvidersPage() {
                     </TableCell>
                     <TableCell>
                       {profile.configured ? (
-                        <Badge className="bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400">
+                        <Badge variant="success">
                           {t('dnsProviders.status.configured')}
                         </Badge>
                       ) : (

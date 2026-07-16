@@ -22,7 +22,7 @@ function verb(method: string): { label: string; className: string } {
       return {
         label: 'POST',
         className:
-          'bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400',
+          'bg-success/10 text-success',
       }
     case 'PUT':
       return {
@@ -54,9 +54,9 @@ function statusClass(status: number): string {
     return 'bg-rose-600/15 text-rose-700 dark:bg-rose-400/15 dark:text-rose-400'
   }
   if (status >= 400) {
-    return 'bg-amber-600/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-400'
+    return 'bg-warning/10 text-warning'
   }
-  return 'bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400'
+  return 'bg-success/10 text-success'
 }
 
 export function AuditLogPage() {

@@ -63,20 +63,14 @@ export function StatusPill({ status }: { status: AcmeStatus | null }) {
 
   if (derived.kind === 'issued') {
     return (
-      <Badge
-        title={derived.hint}
-        className="bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400"
-      >
+      <Badge variant="success" title={derived.hint}>
         {derived.label}
       </Badge>
     )
   }
   if (derived.kind === 'pending') {
     return (
-      <Badge
-        title={derived.hint}
-        className="bg-amber-600/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-400"
-      >
+      <Badge variant="warning" title={derived.hint}>
         {derived.label}
       </Badge>
     )

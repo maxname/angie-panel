@@ -31,6 +31,9 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -75,6 +78,12 @@
     --accent: #EAEDF1;
     --accent-foreground: #26313D;
     --destructive: #C4413A;
+    /* Status colours. Like --destructive, each is a single token per theme,
+       used tinted (bg-success/10 text-success) rather than as a solid fill —
+       so a component needs no dark: variant to stay legible. */
+    --success: #065F46;
+    --warning: #92400E;
+    --info: #1D4ED8;
     --border: #E0E4E9;
     --input: #D3D9DF;
     --ring: #6D28D9;
@@ -111,6 +120,9 @@
     --accent: #1E2937;
     --accent-foreground: #E7ECF3;
     --destructive: #E15A50;
+    --success: #34D399;
+    --warning: #FBBF24;
+    --info: #93C5FD;
     --border: #26333F;
     --input: #2B3846;
     --ring: #8B5CF6;

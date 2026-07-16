@@ -41,7 +41,7 @@ import {
 const CONFIGTEST_QUERY_KEY = ['system', 'configtest'] as const
 
 const EMERALD_BADGE =
-  'bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400'
+  'bg-success/10 text-success'
 
 export function DashboardPage() {
   const { t } = useTranslation()
@@ -311,7 +311,7 @@ function CertItem({ cert }: { cert: DashboardCert }) {
         <div className="flex items-center gap-2">
           <span className="font-mono text-xs">{cert.name}</span>
           {cert.staging && (
-            <Badge className="bg-amber-600/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-400">
+            <Badge variant="warning">
               {t('certificates.environment.staging')}
             </Badge>
           )}
@@ -447,7 +447,7 @@ function UpstreamCell({ upstream }: { upstream: DashboardUpstream | null }) {
   return (
     <span
       className={`text-sm whitespace-nowrap tabular-nums ${
-        unhealthy ? 'font-medium text-red-700 dark:text-red-400' : 'text-muted-foreground'
+        unhealthy ? 'font-medium text-destructive' : 'text-muted-foreground'
       }`}
     >
       {t('dashboard.hosts.upstream.summary', {

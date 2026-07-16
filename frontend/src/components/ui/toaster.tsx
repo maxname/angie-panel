@@ -7,7 +7,7 @@ import { dismissToast, useToasts, type ToastVariant } from "@/lib/toast"
 const variantClasses: Record<ToastVariant, string> = {
   default: "bg-popover text-popover-foreground ring-1 ring-foreground/10",
   success:
-    "bg-emerald-600/10 text-emerald-800 ring-1 ring-emerald-600/30 dark:bg-emerald-400/10 dark:text-emerald-200 dark:ring-emerald-400/30",
+    "bg-success/10 text-success ring-1 ring-success/30",
   destructive:
     "bg-destructive/10 text-destructive ring-1 ring-destructive/30",
 }

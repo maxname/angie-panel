@@ -274,7 +274,7 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
       </TableCell>
       <TableCell>
         {stream.enabled ? (
-          <Badge className="bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400">
+          <Badge variant="success">
             {t('streams.status.enabled')}
           </Badge>
         ) : (

@@ -192,7 +192,7 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
       </TableCell>
       <TableCell>
         {cert.staging ? (
-          <Badge className="bg-amber-600/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-400">
+          <Badge variant="warning">
             {t('certificates.environment.staging')}
           </Badge>
         ) : (
@@ -745,7 +745,7 @@ export function CertWizardForm({
               {selectedProfile && !selectedProfile.configured && (
                 <p
                   role="alert"
-                  className="text-sm text-amber-600 dark:text-amber-500"
+                  className="text-sm text-warning"
                 >
                   {t('certificates.wizard.providerNotConfigured', {
                     provider: selectedProfile.name,

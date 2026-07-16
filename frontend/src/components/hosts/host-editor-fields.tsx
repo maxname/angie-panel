@@ -280,7 +280,7 @@ export function SslBadge({ hasCertificate }: { hasCertificate: boolean }) {
 
   if (hasCertificate) {
     return (
-      <Badge className="bg-emerald-600/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-400">
+      <Badge variant="success">
         {t('hosts.table.ssl')}
       </Badge>
     )
