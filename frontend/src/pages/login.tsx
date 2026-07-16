@@ -2,6 +2,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { LoginForm } from '@/components/login-form'
+import { BrandMark } from '@/components/brand-mark'
 import { LanguageMenu, ThemeMenu } from '@/components/preference-menus'
 import {
   Card,
@@ -25,7 +26,7 @@ export function LoginPage() {
         <ThemeMenu />
       </div>
       <div className="flex items-center gap-2 text-lg font-semibold">
-        <img src="/logo.png" alt="" className="size-7" />
+        <BrandMark className="size-7" />
         <span translate="no">{t('app.name')}</span>
       </div>
       <Card className="w-full max-w-sm">

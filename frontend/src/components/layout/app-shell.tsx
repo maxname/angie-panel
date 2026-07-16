@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { BrandMark } from '@/components/brand-mark'
 import { LanguageMenu, ThemeMenu } from '@/components/preference-menus'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -197,9 +198,7 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
           to="/"
           className="flex h-14 items-center gap-2.5 overflow-hidden pl-2.5 ring-sidebar-ring outline-hidden transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2"
         >
-          {/* alt="" — decorative: the product name sits next to it as text,
-              and a screen reader shouldn't say it twice. */}
-          <img src="/logo.png" alt="" className="size-7 shrink-0" />
+          <BrandMark className="size-7 shrink-0" />
           <span className="truncate text-base font-semibold" translate="no">
             {t('app.name')}
           </span>
