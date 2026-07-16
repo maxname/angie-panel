@@ -394,7 +394,9 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
             <Switch id="ipv6" checked={ipv6Enabled} onCheckedChange={setIpv6Enabled} />
           </div>
 
-          <div className="grid gap-2">
+          {/* An address is short; match the other fields on this page rather
+              than running a nameserver box the full width of the screen. */}
+          <div className="grid gap-2 sm:max-w-md">
             <ChipsField
               id="resolver"
               label={t('settings.network.resolver')}
