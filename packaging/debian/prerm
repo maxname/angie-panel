@@ -1,7 +1,8 @@
 #!/bin/sh
 # prerm for angie-panel (used by cargo-deb).
-# Stopping the units on remove/upgrade is handled by the snippets that
-# cargo-deb's systemd-units feature inserts at the #DEBHELPER# token.
+# Stopping the units on remove/upgrade is handled by the snippets cargo-deb
+# inserts at the debhelper token near the bottom. Do not spell that token out
+# here, not even in a comment — see postinst for what that costs.
 # Nothing package-specific to do here.
 set -e
 

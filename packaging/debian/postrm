@@ -1,7 +1,8 @@
 #!/bin/sh
 # postrm for angie-panel (used by cargo-deb).
-# systemd cleanup (daemon-reload, disable on purge) is handled by the
-# snippets cargo-deb inserts at the #DEBHELPER# token.
+# systemd cleanup (daemon-reload, disable on purge) is handled by the snippets
+# cargo-deb inserts at the debhelper token near the bottom. Do not spell that
+# token out here, not even in a comment — see postinst for what that costs.
 set -e
 
 case "$1" in

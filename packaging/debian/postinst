@@ -1,8 +1,16 @@
 #!/bin/sh
 # postinst for angie-panel (used by cargo-deb).
-# cargo-deb's systemd-units feature substitutes unit handling (enable/start)
-# at the #DEBHELPER# token below — this script only manages the service
-# account and the data directory.
+#
+# cargo-deb splices its unit and tmpfiles handling in at the debhelper token
+# near the bottom. Never spell that token out anywhere else in this file,
+# comments included: EVERY occurrence is substituted, so a mention in prose gets
+# the generated block dropped into the middle of the sentence and leaves the
+# tail of it running as a command. That is not hypothetical — this very line
+# used to name the token, and installs ended up executing "token below — ..."
+# and printing `postinst: 13: token: not found`. It only stayed harmless
+# because the stray line landed above the `set -e` below.
+#
+# This script itself only manages the service account and the data directory.
 set -e
 
 case "$1" in
