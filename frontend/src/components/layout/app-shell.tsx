@@ -172,44 +172,38 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
       {/* Fixed to the content header's height (h-14) with a matching border so
           the two dividers form one continuous line — otherwise the brand block
           grows/shrinks with the menu button and the rules never meet. */}
-      {/* Collapsed, the padding comes back: the nav column is inset by its
-          group's p-2, and without the same inset here the mark would sit 8px
-          left of the icons it is supposed to line up with. */}
-      <SidebarHeader className="h-14 justify-center border-b bg-header-sheen p-0 group-data-[collapsible=icon]:p-2">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            {/* The brand button fills the header edge to edge: no padding to
-                inset it, no radius to round it off the border. Collapsed, it
-                goes back to being a 32px button and gets its radius back.
-                transition-none: the base variant animates width/height/padding,
-                but all three only matter to the button's own box — the mark
-                sits on axis 24 either way and must not move. Animating them
-                slides it there instead, which is the one thing to avoid. */}
-            <SidebarMenuButton
-              size="lg"
-              className="!h-14 rounded-none pl-2.5 transition-none group-data-[collapsible=icon]:!h-8 group-data-[collapsible=icon]:rounded-md"
-              asChild
-            >
-              <Link to="/">
-                {/* pl-2.5 above is 10px, not a round number by accident: the
-                    28px mark has to sit centred on the nav icons' axis (24px
-                    from the sidebar edge), so it starts at 24 − 14. The text
-                    then falls 8px past it — the same optical gap the nav items
-                    have, which matters more here than sharing their text grid.
-                    In icon mode the cell grows to 32px to exactly fill the
-                    collapsed button and the brand text is pushed past the clip. */}
-                <div className="flex aspect-square size-7 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-8">
-                  {/* alt="" — decorative: the product name sits next to it as
-                      text, and a screen reader shouldn't say it twice. */}
-                  <img src="/logo.png" alt="" className="!size-7" />
-                </div>
-                <span className="truncate text-base font-semibold" translate="no">
-                  {t('app.name')}
-                </span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+      <SidebarHeader className="h-14 border-b bg-header-sheen p-0">
+        {/* Not a SidebarMenuButton: the brand is one link, not a menu item, and
+            that variant forces a 32px padded pill once the sidebar collapses —
+            exactly what this block must not become. A plain link fills the
+            header in both states and needs no state-specific classes at all.
+
+            The two spacings are the whole layout, and both are exact in rem, so
+            they hold at any root font size:
+
+            pl-2.5 (0.625rem) centres the 1.75rem mark on the collapsed rail —
+            (3rem − 1.75rem) / 2 — which is also the nav icons' axis, since they
+            land on 1.5rem via their group's and button's 0.5rem insets. One
+            inset for both states: the mark never moves, so nothing about it
+            needs animating.
+
+            gap-2.5 (0.625rem) then starts the name at 3rem — the rail's exact
+            width — so collapsing hides it completely. At gap-2 it stops 0.125rem
+            short and a 1px sliver of the "A" stays visible in the rail.
+
+            The link's width follows the sidebar's own transition, and that is
+            what wipes the name, the same way it clips the nav labels. */}
+        <Link
+          to="/"
+          className="flex h-14 items-center gap-2.5 overflow-hidden pl-2.5 ring-sidebar-ring outline-hidden transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2"
+        >
+          {/* alt="" — decorative: the product name sits next to it as text,
+              and a screen reader shouldn't say it twice. */}
+          <img src="/logo.png" alt="" className="size-7 shrink-0" />
+          <span className="truncate text-base font-semibold" translate="no">
+            {t('app.name')}
+          </span>
+        </Link>
       </SidebarHeader>
 
       <SidebarContent>
