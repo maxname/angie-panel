@@ -175,8 +175,13 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link to="/">
-                <Waypoints className="!size-5" aria-hidden="true" />
-                <span className="text-base font-semibold" translate="no">
+                {/* The icon lives in a size-8 square so that in icon mode it
+                    exactly fills the collapsed 32px button (staying centred)
+                    and the brand text is pushed past the clip. */}
+                <div className="flex aspect-square size-8 shrink-0 items-center justify-center">
+                  <Waypoints className="!size-5" aria-hidden="true" />
+                </div>
+                <span className="truncate text-base font-semibold" translate="no">
                   {t('app.name')}
                 </span>
               </Link>
@@ -241,7 +246,10 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
         </SidebarMenu>
       </SidebarFooter>
 
-      <SidebarRail />
+      <SidebarRail
+        aria-label={t('nav.toggleSidebar')}
+        title={t('nav.toggleSidebar')}
+      />
     </Sidebar>
   )
 }
