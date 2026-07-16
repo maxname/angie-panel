@@ -338,7 +338,17 @@ function HeaderActions() {
       <LanguageMenu />
       <ThemeMenu />
 
-      <Separator orientation="vertical" className="mx-1 !h-4" />
+      {/* Separator ships data-vertical:self-stretch to fill its parent, and
+          align-self:stretch with a definite height behaves as flex-start — so
+          !h-4 alone parked the rule 6px above the buttons and the row's
+          items-center never got a say. It has to be overridden through the same
+          variant: twMerge only drops the stretch if the modifier matches, and a
+          bare self-center loses on source order (the variant is wrapped in
+          :where(), so both are specificity 0,1,0 and the later rule wins). */}
+      <Separator
+        orientation="vertical"
+        className="mx-1 !h-4 data-vertical:self-center"
+      />
 
       <Tooltip>
         <TooltipTrigger asChild>
