@@ -173,7 +173,12 @@
         inset 0 1px 0 rgb(255 255 255 / 0.04);
     --control-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.07);
     --header-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0.026), rgb(255 255 255 / 0) 60%);
-    --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.22), inset 0 -2px 3px rgb(255 255 255 / 0.05);
+    /* 0.028, tuned by the lift it produces rather than by the number: the same
+       alpha of white is worth ~8x more here than on paper — 200-odd channel
+       steps sit between #292420 and white, and 12 between #F7F3F0 and it. So
+       "0.2 light / 0.05 dark" read as dark being quieter and was 8x louder.
+       ΔL .024: .044 (loud) and .012 (invisible) bracket it. */
+    --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.22), inset 0 -2px 3px rgb(255 255 255 / 0.028);
     /* 4%, not 5%: light text on the destructive tint has the least room
        (5.16:1), and the extra point would leave the top edge at 4.60 — over
        the line, but not by enough to spend on a gradient nobody can see. */
