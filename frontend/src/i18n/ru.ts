@@ -410,6 +410,7 @@ export const ru: typeof en = {
   apply: {
     title: 'Применение',
     apply: 'Применить изменения',
+    nothingToApply: 'Применять нечего — конфигурация уже совпадает.',
     applying: 'Применение…',
     failed: 'Не удалось применить',
     counts: {

@@ -39,6 +39,7 @@ import {
   type SniRouter,
   type SniRouterInput,
 } from '@/lib/api'
+import { useIsDirty } from '@/lib/use-dirty'
 import { toast } from '@/lib/toast'
 
 export function SniRoutersPage() {
@@ -445,7 +446,13 @@ function RouterEditorForm({
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [form, setForm] = useState<FormState>(() => initialState(router))
+  // Keep the opening snapshot so the submit can tell whether there is
+  // anything to save.
+  const [initialForm] = useState<FormState>(() => initialState(router))
+  const [form, setForm] = useState<FormState>(initialForm)
+  // Only an edit can be "unchanged". A create form starts pristine by
+  // definition, and its Save is what tells you which fields are missing.
+  const canSave = useIsDirty(form, initialForm) || router === null
   const [formError, setFormError] = useState<string | null>(null)
 
   const patch = (partial: Partial<FormState>) =>
@@ -659,7 +666,7 @@ function RouterEditorForm({
         <Button type="button" variant="outline" onClick={onDone}>
           {t('common.cancel')}
         </Button>
-        <Button type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending || !canSave}>
           {mutation.isPending && (
             <Loader2 className="animate-spin" aria-hidden="true" />
           )}

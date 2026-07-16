@@ -135,12 +135,49 @@ describe('SNI routers page', () => {
     // Open the row actions, then Edit.
     await user.click(await screen.findByRole('button', { name: 'Actions' }))
     await user.click(await screen.findByText('Edit'))
-    // Save without touching the enabled toggle.
+    // Change something unrelated — Save stays disabled until an edit actually
+    // has something to save — but never touch the enabled toggle.
+    await user.type(await screen.findByLabelText('Name'), '-2')
     await user.click(await screen.findByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(puts).toHaveLength(1))
     // The editor form must resend enabled:false, not silently re-enable it.
     expect(puts[0].enabled).toBe(false)
+  })
+
+  it('keeps Save disabled on an edit until something actually changes', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (input === '/api/sni-routers' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ sni_routers: [sampleRouter] }))
+      }
+      if (input === '/api/dashboard') {
+        return Promise.resolve(
+          jsonResponse({
+            angie: { up: false, version: null, generation: null, load_time: null, connections: null },
+            hosts: [],
+            certificates: [],
+            streams: { configured: 1, enabled: 1, context_active: true },
+            drift: { detected: false, foreign_files: [] },
+            pending_changes: false,
+            alerts: [],
+          }),
+        )
+      }
+      return Promise.reject(new Error(`unexpected fetch ${method} ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Actions' }))
+    await user.click(await screen.findByText('Edit'))
+
+    // Nothing to save yet: the record on screen is the record on the server.
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeDisabled()
+
+    await user.type(await screen.findByLabelText('Name'), '-2')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
   })
 
   it('rejects a route with a backend but no SNI instead of dropping it', async () => {

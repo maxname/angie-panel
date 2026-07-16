@@ -396,6 +396,12 @@ export function HostEditorForm({
     () => JSON.stringify(form) !== initialSnapshot,
     [form, initialSnapshot],
   )
+  // Only an edit can be "unchanged". A create form starts pristine by
+  // definition, and its Save is what tells you which fields are missing.
+  // Deliberately not folded into isDirty: that one guards the close warning,
+  // and an untouched new host must not ask whether to discard anything.
+  const canSave = isDirty || host === null
+
   useEffect(() => {
     onDirtyChange?.(isDirty)
   }, [isDirty, onDirtyChange])
@@ -1880,7 +1886,7 @@ export function HostEditorForm({
           >
             {t('common.cancel')}
           </Button>
-          <Button type="submit" disabled={mutation.isPending}>
+          <Button type="submit" disabled={mutation.isPending || !canSave}>
             {mutation.isPending && (
               <Loader2 className="animate-spin" aria-hidden="true" />
             )}

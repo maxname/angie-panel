@@ -413,6 +413,7 @@ export const en = {
   apply: {
     title: 'Apply',
     apply: 'Apply changes',
+    nothingToApply: 'Nothing to apply — the running config already matches.',
     applying: 'Applying…',
     failed: 'Apply failed',
     counts: {

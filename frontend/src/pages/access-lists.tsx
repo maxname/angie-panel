@@ -49,6 +49,7 @@ import {
   type AccessListSatisfy,
   type AccessListUserInput,
 } from '@/lib/api'
+import { useIsDirty } from '@/lib/use-dirty'
 import { toast } from '@/lib/toast'
 
 export function AccessListsPage() {
@@ -407,7 +408,13 @@ export function AccessListEditorForm({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
-  const [form, setForm] = useState<FormState>(() => initialState(list))
+  // Keep the opening snapshot so the submit can tell whether there is
+  // anything to save.
+  const [initialForm] = useState<FormState>(() => initialState(list))
+  const [form, setForm] = useState<FormState>(initialForm)
+  // Only an edit can be "unchanged". A create form starts pristine by
+  // definition, and its Save is what tells you which fields are missing.
+  const canSave = useIsDirty(form, initialForm) || list === null
   const [clientErrors, setClientErrors] = useState<FieldErrors>({})
 
   const patch = (partial: Partial<FormState>) =>
@@ -719,7 +726,7 @@ export function AccessListEditorForm({
         >
           {t('common.cancel')}
         </Button>
-        <Button type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending || !canSave}>
           {mutation.isPending && (
             <Loader2 className="animate-spin" aria-hidden="true" />
           )}

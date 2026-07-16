@@ -48,6 +48,13 @@ export function ApplyPage() {
     queryFn: () => api.getApplyPreview(),
   })
 
+  // Applying an unchanged config would rewrite the same files and reload
+  // Angie for nothing. Until the preview has landed we don't know, so leave
+  // the button alone rather than guess.
+  const diff = previewQuery.data?.diff
+  const hasPendingChanges =
+    diff === undefined || diff.added + diff.modified + diff.removed > 0
+
   const historyQuery = useQuery({
     queryKey: ['apply', 'history'],
     queryFn: () => api.getApplyHistory(),
@@ -77,7 +84,8 @@ export function ApplyPage() {
         <h1 className="text-2xl font-semibold tracking-tight">{t('apply.title')}</h1>
         <Button
           onClick={() => applyMutation.mutate()}
-          disabled={applyMutation.isPending}
+          disabled={applyMutation.isPending || !hasPendingChanges}
+          title={hasPendingChanges ? undefined : t('apply.nothingToApply')}
         >
           {applyMutation.isPending ? (
             <Loader2 className="animate-spin" aria-hidden="true" />

@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, ApiError, type DeadHost, type DeadHostInput } from '@/lib/api'
+import { useIsDirty } from '@/lib/use-dirty'
 import { toast } from '@/lib/toast'
 
 export function DeadHostsPage() {
@@ -372,7 +373,13 @@ export function DeadHostEditorForm({ host, onDone }: DeadHostEditorFormProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
-  const [form, setForm] = useState<FormState>(() => initialState(host))
+  // Keep the opening snapshot so the submit can tell whether there is
+  // anything to save.
+  const [initialForm] = useState<FormState>(() => initialState(host))
+  const [form, setForm] = useState<FormState>(initialForm)
+  // Only an edit can be "unchanged". A create form starts pristine by
+  // definition, and its Save is what tells you which fields are missing.
+  const canSave = useIsDirty(form, initialForm) || host === null
   const [clientError, setClientError] = useState<string | null>(null)
   const [tab, setTab] = useState('details')
 
@@ -513,7 +520,7 @@ export function DeadHostEditorForm({ host, onDone }: DeadHostEditorFormProps) {
         >
           {t('common.cancel')}
         </Button>
-        <Button type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending || !canSave}>
           {mutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
           {t('common.save')}
         </Button>

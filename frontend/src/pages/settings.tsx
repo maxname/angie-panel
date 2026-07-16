@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
-import { useRef, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -34,6 +34,7 @@ import {
 } from '@/lib/api'
 import { isValidIp } from '@/lib/ip'
 import { toast } from '@/lib/toast'
+import { useIsDirty } from '@/lib/use-dirty'
 
 
 export function SettingsPage() {
@@ -288,25 +289,39 @@ function BackupRestore() {
   )
 }
 
+/** The saved settings in the shape the form edits. One place, so the initial
+ *  values and the "has anything changed?" baseline can't drift apart. */
+function savedValues(raw: SettingsResponse['raw']) {
+  return {
+    defaultSite: raw.default_site ?? 'notfound',
+    redirectUrl: raw.default_site_redirect_url ?? '',
+    ipv6Enabled: raw.ipv6_enabled === '1',
+    // Stored as the space/comma list the backend parses; edited as a list of
+    // addresses, since that is what it is.
+    resolvers: (raw.resolver_override ?? '').split(/[\s,]+/).filter(Boolean),
+    acmeEmail: raw.acme_email ?? '',
+  }
+}
+
 function SettingsForm({ data }: { data: SettingsResponse }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
-  const [defaultSite, setDefaultSite] = useState<string>(
-    data.raw.default_site ?? 'notfound',
+  // Derived from the server's copy rather than snapshotted on mount: saving
+  // updates the cache in place without remounting this form, and a mount-time
+  // snapshot would leave it looking dirty forever afterwards.
+  const saved = useMemo(() => savedValues(data.raw), [data])
+
+  const [defaultSite, setDefaultSite] = useState<string>(saved.defaultSite)
+  const [redirectUrl, setRedirectUrl] = useState<string>(saved.redirectUrl)
+  const [ipv6Enabled, setIpv6Enabled] = useState<boolean>(saved.ipv6Enabled)
+  const [resolvers, setResolvers] = useState<string[]>(saved.resolvers)
+  const [acmeEmail, setAcmeEmail] = useState<string>(saved.acmeEmail)
+
+  const isDirty = useIsDirty(
+    { defaultSite, redirectUrl, ipv6Enabled, resolvers, acmeEmail },
+    saved,
   )
-  const [redirectUrl, setRedirectUrl] = useState<string>(
-    data.raw.default_site_redirect_url ?? '',
-  )
-  const [ipv6Enabled, setIpv6Enabled] = useState<boolean>(
-    data.raw.ipv6_enabled === '1',
-  )
-  // Stored as the space/comma list the backend parses; edited as a list of
-  // addresses, since that is what it is.
-  const [resolvers, setResolvers] = useState<string[]>(() =>
-    (data.raw.resolver_override ?? '').split(/[\s,]+/).filter(Boolean),
-  )
-  const [acmeEmail, setAcmeEmail] = useState<string>(data.raw.acme_email ?? '')
 
   const mutation = useMutation({
     mutationFn: (body: Record<string, string>) => api.updateSettings(body),
@@ -459,7 +474,7 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
       )}
 
       <div className="flex justify-end">
-        <Button type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending || !isDirty}>
           {mutation.isPending && (
             <Loader2 className="animate-spin" aria-hidden="true" />
           )}
