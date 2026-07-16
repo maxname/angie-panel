@@ -15,6 +15,7 @@ export const ru: typeof en = {
     save: 'Сохранить',
     cancel: 'Отмена',
     close: 'Закрыть',
+    openInNewTab: 'Открыть {{domain}} в новой вкладке',
   },
   toaster: {
     region: 'Уведомления',

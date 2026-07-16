@@ -3,6 +3,7 @@ import { Loader2, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { DomainBadges } from '@/components/domain-badges'
 import { HostEditorDialog } from '@/components/hosts/host-editor-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -177,13 +178,7 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <div className="flex flex-wrap gap-1">
-          {host.domains.map((domain) => (
-            <Badge key={domain} variant="secondary" className="font-mono font-normal">
-              {domain}
-            </Badge>
-          ))}
-        </div>
+        <DomainBadges domains={host.domains} secure={cert !== undefined} />
       </TableCell>
       <TableCell>
         <span className="font-mono text-xs">{target}</span>

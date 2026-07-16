@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { DomainBadges } from '@/components/domain-badges'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -315,13 +316,7 @@ function CertItem({ cert }: { cert: DashboardCert }) {
             </Badge>
           )}
         </div>
-        <div className="flex flex-wrap gap-1">
-          {cert.domains.map((domain) => (
-            <Badge key={domain} variant="secondary">
-              {domain}
-            </Badge>
-          ))}
-        </div>
+        <DomainBadges domains={cert.domains} secure />
         {!issued && (
           <p className="text-xs text-muted-foreground">{t('dashboard.certs.autoHttps')}</p>
         )}
@@ -393,13 +388,7 @@ function HostRow({ host }: { host: DashboardHost }) {
   return (
     <TableRow>
       <TableCell className="pl-4">
-        <div className="flex flex-wrap gap-1">
-          {host.domains.map((domain) => (
-            <Badge key={domain} variant="secondary">
-              {domain}
-            </Badge>
-          ))}
-        </div>
+        <DomainBadges domains={host.domains} secure={host.https_active} />
       </TableCell>
       <TableCell>
         <span className="font-mono text-xs">{host.forward}</span>

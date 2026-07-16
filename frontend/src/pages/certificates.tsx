@@ -10,6 +10,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { DomainBadges } from '@/components/domain-badges'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -180,13 +181,7 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <div className="flex flex-wrap gap-1">
-          {cert.domains.map((domain) => (
-            <Badge key={domain} variant="secondary">
-              {domain}
-            </Badge>
-          ))}
-        </div>
+        <DomainBadges domains={cert.domains} secure />
       </TableCell>
       <TableCell>
         <Badge variant="outline">

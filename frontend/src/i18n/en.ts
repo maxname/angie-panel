@@ -13,6 +13,7 @@ export const en = {
     save: 'Save',
     cancel: 'Cancel',
     close: 'Close',
+    openInNewTab: 'Open {{domain}} in a new tab',
   },
   toaster: {
     region: 'Notifications',
