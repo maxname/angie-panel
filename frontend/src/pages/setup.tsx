@@ -1,6 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Waypoints } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -74,7 +73,7 @@ export function SetupPage() {
         <ThemeMenu />
       </div>
       <div className="flex items-center gap-2 text-lg font-semibold">
-        <Waypoints className="size-5" aria-hidden="true" />
+        <img src="/logo.png" alt="" className="size-5" />
         <span translate="no">{t('app.name')}</span>
       </div>
       <Card className="w-full max-w-sm">

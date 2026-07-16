@@ -16,7 +16,6 @@ import {
   ShieldCheck,
   Split,
   Users,
-  Waypoints,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -182,7 +181,9 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
                     exactly fills the collapsed 32px button (staying centred)
                     and the brand text is pushed past the clip. */}
                 <div className="flex aspect-square size-8 shrink-0 items-center justify-center">
-                  <Waypoints className="!size-5" aria-hidden="true" />
+                  {/* alt="" — знак декоративный: имя продукта стоит рядом
+                      текстом, читалка не должна произносить его дважды. */}
+                  <img src="/logo.png" alt="" className="!size-5" />
                 </div>
                 <span className="truncate text-base font-semibold" translate="no">
                   {t('app.name')}

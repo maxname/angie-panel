@@ -1,5 +1,4 @@
 import { useNavigate } from '@tanstack/react-router'
-import { Waypoints } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { LoginForm } from '@/components/login-form'
@@ -26,7 +25,7 @@ export function LoginPage() {
         <ThemeMenu />
       </div>
       <div className="flex items-center gap-2 text-lg font-semibold">
-        <Waypoints className="size-5" aria-hidden="true" />
+        <img src="/logo.png" alt="" className="size-5" />
         <span translate="no">{t('app.name')}</span>
       </div>
       <Card className="w-full max-w-sm">
