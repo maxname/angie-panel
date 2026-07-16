@@ -73,7 +73,7 @@ export function SetupPage() {
         <ThemeMenu />
       </div>
       <div className="flex items-center gap-2 text-lg font-semibold">
-        <img src="/logo.png" alt="" className="size-5" />
+        <img src="/logo.png" alt="" className="size-7" />
         <span translate="no">{t('app.name')}</span>
       </div>
       <Card className="w-full max-w-sm">
