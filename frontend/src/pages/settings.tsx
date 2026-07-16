@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { ChipsField } from '@/components/chips-field'
 import { DefaultSitePicker } from '@/components/default-site-picker'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -31,6 +32,7 @@ import {
   type ImportResult,
   type SettingsResponse,
 } from '@/lib/api'
+import { isValidIp } from '@/lib/ip'
 import { toast } from '@/lib/toast'
 
 
@@ -299,8 +301,10 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
   const [ipv6Enabled, setIpv6Enabled] = useState<boolean>(
     data.raw.ipv6_enabled === '1',
   )
-  const [resolverOverride, setResolverOverride] = useState<string>(
-    data.raw.resolver_override ?? '',
+  // Stored as the space/comma list the backend parses; edited as a list of
+  // addresses, since that is what it is.
+  const [resolvers, setResolvers] = useState<string[]>(() =>
+    (data.raw.resolver_override ?? '').split(/[\s,]+/).filter(Boolean),
   )
   const [acmeEmail, setAcmeEmail] = useState<string>(data.raw.acme_email ?? '')
 
@@ -318,7 +322,7 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
       default_site: defaultSite,
       default_site_redirect_url: redirectUrl,
       ipv6_enabled: ipv6Enabled ? '1' : '0',
-      resolver_override: resolverOverride,
+      resolver_override: resolvers.join(' '),
       acme_email: acmeEmail,
     })
   }
@@ -391,14 +395,26 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="resolver">{t('settings.network.resolver')}</Label>
-            <Input
+            <ChipsField
               id="resolver"
-              placeholder="1.1.1.1 8.8.8.8"
-              value={resolverOverride}
-              onChange={(event) => setResolverOverride(event.target.value)}
+              label={t('settings.network.resolver')}
+              values={resolvers}
+              onChange={setResolvers}
+              placeholder="1.1.1.1"
+              addLabel={t('settings.network.addResolver')}
+              removeLabel={(ip) => t('settings.network.removeResolver', { ip })}
+              validate={(ip, existing) => {
+                if (!isValidIp(ip)) {
+                  return t('settings.network.invalidResolver')
+                }
+                if (existing.includes(ip)) {
+                  return t('settings.network.duplicateResolver')
+                }
+                return null
+              }}
+              describedBy="resolver-help"
             />
-            <p className="text-xs text-muted-foreground">
+            <p id="resolver-help" className="text-xs text-muted-foreground">
               {t('settings.network.resolverEffective', {
                 value:
                   data.effective.resolvers.length > 0

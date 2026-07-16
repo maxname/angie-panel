@@ -1,6 +1,3 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import { en } from './en'
@@ -65,32 +62,29 @@ describe('pickLanguage', () => {
   })
 })
 
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const full = join(dir, e.name)
-    if (e.isDirectory()) return sourceFiles(full)
-    return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)
-      ? [full]
-      : []
-  })
-}
+// Vite inlines every source file at transform time, so this needs no
+// filesystem access — src/ is browser code, and its tsconfig deliberately
+// carries no node types.
+const SOURCES = import.meta.glob('../**/*.{ts,tsx}', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>
 
-// A key that doesn't exist renders as the literal `some.key` on screen, and
-// nothing else catches it: the parity test above compares the catalogues to
-// each other, not to what the code actually asks for. Only literal keys are
-// checked — `t(\`users.roles.${role}\`)` and `t(item.labelKey)` can't be
-// resolved without running the app, so the regex requires the string to close
-// the argument list.
 describe('t() call sites', () => {
   it('reference keys that exist', () => {
     const known = new Set(keys(en as Tree))
     const missing: string[] = []
-    for (const file of sourceFiles('src')) {
-      const src = readFileSync(file, 'utf8')
+    const scanned: string[] = []
+    for (const [file, src] of Object.entries(SOURCES)) {
+      if (/\.test\.tsx?$/.test(file)) continue
+      scanned.push(file)
       for (const m of src.matchAll(/\bt\(\s*'([^']+)'\s*[,)]/g)) {
         if (!known.has(m[1])) missing.push(`${file}: t('${m[1]}')`)
       }
     }
+    // Guard the guard: a glob that matched nothing would pass silently.
+    expect(scanned.length).toBeGreaterThan(20)
     expect(missing).toEqual([])
   })
 })

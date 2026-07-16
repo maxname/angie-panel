@@ -27,6 +27,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { DomainChipsField } from '@/components/hosts/host-editor-fields'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -59,7 +60,6 @@ import {
   type Host,
   type HostInput,
 } from '@/lib/api'
-import { isValidDomain } from '@/lib/domain'
 import { toast } from '@/lib/toast'
 
 interface LocationDraft {
@@ -377,8 +377,6 @@ export function HostEditorForm({
 
   const [initialForm] = useState(() => initialState(host))
   const [form, setForm] = useState<FormState>(initialForm)
-  const [domainDraft, setDomainDraft] = useState('')
-  const [domainError, setDomainError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [tab, setTab] = useState('details')
 
@@ -424,27 +422,6 @@ export function HostEditorForm({
     }
     return { code: 'unknown_error', message: t('common.error') }
   }, [mutation.isError, mutation.error, t])
-
-  const addDomain = () => {
-    const candidate = domainDraft.trim().toLowerCase()
-    if (candidate === '') {
-      return
-    }
-    if (!isValidDomain(candidate)) {
-      setDomainError(t('hosts.editor.invalidDomain'))
-      return
-    }
-    if (form.domains.includes(candidate)) {
-      setDomainError(t('hosts.editor.duplicateDomain'))
-      return
-    }
-    patch({ domains: [...form.domains, candidate] })
-    setDomainDraft('')
-    setDomainError(null)
-  }
-
-  const removeDomain = (domain: string) =>
-    patch({ domains: form.domains.filter((item) => item !== domain) })
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -685,53 +662,12 @@ export function HostEditorForm({
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
         <TabsContent value="details" className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="host-domain-input">{t('hosts.editor.domains')}</Label>
-            <div className="flex flex-wrap gap-1.5">
-              {form.domains.map((domain) => (
-                <span
-                  key={domain}
-                  className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-sm"
-                >
-                  {domain}
-                  <button
-                    type="button"
-                    onClick={() => removeDomain(domain)}
-                    className="text-muted-foreground hover:text-foreground"
-                    aria-label={t('hosts.editor.removeDomain', { domain })}
-                  >
-                    <X className="size-3" aria-hidden="true" />
-                  </button>
-                </span>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <Input
-                id="host-domain-input"
-                value={domainDraft}
-                placeholder="example.com"
-                onChange={(event) => {
-                  setDomainDraft(event.target.value)
-                  setDomainError(null)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ',') {
-                    event.preventDefault()
-                    addDomain()
-                  }
-                }}
-              />
-              <Button type="button" variant="outline" onClick={addDomain}>
-                <Plus aria-hidden="true" />
-                {t('hosts.editor.addDomain')}
-              </Button>
-            </div>
-            {domainError !== null && (
-              <p role="alert" className="text-sm text-destructive">
-                {domainError}
-              </p>
-            )}
-          </div>
+          {/* Keeps the id: submitting with no domains focuses it (see fail()). */}
+          <DomainChipsField
+            id="host-domain-input"
+            domains={form.domains}
+            onChange={(domains) => patch({ domains })}
+          />
 
           <div className="grid gap-4 sm:grid-cols-[8rem_1fr_7rem]">
             <div className="space-y-2">

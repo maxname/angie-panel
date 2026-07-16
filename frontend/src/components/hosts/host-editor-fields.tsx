@@ -1,12 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { Plus, X } from 'lucide-react'
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ChipsField } from '@/components/chips-field'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -62,83 +59,32 @@ interface DomainChipsFieldProps {
 }
 
 /**
- * The chip-style domain input shared by the redirection and 404 host editors.
- * Manages its own draft and inline validation error; the parent owns the list.
+ * Domain rules on top of the shared chips input: lowercase what's typed, and
+ * reject anything that isn't a domain or is already in the list.
  */
 export function DomainChipsField({ id, domains, onChange }: DomainChipsFieldProps) {
   const { t } = useTranslation()
-  const [draft, setDraft] = useState('')
-  const [error, setError] = useState<string | null>(null)
-
-  const add = () => {
-    const candidate = draft.trim().toLowerCase()
-    if (candidate === '') {
-      return
-    }
-    if (!isValidDomain(candidate)) {
-      setError(t('hosts.editor.invalidDomain'))
-      return
-    }
-    if (domains.includes(candidate)) {
-      setError(t('hosts.editor.duplicateDomain'))
-      return
-    }
-    onChange([...domains, candidate])
-    setDraft('')
-    setError(null)
-  }
-
-  const remove = (domain: string) =>
-    onChange(domains.filter((item) => item !== domain))
 
   return (
-    <div className="space-y-2">
-      <Label htmlFor={id}>{t('hosts.editor.domains')}</Label>
-      <div className="flex flex-wrap gap-1.5">
-        {domains.map((domain) => (
-          <span
-            key={domain}
-            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-sm"
-          >
-            {domain}
-            <button
-              type="button"
-              onClick={() => remove(domain)}
-              className="text-muted-foreground hover:text-foreground"
-              aria-label={t('hosts.editor.removeDomain', { domain })}
-            >
-              <X className="size-3" aria-hidden="true" />
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <Input
-          id={id}
-          value={draft}
-          placeholder="example.com"
-          onChange={(event) => {
-            setDraft(event.target.value)
-            setError(null)
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ',') {
-              event.preventDefault()
-              add()
-            }
-          }}
-        />
-        <Button type="button" variant="outline" onClick={add}>
-          <Plus aria-hidden="true" />
-          {t('hosts.editor.addDomain')}
-        </Button>
-      </div>
-      {error !== null && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-    </div>
+    <ChipsField
+      id={id}
+      label={t('hosts.editor.domains')}
+      values={domains}
+      onChange={onChange}
+      placeholder="example.com"
+      addLabel={t('hosts.editor.addDomain')}
+      removeLabel={(domain) => t('hosts.editor.removeDomain', { domain })}
+      normalize={(raw) => raw.trim().toLowerCase()}
+      validate={(domain, existing) => {
+        if (!isValidDomain(domain)) {
+          return t('hosts.editor.invalidDomain')
+        }
+        if (existing.includes(domain)) {
+          return t('hosts.editor.duplicateDomain')
+        }
+        return null
+      }}
+    />
   )
 }
 

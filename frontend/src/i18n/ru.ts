@@ -74,12 +74,12 @@ export const ru: typeof en = {
   },
   header: {
     theme: 'Тема',
+    language: 'Язык',
     themes: {
       light: 'Светлая',
       dark: 'Тёмная',
       system: 'Системная',
     },
-    switchLanguage: 'Переключить на {{lang}}',
     applied: 'Конфигурация применена',
     logout: 'Выйти',
   },
@@ -489,6 +489,10 @@ export const ru: typeof en = {
       ipv6Effective: 'Сейчас действует: {{value}}',
       resolver: 'Переопределение DNS-резолвера',
       resolverEffective: 'Используемые резолверы: {{value}}',
+      addResolver: 'Добавить',
+      removeResolver: 'Удалить {{ip}}',
+      invalidResolver: 'Это не IP-адрес.',
+      duplicateResolver: 'Уже в списке.',
       resolverNone: 'нет',
     },
     acme: {

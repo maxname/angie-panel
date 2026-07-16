@@ -72,15 +72,13 @@ export const en = {
   },
   header: {
     theme: 'Theme',
+    language: 'Language',
     // Names of the options, not of an action — the menu marks the current one.
     themes: {
       light: 'Light',
       dark: 'Dark',
       system: 'System',
     },
-    // The button shows the language you'd get; spell the action out for
-    // anyone who only hears the accessible name.
-    switchLanguage: 'Switch to {{lang}}',
     // Shown when the generated config matches what's on disk — i.e. the panel
     // is not a staging area with work sitting in it.
     applied: 'Configuration applied',
@@ -494,6 +492,10 @@ export const en = {
       ipv6Effective: 'Currently effective: {{value}}',
       resolver: 'DNS resolver override',
       resolverEffective: 'Resolvers in use: {{value}}',
+      addResolver: 'Add',
+      removeResolver: 'Remove {{ip}}',
+      invalidResolver: 'Not an IP address.',
+      duplicateResolver: 'Already in the list.',
       resolverNone: 'none',
     },
     acme: {

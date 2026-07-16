@@ -6,6 +6,19 @@ export const LANGUAGE_STORAGE_KEY = 'angie-panel-lang'
 export const SUPPORTED_LANGUAGES = ['en', 'ru'] as const
 export type Language = (typeof SUPPORTED_LANGUAGES)[number]
 
+/**
+ * Each language named in itself — a menu of languages is the one place you
+ * cannot translate the labels, since someone who lands in the wrong language
+ * has to find their way out.
+ *
+ * Adding a language means: a catalogue file, an entry here, and a loader in
+ * `catalogues` below. Nothing else in the UI enumerates them.
+ */
+export const LANGUAGE_NAMES: Record<Language, string> = {
+  en: 'English',
+  ru: 'Русский',
+}
+
 function isSupported(value: string | null | undefined): value is Language {
   return !!value && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
 }

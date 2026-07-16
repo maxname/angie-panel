@@ -5,12 +5,9 @@ import {
   CornerUpRight,
   FileQuestion,
   Globe,
-  Languages,
   LayoutDashboard,
   ListChecks,
   LogOut,
-  Monitor,
-  Moon,
   Network,
   Rocket,
   ScrollText,
@@ -18,22 +15,13 @@ import {
   ShieldBan,
   ShieldCheck,
   Split,
-  Sun,
   Users,
   Waypoints,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { changeLanguage } from '@/i18n'
-
+import { LanguageMenu, ThemeMenu } from '@/components/preference-menus'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
 import {
   Sidebar,
@@ -59,7 +47,6 @@ import {
 } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
-import { THEMES, useTheme, type Theme } from '@/theme/theme-context'
 
 // The sidebar is grouped into labelled sections. The first section has no
 // label (the dashboard sits on its own above the groups).
@@ -327,67 +314,16 @@ function HeaderStatus({ pending }: { pending: number | null }) {
   )
 }
 
-const THEME_ICONS = { light: Sun, dark: Moon, system: Monitor } as const
-
-/** Session controls, parked on the right of the header. Language and logout
- *  are one-click icons, so their tooltip names the target ("Switch to
- *  English"). Theme has three options and no sensible "next", so it opens a
- *  menu and its icon reports the current choice instead. */
+/** Session controls, parked on the right of the header. Language and theme are
+ *  shared with the pre-auth screens; logout only makes sense here. */
 function HeaderActions() {
-  const { t, i18n } = useTranslation()
-  const { theme, setTheme } = useTheme()
+  const { t } = useTranslation()
   const logoutMutation = useLogout()
-
-  const next = i18n.resolvedLanguage === 'ru' ? 'en' : 'ru'
-  const ThemeIcon = THEME_ICONS[theme]
-  const languageLabel = t('header.switchLanguage', {
-    lang: next === 'ru' ? 'Русский' : 'English',
-  })
 
   return (
     <div className="ml-auto flex items-center gap-1">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => void changeLanguage(next)}
-            aria-label={languageLabel}
-          >
-            <Languages aria-hidden="true" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{languageLabel}</TooltipContent>
-      </Tooltip>
-
-      <DropdownMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={t('header.theme')}>
-                <ThemeIcon aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent>{t('header.theme')}</TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent align="end">
-          <DropdownMenuRadioGroup
-            value={theme}
-            onValueChange={(value) => setTheme(value as Theme)}
-          >
-            {THEMES.map((option) => {
-              const Icon = THEME_ICONS[option]
-              return (
-                <DropdownMenuRadioItem key={option} value={option}>
-                  <Icon aria-hidden="true" />
-                  {t(`header.themes.${option}`)}
-                </DropdownMenuRadioItem>
-              )
-            })}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <LanguageMenu />
+      <ThemeMenu />
 
       <Separator orientation="vertical" className="mx-1 !h-4" />
 
