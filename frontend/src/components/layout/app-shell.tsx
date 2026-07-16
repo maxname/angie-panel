@@ -130,7 +130,7 @@ export function AppShell() {
       <AppSidebar isAdmin={isAdmin} pending={pending ?? 0} />
 
       <SidebarInset className="overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-header-sheen px-4">
           <SidebarTrigger aria-label={t('nav.toggleSidebar')} />
           <HeaderStatus pending={pending} />
           <HeaderActions />
