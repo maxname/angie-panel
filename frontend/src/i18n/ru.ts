@@ -73,8 +73,12 @@ export const ru: typeof en = {
     },
   },
   header: {
-    themeDark: 'Тёмная тема',
-    themeLight: 'Светлая тема',
+    theme: 'Тема',
+    themes: {
+      light: 'Светлая',
+      dark: 'Тёмная',
+      system: 'Системная',
+    },
     switchLanguage: 'Переключить на {{lang}}',
     applied: 'Конфигурация применена',
     logout: 'Выйти',

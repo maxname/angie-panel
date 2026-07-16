@@ -22,30 +22,17 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DefaultSitePicker } from '@/components/default-site-picker'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import {
   api,
   ApiError,
-  type DefaultSite,
   type ImportResult,
   type SettingsResponse,
 } from '@/lib/api'
 import { toast } from '@/lib/toast'
 
-const DEFAULT_SITE_OPTIONS: DefaultSite[] = [
-  'notfound',
-  'drop444',
-  'redirect',
-  'html',
-]
 
 export function SettingsPage() {
   const { t } = useTranslation()
@@ -351,20 +338,17 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
           <CardDescription>{t('settings.defaultSite.description')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-2 sm:max-w-xs">
-            <Label htmlFor="default-site">{t('settings.defaultSite.label')}</Label>
-            <Select value={defaultSite} onValueChange={setDefaultSite}>
-              <SelectTrigger id="default-site">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DEFAULT_SITE_OPTIONS.map((option) => (
-                  <SelectItem key={option} value={option}>
-                    {t(`settings.defaultSite.options.${option}`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="grid gap-2">
+            {/* A radiogroup, not a labelled field: the label names the group
+                rather than pointing at one control. */}
+            <span id="default-site-label" className="text-sm font-medium">
+              {t('settings.defaultSite.label')}
+            </span>
+            <DefaultSitePicker
+              value={defaultSite}
+              onChange={setDefaultSite}
+              aria-labelledby="default-site-label"
+            />
           </div>
           {defaultSite === 'redirect' && (
             <div className="grid gap-2 sm:max-w-md">

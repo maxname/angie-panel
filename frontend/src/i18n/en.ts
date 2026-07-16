@@ -71,8 +71,13 @@ export const en = {
     },
   },
   header: {
-    themeDark: 'Dark theme',
-    themeLight: 'Light theme',
+    theme: 'Theme',
+    // Names of the options, not of an action — the menu marks the current one.
+    themes: {
+      light: 'Light',
+      dark: 'Dark',
+      system: 'System',
+    },
     // The button shows the language you'd get; spell the action out for
     // anyone who only hears the accessible name.
     switchLanguage: 'Switch to {{lang}}',

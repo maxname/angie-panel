@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  Monitor,
   Moon,
   Network,
   Rocket,
@@ -26,6 +27,13 @@ import { useTranslation } from 'react-i18next'
 import { changeLanguage } from '@/i18n'
 
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
 import {
   Sidebar,
@@ -51,7 +59,7 @@ import {
 } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
-import { useTheme } from '@/theme/theme-context'
+import { THEMES, useTheme, type Theme } from '@/theme/theme-context'
 
 // The sidebar is grouped into labelled sections. The first section has no
 // label (the dashboard sits on its own above the groups).
@@ -319,17 +327,19 @@ function HeaderStatus({ pending }: { pending: number | null }) {
   )
 }
 
-/** Session controls, parked on the right of the header. All three are icons;
- *  the tooltip and the accessible name carry the meaning, and both name the
- *  target rather than the current state ("Switch to English", not "English"),
- *  since that is what the click does. */
+const THEME_ICONS = { light: Sun, dark: Moon, system: Monitor } as const
+
+/** Session controls, parked on the right of the header. Language and logout
+ *  are one-click icons, so their tooltip names the target ("Switch to
+ *  English"). Theme has three options and no sensible "next", so it opens a
+ *  menu and its icon reports the current choice instead. */
 function HeaderActions() {
   const { t, i18n } = useTranslation()
-  const { theme, toggleTheme } = useTheme()
+  const { theme, setTheme } = useTheme()
   const logoutMutation = useLogout()
 
   const next = i18n.resolvedLanguage === 'ru' ? 'en' : 'ru'
-  const themeLabel = theme === 'dark' ? t('header.themeLight') : t('header.themeDark')
+  const ThemeIcon = THEME_ICONS[theme]
   const languageLabel = t('header.switchLanguage', {
     lang: next === 'ru' ? 'Русский' : 'English',
   })
@@ -350,23 +360,34 @@ function HeaderActions() {
         <TooltipContent>{languageLabel}</TooltipContent>
       </Tooltip>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={toggleTheme}
-            aria-label={themeLabel}
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label={t('header.theme')}>
+                <ThemeIcon aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>{t('header.theme')}</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end">
+          <DropdownMenuRadioGroup
+            value={theme}
+            onValueChange={(value) => setTheme(value as Theme)}
           >
-            {theme === 'dark' ? (
-              <Sun aria-hidden="true" />
-            ) : (
-              <Moon aria-hidden="true" />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{themeLabel}</TooltipContent>
-      </Tooltip>
+            {THEMES.map((option) => {
+              const Icon = THEME_ICONS[option]
+              return (
+                <DropdownMenuRadioItem key={option} value={option}>
+                  <Icon aria-hidden="true" />
+                  {t(`header.themes.${option}`)}
+                </DropdownMenuRadioItem>
+              )
+            })}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <Separator orientation="vertical" className="mx-1 !h-4" />
 
