@@ -132,6 +132,7 @@ export const en = {
       generationHint: '+1 on every reload',
       unreachableNote: 'Angie status API unreachable — is Angie running?',
       connections: {
+        title: 'Client connections',
         active: 'Active',
         idle: 'Idle',
         accepted: 'Accepted',

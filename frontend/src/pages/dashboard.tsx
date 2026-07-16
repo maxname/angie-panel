@@ -229,24 +229,31 @@ function AngieStatusCard({ angie }: { angie: DashboardAngie }) {
 
         {angie.up ? (
           angie.connections !== null && (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatTile
-                label={t('dashboard.angie.connections.active')}
-                value={angie.connections.active}
-              />
-              <StatTile
-                label={t('dashboard.angie.connections.idle')}
-                value={angie.connections.idle}
-              />
-              <StatTile
-                label={t('dashboard.angie.connections.accepted')}
-                value={angie.connections.accepted}
-              />
-              <StatTile
-                label={t('dashboard.angie.connections.dropped')}
-                value={angie.connections.dropped}
-              />
-              <p className="col-span-2 text-xs text-muted-foreground sm:col-span-4">
+            // The tiles count one thing — client connections — and never said
+            // so: "Active" and "Accepted" have no subject without this.
+            <div className="space-y-2">
+              <span className="text-xs text-muted-foreground">
+                {t('dashboard.angie.connections.title')}
+              </span>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <StatTile
+                  label={t('dashboard.angie.connections.active')}
+                  value={angie.connections.active}
+                />
+                <StatTile
+                  label={t('dashboard.angie.connections.idle')}
+                  value={angie.connections.idle}
+                />
+                <StatTile
+                  label={t('dashboard.angie.connections.accepted')}
+                  value={angie.connections.accepted}
+                />
+                <StatTile
+                  label={t('dashboard.angie.connections.dropped')}
+                  value={angie.connections.dropped}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
                 {t('dashboard.angie.connections.note')}
               </p>
             </div>

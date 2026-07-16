@@ -129,6 +129,7 @@ export const ru: typeof en = {
       generationHint: '+1 при каждой перезагрузке',
       unreachableNote: 'Status API Angie недоступен — запущен ли Angie?',
       connections: {
+        title: 'Соединения клиентов',
         active: 'Активные',
         idle: 'Простаивающие',
         accepted: 'Принято',
