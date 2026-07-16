@@ -278,9 +278,10 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
   )
 }
 
-/** Session controls, parked on the right of the header. The language button
- *  names the language you'd switch TO, so it reads without hovering; theme and
- *  logout are icons whose meaning is carried by the tooltip. */
+/** Session controls, parked on the right of the header. All three are icons;
+ *  the tooltip and the accessible name carry the meaning, and both name the
+ *  target rather than the current state ("Switch to English", not "English"),
+ *  since that is what the click does. */
 function HeaderActions() {
   const { t, i18n } = useTranslation()
   const { theme, toggleTheme } = useTheme()
@@ -288,20 +289,25 @@ function HeaderActions() {
 
   const next = i18n.resolvedLanguage === 'ru' ? 'en' : 'ru'
   const themeLabel = theme === 'dark' ? t('header.themeLight') : t('header.themeDark')
+  const languageLabel = t('header.switchLanguage', {
+    lang: next === 'ru' ? 'Русский' : 'English',
+  })
 
   return (
     <div className="ml-auto flex items-center gap-1">
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => void changeLanguage(next)}
-        aria-label={t('header.switchLanguage', {
-          lang: next === 'ru' ? 'Русский' : 'English',
-        })}
-      >
-        <Languages aria-hidden="true" />
-        {next === 'ru' ? 'Русский' : 'English'}
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => void changeLanguage(next)}
+            aria-label={languageLabel}
+          >
+            <Languages aria-hidden="true" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{languageLabel}</TooltipContent>
+      </Tooltip>
 
       <Tooltip>
         <TooltipTrigger asChild>
