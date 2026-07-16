@@ -40,13 +40,16 @@ services:
     build:
       context: .
       dockerfile: angie/Dockerfile
-    command: ["angie", "-g", "daemon off;"]
+    # Start from the pre-issuance host, exactly as the panel writes it before a
+    # certificate exists. extra.d is tmpfs, so run.sh can overwrite that same
+    # file with the ready state in phase 2 — the panel's own re-apply.
+    command: ["sh", "-c", "cp /tmp/generated/pre/*.conf /etc/angie/extra.d/ && exec angie -g 'daemon off;'"]
     volumes:
       - ./angie/angie.conf:/etc/angie/angie.conf:ro
       - ./angie/http.d:/etc/angie/http.d:ro
-      - ./angie/host-https.conf:/tmp/host-https.conf:ro
+      - ./angie/generated:/tmp/generated:ro
     tmpfs:
-      - /etc/angie/extra.d   # writable spot for the phase-2 serving block
+      - /etc/angie/extra.d   # writable: the host file the harness re-applies
     ports:
       - "8100:8100"   # status API, for the harness to observe issuance
     networks:

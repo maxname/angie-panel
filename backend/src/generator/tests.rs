@@ -1497,3 +1497,164 @@ fn full_fileset_is_lint_clean() {
         );
     }
 }
+
+// ------------------------------------------------- e2e fixture binding
+
+/// The Angie config `e2e/run.sh` boots into pebble. It is derived from the
+/// generator here rather than written by hand: the harness exists to prove the
+/// panel's ACME structure really issues against a live CA, and that proves
+/// nothing about the panel if the file it runs has drifted from what the panel
+/// emits. Regenerate with
+/// `UPDATE_E2E_FIXTURE=1 cargo test -p angie-panel e2e_acme_fixture`.
+const E2E_ACME_PATH: &str = "../e2e/angie/http.d/10-acme.conf";
+/// The host file in its two states, under the name the panel really writes.
+/// The harness starts from `pre/` and overwrites it with `ready/` in phase 2 —
+/// the same re-apply the reconciler does when it observes the cert is issued.
+const E2E_HOST_FILE: &str = "20-host-1-test-example-com.conf";
+const E2E_HOST_PRE_DIR: &str = "../e2e/angie/generated/pre";
+const E2E_HOST_READY_DIR: &str = "../e2e/angie/generated/ready";
+
+const E2E_FIXTURE_HEADER: &str = "\
+# GENERATED — do not edit by hand.
+#
+# Derived from generator::gen_acme by the test of the same name in
+# backend/src/generator/tests.rs, which fails if this file drifts. Regenerate:
+#   UPDATE_E2E_FIXTURE=1 cargo test -p angie-panel e2e_acme_fixture
+#
+# One http-01 certificate, exactly as the panel emits it: the collector server
+# block on a unix socket carries `acme` + `server_name` (the authoritative SAN)
+# and drives issuance; it never serves traffic.
+#
+# Two deltas from production, applied by that test and no others:
+#   * the ACME directory points at pebble — the generator takes it from the
+#     certificate's `staging` flag, so it is not reachable from a fixture;
+#   * retry_after_error=5s (Angie's default is 2h) so the harness converges
+#     when pebble isn't ready at Angie's first attempt.
+";
+
+/// The pebble-flavoured e2e config, built from real generator output.
+fn e2e_acme_fixture() -> String {
+    // Pre-issuance: the state the harness starts from.
+    let cert = Certificate {
+        ready: false,
+        ..ready_cert(1, "web", &["test.example.com"])
+    };
+    let generated = gen_acme(&input(
+        vec![],
+        vec![cert],
+        settings(DefaultSite::NotFound, false),
+    ));
+
+    let production = format!("acme_client web {LE_PROD_DIRECTORY};");
+    assert!(
+        generated.contains(&production),
+        "the generator no longer emits `{production}`, so the e2e transform \
+         below is silently doing nothing — fix the transform:\n{generated}"
+    );
+    let pebbled = generated.replace(
+        &production,
+        "acme_client web https://pebble:14000/dir retry_after_error=5s;",
+    );
+    format!("{E2E_FIXTURE_HEADER}{pebbled}")
+}
+
+/// The proxy host the harness serves, in the state named by `ready`. It points
+/// at the harness's own origin (90-harness.conf) so the generated `proxy_pass`
+/// has something real to reach.
+fn e2e_host_fixture(ready: bool) -> String {
+    let cert = Certificate {
+        ready,
+        ..ready_cert(1, "web", &["test.example.com"])
+    };
+    let mut host = base_host(1, "test.example.com");
+    host.forward_host = "127.0.0.1".into();
+    host.forward_port = 8080;
+    host.certificate_id = Some(1);
+    let files = generate(&input(
+        vec![host],
+        vec![cert],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    files
+        .get(E2E_HOST_FILE)
+        .unwrap_or_else(|| {
+            panic!(
+                "the generator no longer emits {E2E_HOST_FILE}; it emits {:?} — \
+                 update E2E_HOST_FILE and the compose mount together",
+                files.keys().collect::<Vec<_>>()
+            )
+        })
+        .clone()
+}
+
+/// Assert a committed e2e fixture still equals generator output, or rewrite it
+/// under UPDATE_E2E_FIXTURE=1.
+#[track_caller]
+fn assert_e2e_fixture(path: PathBuf, actual: &str) {
+    if std::env::var("UPDATE_E2E_FIXTURE").is_ok() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, actual).unwrap();
+        return;
+    }
+    let committed = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    assert_eq!(
+        committed,
+        actual,
+        "{} no longer matches what the generator emits, so the ACME e2e is \
+         testing a config the panel never produces. Regenerate: \
+         UPDATE_E2E_FIXTURE=1 cargo test -p angie-panel e2e_",
+        path.display()
+    );
+}
+
+#[test]
+fn e2e_acme_fixture_is_generator_output() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert_e2e_fixture(root.join(E2E_ACME_PATH), &e2e_acme_fixture());
+}
+
+#[test]
+fn e2e_host_fixtures_are_generator_output() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert_e2e_fixture(
+        root.join(E2E_HOST_PRE_DIR).join(E2E_HOST_FILE),
+        &e2e_host_fixture(false),
+    );
+    assert_e2e_fixture(
+        root.join(E2E_HOST_READY_DIR).join(E2E_HOST_FILE),
+        &e2e_host_fixture(true),
+    );
+}
+
+/// The states must actually differ in the way the harness relies on, or phase 2
+/// would prove nothing: HTTP-only before issuance, a $acme_cert_* 443 block
+/// after.
+#[test]
+fn e2e_host_states_differ_as_the_harness_assumes() {
+    let pre = e2e_host_fixture(false);
+    let ready = e2e_host_fixture(true);
+    assert!(
+        !pre.contains("listen 443"),
+        "pre-issuance must be HTTP-only:\n{pre}"
+    );
+    assert!(
+        !pre.contains("$acme_cert_"),
+        "pre-issuance must not reference a cert:\n{pre}"
+    );
+    assert!(
+        ready.contains("listen 443 ssl;"),
+        "ready state must serve HTTPS:\n{ready}"
+    );
+    assert!(
+        ready.contains("ssl_certificate     $acme_cert_web;"),
+        "ready state must use the acme_client's cert variable:\n{ready}"
+    );
+    // Issuance is the collector block's job; a serving block carrying `acme`
+    // would be a different structure than the panel's.
+    assert!(
+        !ready.contains("acme web;"),
+        "serving block must not drive issuance:\n{ready}"
+    );
+}
