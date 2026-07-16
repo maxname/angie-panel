@@ -173,7 +173,7 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
       {/* Fixed to the content header's height (h-14) with a matching border so
           the two dividers form one continuous line — otherwise the brand block
           grows/shrinks with the menu button and the rules never meet. */}
-      <SidebarHeader className="h-14 justify-center border-b px-2 py-0">
+      <SidebarHeader className="h-14 justify-center border-b bg-header-sheen px-2 py-0">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
