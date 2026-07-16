@@ -109,12 +109,12 @@
        there is no room to lighten its top, so the light theme makes the bottom
        sink instead. Dark has the opposite problem and does the opposite. Same
        result either way: the top edge reads lighter than the bottom.
-       ΔL across the header is .012, the same as the paper-to-sidebar step —
-       which sounds like too much and isn't: that step is a hard edge, this is
-       the same distance smeared over 56px, and an edge is what the eye picks
-       up. Alpha is 8-bit once serialised, so the real choice was 4/255 (.009,
-       too quiet) or this 5/255; .018 and .020 are the same colour. */
-    --header-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0) 40%, rgb(40 33 29 / 0.02));
+       ΔL ~.027, which is over twice the paper-to-sidebar step and still reads
+       as less: that step is a hard edge, and edges are what the eye picks up,
+       not distances. A ramp over 56px needs the extra to register at all — at
+       .012 (the step's worth) it was invisible. Level with dark's .027, so the
+       two themes shade by the same amount. */
+    --header-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0) 40%, rgb(40 33 29 / 0.04));
     --field-inset: inset 0 1px 2px rgb(40 33 29 / 0.07), inset 0 -2px 3px rgb(255 255 255 / 0.25);
     /* Light at the top fading out — never a dark wash at the bottom. Dark
        text on a tint loses contrast as the tint darkens, and the destructive
