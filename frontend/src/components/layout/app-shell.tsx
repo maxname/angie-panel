@@ -98,8 +98,11 @@ const NAV_SECTIONS = [
 /** Number of staged-but-unapplied config changes (added + modified + removed
  *  managed files), polled from the apply preview. Drives the "unapplied
  *  changes" badge so a created host/cert isn't silently left un-applied.
- *  Shares the ['apply','preview'] cache with the Apply page. */
-function usePendingChanges(): number {
+ *  Shares the ['apply','preview'] cache with the Apply page.
+ *
+ *  null while we haven't heard back — the header says "applied" on 0, and
+ *  saying it before we know would be a lie, however brief. */
+function usePendingChanges(): number | null {
   const { data } = useQuery({
     queryKey: ['apply', 'preview'],
     queryFn: () => api.getApplyPreview(),
@@ -108,7 +111,7 @@ function usePendingChanges(): number {
     staleTime: 10_000,
   })
   if (!data) {
-    return 0
+    return null
   }
   return data.diff.added + data.diff.modified + data.diff.removed
 }
@@ -128,11 +131,12 @@ export function AppShell() {
         {t('nav.skipToContent')}
       </a>
 
-      <AppSidebar isAdmin={isAdmin} pending={pending} />
+      <AppSidebar isAdmin={isAdmin} pending={pending ?? 0} />
 
       <SidebarInset className="overflow-hidden">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger aria-label={t('nav.toggleSidebar')} />
+          <HeaderStatus pending={pending} />
           <HeaderActions />
         </header>
         {/* The scroll container stays full-width so the scrollbar sits at the
@@ -275,6 +279,43 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
         title={t('nav.toggleSidebar')}
       />
     </Sidebar>
+  )
+}
+
+/** Whether the running Angie config still matches the panel — the one thing
+ *  worth stating on every page, since the panel is only a staging area until
+ *  an apply. Pending changes link to where you fix that; otherwise it quietly
+ *  confirms the two are in sync.
+ *
+ *  Reads the apply preview the badge already polls, so it costs no extra
+ *  request. Angie's own health would be the other candidate here, but it is
+ *  a process fork per poll on the box, and the dashboard already shows it. */
+function HeaderStatus({ pending }: { pending: number | null }) {
+  const { t } = useTranslation()
+
+  if (pending === null) {
+    return null
+  }
+
+  if (pending > 0) {
+    return (
+      <Link
+        to="/apply"
+        className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm font-medium text-foreground hover:bg-accent"
+      >
+        <span className="size-2 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+        <span className="truncate">
+          {t('nav.pendingChanges', { count: pending })}
+        </span>
+      </Link>
+    )
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-2 px-2 py-1 text-sm text-muted-foreground">
+      <span className="size-2 shrink-0 rounded-full bg-success" aria-hidden="true" />
+      <span className="truncate">{t('header.applied')}</span>
+    </div>
   )
 }
 

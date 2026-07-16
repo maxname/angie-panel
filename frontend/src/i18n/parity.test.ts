@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import { en } from './en'
@@ -59,5 +62,35 @@ describe('pickLanguage', () => {
   it('defaults to English for an unsupported browser', () => {
     expect(pickLanguage(null, ['fr-FR', 'de-DE'])).toBe('en')
     expect(pickLanguage(null, [])).toBe('en')
+  })
+})
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = join(dir, e.name)
+    if (e.isDirectory()) return sourceFiles(full)
+    return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)
+      ? [full]
+      : []
+  })
+}
+
+// A key that doesn't exist renders as the literal `some.key` on screen, and
+// nothing else catches it: the parity test above compares the catalogues to
+// each other, not to what the code actually asks for. Only literal keys are
+// checked — `t(\`users.roles.${role}\`)` and `t(item.labelKey)` can't be
+// resolved without running the app, so the regex requires the string to close
+// the argument list.
+describe('t() call sites', () => {
+  it('reference keys that exist', () => {
+    const known = new Set(keys(en as Tree))
+    const missing: string[] = []
+    for (const file of sourceFiles('src')) {
+      const src = readFileSync(file, 'utf8')
+      for (const m of src.matchAll(/\bt\(\s*'([^']+)'\s*[,)]/g)) {
+        if (!known.has(m[1])) missing.push(`${file}: t('${m[1]}')`)
+      }
+    }
+    expect(missing).toEqual([])
   })
 })

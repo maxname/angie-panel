@@ -76,6 +76,9 @@ export const en = {
     // The button shows the language you'd get; spell the action out for
     // anyone who only hears the accessible name.
     switchLanguage: 'Switch to {{lang}}',
+    // Shown when the generated config matches what's on disk — i.e. the panel
+    // is not a staging area with work sitting in it.
+    applied: 'Configuration applied',
     logout: 'Log out',
   },
   login: {

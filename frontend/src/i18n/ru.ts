@@ -76,6 +76,7 @@ export const ru: typeof en = {
     themeDark: 'Тёмная тема',
     themeLight: 'Светлая тема',
     switchLanguage: 'Переключить на {{lang}}',
+    applied: 'Конфигурация применена',
     logout: 'Выйти',
   },
   login: {
