@@ -172,15 +172,26 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
       {/* Fixed to the content header's height (h-14) with a matching border so
           the two dividers form one continuous line — otherwise the brand block
           grows/shrinks with the menu button and the rules never meet. */}
-      <SidebarHeader className="h-14 justify-center border-b bg-header-sheen px-2 py-0">
+      <SidebarHeader className="h-14 justify-center border-b bg-header-sheen p-0">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
+            {/* The brand button fills the header edge to edge: no padding to
+                inset it, no radius to round it off the border. Collapsed, it
+                goes back to being a 32px button and gets its radius back. */}
+            <SidebarMenuButton
+              size="lg"
+              className="!h-14 rounded-none pl-2.5 group-data-[collapsible=icon]:!h-8 group-data-[collapsible=icon]:rounded-md"
+              asChild
+            >
               <Link to="/">
-                {/* The icon lives in a size-8 square so that in icon mode it
-                    exactly fills the collapsed 32px button (staying centred)
-                    and the brand text is pushed past the clip. */}
-                <div className="flex aspect-square size-8 shrink-0 items-center justify-center">
+                {/* pl-2.5 above is 10px, not a round number by accident: the
+                    28px mark has to sit centred on the nav icons' axis (24px
+                    from the sidebar edge), so it starts at 24 − 14. The text
+                    then falls 8px past it — the same optical gap the nav items
+                    have, which matters more here than sharing their text grid.
+                    In icon mode the cell grows to 32px to exactly fill the
+                    collapsed button and the brand text is pushed past the clip. */}
+                <div className="flex aspect-square size-7 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-8">
                   {/* alt="" — decorative: the product name sits next to it as
                       text, and a screen reader shouldn't say it twice. */}
                   <img src="/logo.png" alt="" className="!size-7" />
