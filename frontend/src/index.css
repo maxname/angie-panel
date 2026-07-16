@@ -99,7 +99,14 @@
        alert has none to spare (3.72:1 as it stands, see --destructive). */
     --surface-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0.07), rgb(255 255 255 / 0));
     --success: #065F46;
-    --warning: #92400E;
+    /* H 85°, not the amber 46° it was: at 46 the warning sat 19° from the
+       destructive red and read as "red, but weaker" — ΔE 7.6 between the two
+       texts. This is 14.7, at the same lightness, so the contrast is unchanged
+       (5.78 on its own tint). It also matches dark's #FBBF24, which was
+       already yellow at 84° — the two themes disagreed about what a warning
+       looks like. The tints stay indistinguishable either way: at 10% alpha
+       there isn't enough colour to carry a hue. */
+    --warning: #735600;
     --info: #1D4ED8;
     --border: #E3DEDC;
     --input: #D6D1CE;
