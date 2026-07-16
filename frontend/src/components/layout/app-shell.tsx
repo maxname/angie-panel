@@ -21,6 +21,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { LanguageMenu, ThemeMenu } from '@/components/preference-menus'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -143,12 +144,12 @@ export function AppShell() {
         >
           <div className="mx-auto w-full max-w-5xl">
             {me?.role === 'viewer' && (
-              <div
-                className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-warning"
-                role="status"
-              >
-                {t('common.readOnlyBanner')}
-              </div>
+              // A warning alert in everything but name until now — hand-rolled
+              // from the same tint, and so the one notice that stayed flat.
+              // role=status, not alert: it's a standing condition, not news.
+              <Alert variant="warning" role="status" className="mb-4">
+                <AlertDescription>{t('common.readOnlyBanner')}</AlertDescription>
+              </Alert>
             )}
             <Outlet />
           </div>
