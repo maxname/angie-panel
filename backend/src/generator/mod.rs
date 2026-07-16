@@ -1315,6 +1315,19 @@ fn host_features(
     // Custom response headers (server scope; inherited by every location).
     emit_response_headers(out, host);
 
+    // X-Cache-Status belongs to cache-assets.conf's feature but NOT to the
+    // snippet: add_header only inherits down while the lower level declares
+    // none, so one inside the location wipes every add_header above it — HSTS,
+    // Alt-Svc and the operator's custom headers all vanish, silently, with a
+    // config that still passes `angie -t`. Keeping every add_header at this one
+    // scope is what makes them coexist. Verified against Angie 1.11.8: with
+    // this line here all four headers ship, and on a location that never hits
+    // the cache the empty $upstream_cache_status makes Angie skip the header
+    // rather than send it blank.
+    if host.cache_assets {
+        let _ = writeln!(out, "    add_header X-Cache-Status $upstream_cache_status;");
+    }
+
     // block-exploits.conf is a package-owned snippet of server-level
     // `if (...) { return 444; }` rules; it is included at SERVER scope. The
     // linter verifies the path stays under snippets_dir.
