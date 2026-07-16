@@ -48,12 +48,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', resolvedTheme === 'dark')
-    // Keep the browser chrome (mobile address bar) matching the page background.
+    // Keep the browser chrome (mobile address bar) matching the page
+    // background. These are --background from index.css and have to be tracked
+    // by hand: the palette moved to warm paper and these two stayed on the old
+    // blue-grey, so the address bar was painting a colour the app no longer has.
     const meta = document.querySelector('meta[name="theme-color"]')
     if (meta) {
       meta.setAttribute(
         'content',
-        resolvedTheme === 'dark' ? '#0E141E' : '#F4F6F8',
+        resolvedTheme === 'dark' ? '#140F0C' : '#FDF8F5',
       )
     }
   }, [resolvedTheme])

@@ -2,11 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Hand-tuned per slot rather than one file scaled: at 16px the mark needs
+         the whole square, while iOS masks its own corners off the 180px one and
+         needs the margins left for it. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Matches the page background; ThemeProvider keeps it in sync with the
-         active theme. -->
-    <meta name="theme-color" content="#0E141E" />
+    <!-- The light --background: this is what paints before JS runs. From then
+         on ThemeProvider keeps it in sync with the active theme. -->
+    <meta name="theme-color" content="#FDF8F5" />
     <title>Angie Panel</title>
   </head>
   <body>
