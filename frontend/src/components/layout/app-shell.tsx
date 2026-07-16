@@ -214,22 +214,45 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
                     // staged but not yet applied, so a created host/cert isn't
                     // silently left inactive.
                     const showBadge = item.to === '/apply' && pending > 0
+                    const pendingLabel = t('nav.pendingChanges', { count: pending })
+                    // Name the count for screen readers and for the collapsed
+                    // tooltip — a bare "10" next to the item says nothing.
+                    const describedLabel = showBadge
+                      ? `${label} — ${pendingLabel}`
+                      : label
                     return (
                       <SidebarMenuItem key={item.to}>
                         <SidebarMenuButton
                           asChild
                           isActive={isActive(item.to, item.exact)}
-                          tooltip={label}
+                          tooltip={describedLabel}
                         >
-                          <Link to={item.to}>
+                          <Link
+                            to={item.to}
+                            aria-label={showBadge ? describedLabel : undefined}
+                          >
                             <item.icon aria-hidden="true" />
                             <span>{label}</span>
                           </Link>
                         </SidebarMenuButton>
                         {showBadge && (
-                          <SidebarMenuBadge className="rounded-full bg-primary text-primary-foreground">
-                            {pending}
-                          </SidebarMenuBadge>
+                          <>
+                            {/* Visual only — the link's aria-label already names
+                                the count, so don't announce it twice. */}
+                            <SidebarMenuBadge
+                              className="rounded-full bg-primary text-primary-foreground"
+                              aria-hidden="true"
+                            >
+                              {pending}
+                            </SidebarMenuBadge>
+                            {/* SidebarMenuBadge is hidden in icon mode, so the
+                                collapsed rail would lose the pending signal
+                                entirely — keep a dot there instead. */}
+                            <span
+                              className="pointer-events-none absolute top-1 right-1 hidden size-2 rounded-full bg-primary ring-2 ring-sidebar group-data-[collapsible=icon]:block"
+                              aria-hidden="true"
+                            />
+                          </>
                         )}
                       </SidebarMenuItem>
                     )
