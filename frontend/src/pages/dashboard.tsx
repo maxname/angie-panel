@@ -232,7 +232,10 @@ function AngieStatusCard({ angie }: { angie: DashboardAngie }) {
             // The tiles count one thing — client connections — and never said
             // so: "Active" and "Accepted" have no subject without this.
             <div className="space-y-2">
-              <span className="text-xs text-muted-foreground">
+              {/* Heavier than a Field label on purpose: in muted xs it reads as
+                  a fifth field next to Version, not as the heading the four
+                  tiles below hang off. */}
+              <span className="text-xs font-medium text-foreground">
                 {t('dashboard.angie.connections.title')}
               </span>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
