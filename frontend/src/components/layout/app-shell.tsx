@@ -9,7 +9,6 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
-  MoreVertical,
   Moon,
   Network,
   Rocket,
@@ -26,13 +25,8 @@ import { useTranslation } from 'react-i18next'
 
 import { changeLanguage } from '@/i18n'
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import {
   Sidebar,
   SidebarContent,
@@ -49,9 +43,13 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
-  useSidebar,
 } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/toaster'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useMe } from '@/lib/use-me'
 import { useTheme } from '@/theme/theme-context'
@@ -136,6 +134,7 @@ export function AppShell() {
       <SidebarInset className="overflow-hidden">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger aria-label={t('nav.toggleSidebar')} />
+          <HeaderActions />
         </header>
         {/* The scroll container stays full-width so the scrollbar sits at the
             viewport edge; the content inside is capped and centred so it never
@@ -288,6 +287,70 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
   )
 }
 
+/** Session controls, parked on the right of the header. The language button
+ *  names the language you'd switch TO, so it reads without hovering; theme and
+ *  logout are icons whose meaning is carried by the tooltip. */
+function HeaderActions() {
+  const { t, i18n } = useTranslation()
+  const { theme, toggleTheme } = useTheme()
+  const logoutMutation = useLogout()
+
+  const next = i18n.resolvedLanguage === 'ru' ? 'en' : 'ru'
+  const themeLabel = theme === 'dark' ? t('header.themeLight') : t('header.themeDark')
+
+  return (
+    <div className="ml-auto flex items-center gap-1">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => void changeLanguage(next)}
+        aria-label={t('header.switchLanguage', {
+          lang: next === 'ru' ? 'Русский' : 'English',
+        })}
+      >
+        <Languages aria-hidden="true" />
+        {next === 'ru' ? 'Русский' : 'English'}
+      </Button>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={toggleTheme}
+            aria-label={themeLabel}
+          >
+            {theme === 'dark' ? (
+              <Sun aria-hidden="true" />
+            ) : (
+              <Moon aria-hidden="true" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{themeLabel}</TooltipContent>
+      </Tooltip>
+
+      <Separator orientation="vertical" className="mx-1 !h-4" />
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => logoutMutation.mutate()}
+            disabled={logoutMutation.isPending}
+            aria-label={t('header.logout')}
+          >
+            <LogOut aria-hidden="true" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{t('header.logout')}</TooltipContent>
+      </Tooltip>
+    </div>
+  )
+}
+
 function useLogout() {
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -305,79 +368,27 @@ function userInitials(email: string): string {
   return (local.slice(0, 2) || '?').toUpperCase()
 }
 
-/** The footer identity row: an avatar + email/role that opens a dropdown with
- *  theme, language, and logout. Collapses to just the avatar in icon mode. */
+/** The footer identity row: who you are signed in as, and nothing to click —
+ *  theme, language and logout moved to the header. Collapses to the avatar
+ *  alone in icon mode. */
 function SidebarUser() {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { data: me } = useMe()
-  const { theme, toggleTheme } = useTheme()
-  const { isMobile } = useSidebar()
-  const logoutMutation = useLogout()
 
   const email = me?.email ?? ''
   const roleLabel = me ? t(`users.roles.${me.role}`) : ''
-  const next = i18n.resolvedLanguage === 'ru' ? 'en' : 'ru'
-
-  const avatar = (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary">
-      {userInitials(email)}
-    </span>
-  )
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <SidebarMenuButton
-          size="lg"
-          className="data-[state=open]:bg-sidebar-accent"
-          aria-label={email}
-        >
-          {avatar}
-          <div className="grid flex-1 text-left leading-tight">
-            <span className="truncate text-sm font-medium">{email}</span>
-            <span className="truncate text-xs text-muted-foreground">{roleLabel}</span>
-          </div>
-          <MoreVertical className="ml-auto size-4 text-muted-foreground" aria-hidden="true" />
-        </SidebarMenuButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side={isMobile ? 'bottom' : 'right'}
-        align="end"
-        sideOffset={8}
-        className="min-w-56"
-      >
-        <div className="flex items-center gap-2 p-1.5">
-          {avatar}
-          <div className="grid min-w-0 flex-1 text-left leading-tight">
-            <span className="truncate text-sm font-medium">{email}</span>
-            <span className="truncate text-xs text-muted-foreground">{roleLabel}</span>
-          </div>
-        </div>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            toggleTheme()
-          }}
-        >
-          {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
-          {theme === 'dark' ? t('header.themeLight') : t('header.themeDark')}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            void changeLanguage(next)
-          }}
-        >
-          <Languages aria-hidden="true" />
-          {next === 'ru' ? 'Русский' : 'English'}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => logoutMutation.mutate()}>
-          <LogOut aria-hidden="true" />
-          {t('header.logout')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <div className="flex items-center gap-2 p-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary">
+        {userInitials(email)}
+      </span>
+      <div className="grid min-w-0 flex-1 leading-tight group-data-[collapsible=icon]:hidden">
+        <span className="truncate text-sm font-medium">{email}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {roleLabel}
+        </span>
+      </div>
+    </div>
   )
 }

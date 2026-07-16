@@ -73,6 +73,9 @@ export const en = {
   header: {
     themeDark: 'Dark theme',
     themeLight: 'Light theme',
+    // The button shows the language you'd get; spell the action out for
+    // anyone who only hears the accessible name.
+    switchLanguage: 'Switch to {{lang}}',
     logout: 'Log out',
   },
   login: {
