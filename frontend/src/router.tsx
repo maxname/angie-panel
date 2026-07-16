@@ -3,28 +3,20 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   redirect,
 } from '@tanstack/react-router'
 
 import { AppShell } from '@/components/layout/app-shell'
 import { RouterError, RouterPending } from '@/components/router-fallbacks'
 import { api } from '@/lib/api'
-import { AccessListsPage } from '@/pages/access-lists'
-import { ApplyPage } from '@/pages/apply'
-import { AuditLogPage } from '@/pages/audit'
-import { BlocklistPage } from '@/pages/blocklist'
-import { CertificatesPage } from '@/pages/certificates'
-import { DnsProvidersPage } from '@/pages/dns-providers'
-import { DashboardPage } from '@/pages/dashboard'
-import { DeadHostsPage } from '@/pages/dead-hosts'
-import { HostsPage } from '@/pages/hosts'
+// Login and setup stay eager: they are the first paint for anyone without a
+// session, and they are small. Every page behind the auth guard is split out —
+// the panel is served by the ARM box it configures, so keeping ~120 kB of pages
+// the visitor isn't looking at out of the entry chunk saves parse time on a
+// modest CPU, not just bytes.
 import { LoginPage } from '@/pages/login'
-import { RedirectHostsPage } from '@/pages/redirect-hosts'
-import { SettingsPage } from '@/pages/settings'
 import { SetupPage } from '@/pages/setup'
-import { SniRoutersPage } from '@/pages/sni-routers'
-import { StreamsPage } from '@/pages/streams'
-import { UsersPage } from '@/pages/users'
 
 const rootRoute = createRootRoute({
   component: Outlet,
@@ -76,85 +68,85 @@ const appRoute = createRoute({
 const dashboardRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/',
-  component: DashboardPage,
+  component: lazyRouteComponent(() => import('@/pages/dashboard'), 'DashboardPage'),
 })
 
 const hostsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/hosts',
-  component: HostsPage,
+  component: lazyRouteComponent(() => import('@/pages/hosts'), 'HostsPage'),
 })
 
 const redirectHostsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/redirect-hosts',
-  component: RedirectHostsPage,
+  component: lazyRouteComponent(() => import('@/pages/redirect-hosts'), 'RedirectHostsPage'),
 })
 
 const deadHostsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/dead-hosts',
-  component: DeadHostsPage,
+  component: lazyRouteComponent(() => import('@/pages/dead-hosts'), 'DeadHostsPage'),
 })
 
 const streamsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/streams',
-  component: StreamsPage,
+  component: lazyRouteComponent(() => import('@/pages/streams'), 'StreamsPage'),
 })
 
 const sniRoutersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/sni-routers',
-  component: SniRoutersPage,
+  component: lazyRouteComponent(() => import('@/pages/sni-routers'), 'SniRoutersPage'),
 })
 
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/certificates',
-  component: CertificatesPage,
+  component: lazyRouteComponent(() => import('@/pages/certificates'), 'CertificatesPage'),
 })
 
 const dnsProvidersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/dns-providers',
-  component: DnsProvidersPage,
+  component: lazyRouteComponent(() => import('@/pages/dns-providers'), 'DnsProvidersPage'),
 })
 
 const accessListsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/access-lists',
-  component: AccessListsPage,
+  component: lazyRouteComponent(() => import('@/pages/access-lists'), 'AccessListsPage'),
 })
 
 const applyRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/apply',
-  component: ApplyPage,
+  component: lazyRouteComponent(() => import('@/pages/apply'), 'ApplyPage'),
 })
 
 const blocklistRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/blocklist',
-  component: BlocklistPage,
+  component: lazyRouteComponent(() => import('@/pages/blocklist'), 'BlocklistPage'),
 })
 
 const usersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/users',
-  component: UsersPage,
+  component: lazyRouteComponent(() => import('@/pages/users'), 'UsersPage'),
 })
 
 const auditRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/audit',
-  component: AuditLogPage,
+  component: lazyRouteComponent(() => import('@/pages/audit'), 'AuditLogPage'),
 })
 
 const settingsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings',
-  component: SettingsPage,
+  component: lazyRouteComponent(() => import('@/pages/settings'), 'SettingsPage'),
 })
 
 const routeTree = rootRoute.addChildren([
