@@ -75,12 +75,22 @@ inline `Authorization`-заголовки). Каталог `/var/lib/angie-panel
 панель создаёт TXT-запись через API провайдера, а доступы к провайдерам хранятся как секреты
 только-на-запись (`dns_cred:*`, не отдаются в GET и не попадают в бэкапы).
 
-Важно: at-rest эти доступы лежат **в открытом виде** в таблице `settings` SQLite — отдельного
-шифрования нет. Их конфиденциальность держится на правах на файл БД (`/var/lib/angie-panel`
-— 0700, БД — 0600) и на том, что панель работает от непривилегированного пользователя. Кто
-получил чтение файла БД (root или сам `angie-panel`), увидит токены DNS-провайдеров. Держите
-доступ к устройству и его бэкапам под контролем; выдавайте DNS-провайдерам минимально
-необходимые права (только управление `_acme-challenge`-записями, где провайдер это позволяет).
+At-rest эти доступы зашифрованы (ChaCha20-Poly1305): в таблице `settings` лежит
+`enc:v1:<hex>`, ключ — 32 случайных байта в `/var/lib/angie-panel/secret.key` (0600, создаётся
+при первом запуске). Токены, записанные до появления шифрования, запечатываются автоматически
+при старте панели.
+
+Что это даёт и чего не даёт. Ключ лежит **рядом с БД и под тем же владельцем**, поэтому от
+атакующего, который уже выполняется как `angie-panel` или root, это не защищает — ему доступны
+оба файла. Защищает это от **БД, уехавшей без ключа**: скопированный `panel.db`, rsync-бэкап,
+снапшот ФС, образ диска, дамп, отданный на отладку. Раньше в них токены читались через
+`strings`, теперь это шифротекст. Отсюда правило: не кладите `secret.key` в тот же бэкап, что
+и БД, — бэкап с обоими ровно так же чувствителен, как открытый текст. Потеря `secret.key`
+означает, что доступы надо ввести заново (остальные данные не затронуты).
+
+Независимо от шифрования: держите доступ к устройству и его бэкапам под контролем; выдавайте
+DNS-провайдерам минимально необходимые права (только управление `_acme-challenge`-записями,
+где провайдер это позволяет).
 
 ---
 
@@ -113,3 +123,8 @@ inline `Authorization`-заголовки). Каталог `/var/lib/angie-panel
   contains secrets — advanced-snippet contents and basic-auth password hashes — so treat the file
   as sensitive. On import those hashes are shape-checked as bcrypt (they land in an htpasswd file).
   `/var/lib/angie-panel` is 0700, the DB 0600.
+- **DNS provider credentials are encrypted at rest** (ChaCha20-Poly1305; key in
+  `secret.key`, 0600, beside the DB). The key shares the DB's owner, so this does not stop an
+  attacker already running as `angie-panel`/root — it stops the credentials leaking with a DB
+  that travels *without* its key (backups, snapshots, a copied `panel.db`). Don't put
+  `secret.key` in the same backup as the DB.

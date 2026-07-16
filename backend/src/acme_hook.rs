@@ -72,12 +72,26 @@ async fn profile_creds(
     ptype: &ProviderDef,
 ) -> Option<Vec<(String, String)>> {
     let key = profile_id.to_string();
+    // Credentials are sealed at rest; unseal them here (and only here — the
+    // generic `setting` helper also serves the un-sealed hook token).
+    let secret = crate::secretbox::load_or_create_key(&state.cfg.data_dir).ok()?;
     let mut out = Vec::with_capacity(ptype.fields.len());
     for field in ptype.fields {
-        let v = setting(state, &dns_providers::cred_key(&key, field.env)).await;
-        if v.is_empty() {
+        let stored = setting(state, &dns_providers::cred_key(&key, field.env)).await;
+        if stored.is_empty() {
             return None;
         }
+        let v = match crate::secretbox::open(&secret, &stored) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    field = field.env,
+                    error = %e,
+                    "cannot open a stored DNS credential — re-enter it in the panel"
+                );
+                return None;
+            }
+        };
         out.push((field.env.to_string(), v));
     }
     Some(out)
@@ -528,13 +542,41 @@ fn reject_unknown_fields(ptype: &ProviderDef, creds: &HashMap<String, String>) -
     Ok(())
 }
 
-/// Store a profile's credentials (write-only) under `dns_cred:<id>:<env>`.
+/// Store a profile's credentials (write-only) under `dns_cred:<id>:<env>`,
+/// sealed with the data-dir key so a database that travels without that key
+/// (backup, snapshot, copied panel.db) carries ciphertext rather than the
+/// provider's API token. See `secretbox` for what this does and does not buy.
 async fn store_creds(state: &AppState, id: i64, creds: &HashMap<String, String>) -> ApiResult<()> {
     let key = id.to_string();
+    let secret =
+        crate::secretbox::load_or_create_key(&state.cfg.data_dir).map_err(ApiError::internal)?;
     for (env, value) in creds {
-        crate::repo::set_setting(&state.db, &dns_providers::cred_key(&key, env), value.trim())
+        let sealed = crate::secretbox::seal(&secret, value.trim()).map_err(ApiError::internal)?;
+        crate::repo::set_setting(&state.db, &dns_providers::cred_key(&key, env), &sealed)
             .await
             .map_err(ApiError::internal)?;
     }
     Ok(())
+}
+
+/// Seal any credential still stored in the clear from before encryption landed.
+/// Runs once at startup; after it, no plaintext token remains in the settings
+/// table. Idempotent — already-sealed values are skipped.
+pub async fn seal_legacy_credentials(state: &AppState) -> anyhow::Result<usize> {
+    let all = crate::repo::all_settings(&state.db).await?;
+    let legacy: Vec<(String, String)> = all
+        .into_iter()
+        .filter(|(k, v)| dns_providers::is_cred_key(k) && !crate::secretbox::is_sealed(v))
+        .collect();
+    if legacy.is_empty() {
+        return Ok(0);
+    }
+    let secret = crate::secretbox::load_or_create_key(&state.cfg.data_dir)?;
+    let mut sealed_count = 0;
+    for (k, v) in legacy {
+        let sealed = crate::secretbox::seal(&secret, &v)?;
+        crate::repo::set_setting(&state.db, &k, &sealed).await?;
+        sealed_count += 1;
+    }
+    Ok(sealed_count)
 }

@@ -22,6 +22,7 @@ mod model;
 mod other_hosts;
 mod reconcile;
 mod repo;
+mod secretbox;
 mod security;
 mod settings;
 mod sni_routers;
@@ -129,6 +130,14 @@ async fn serve(cfg: config::PanelConfig, cfg_path: PathBuf) -> anyhow::Result<()
     let state = Arc::new(AppState::new(cfg, cfg_path, pool));
 
     auth::bootstrap_setup_token(&state).await?;
+
+    // Seal any DNS credential written before encryption-at-rest landed, so no
+    // plaintext token survives an upgrade.
+    match acme_hook::seal_legacy_credentials(&state).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("sealed {n} DNS credential value(s) stored in the clear"),
+        Err(e) => tracing::error!(error = %e, "could not seal legacy DNS credentials"),
+    }
 
     // Crash recovery (PLAN.md §2.2): if a prior apply was interrupted, restore
     // the live config from the last snapshot when it no longer validates.

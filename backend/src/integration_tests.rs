@@ -1779,6 +1779,80 @@ async fn audit_log_records_mutations_and_is_admin_only() {
 }
 
 #[tokio::test]
+async fn dns_credentials_are_sealed_at_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/dns-credentials",
+            Some(json!({"provider":"cloudflare","name":"CF",
+                "credentials":{"CF_Token":"super-secret-token"}})),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let id = body_json(res).await["id"].as_i64().unwrap();
+
+    // The whole point: a database read on its own must not yield the token.
+    let pool = crate::db::connect(dir.path()).await.unwrap();
+    let stored = crate::repo::get_setting(&pool, &format!("dns_cred:{id}:CF_Token"))
+        .await
+        .unwrap()
+        .expect("credential row");
+    assert!(
+        crate::secretbox::is_sealed(&stored),
+        "stored credential must be sealed, got {stored}"
+    );
+    assert!(!stored.contains("super-secret-token"));
+
+    // …and it still opens back to the plaintext the hook needs.
+    let key = crate::secretbox::load_or_create_key(dir.path()).unwrap();
+    assert_eq!(
+        crate::secretbox::open(&key, &stored).unwrap(),
+        "super-secret-token"
+    );
+}
+
+#[tokio::test]
+async fn legacy_plaintext_credentials_are_sealed_on_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    // A pre-encryption install: the token sits in the clear.
+    crate::repo::set_setting(&state.db, "dns_cred:7:CF_Token", "legacy-token")
+        .await
+        .unwrap();
+
+    let sealed = crate::acme_hook::seal_legacy_credentials(&state)
+        .await
+        .unwrap();
+    assert_eq!(sealed, 1);
+
+    let stored = crate::repo::get_setting(&state.db, "dns_cred:7:CF_Token")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(crate::secretbox::is_sealed(&stored));
+    assert!(!stored.contains("legacy-token"));
+    let key = crate::secretbox::load_or_create_key(dir.path()).unwrap();
+    assert_eq!(
+        crate::secretbox::open(&key, &stored).unwrap(),
+        "legacy-token"
+    );
+
+    // Idempotent — a second startup seals nothing.
+    assert_eq!(
+        crate::acme_hook::seal_legacy_credentials(&state)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn hosts_revision_tracks_sni_router_edits() {
     let dir = tempfile::tempdir().unwrap();
     let state = test_state(dir.path()).await;
