@@ -172,15 +172,22 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
       {/* Fixed to the content header's height (h-14) with a matching border so
           the two dividers form one continuous line — otherwise the brand block
           grows/shrinks with the menu button and the rules never meet. */}
-      <SidebarHeader className="h-14 justify-center border-b bg-header-sheen p-0">
+      {/* Collapsed, the padding comes back: the nav column is inset by its
+          group's p-2, and without the same inset here the mark would sit 8px
+          left of the icons it is supposed to line up with. */}
+      <SidebarHeader className="h-14 justify-center border-b bg-header-sheen p-0 group-data-[collapsible=icon]:p-2">
         <SidebarMenu>
           <SidebarMenuItem>
             {/* The brand button fills the header edge to edge: no padding to
                 inset it, no radius to round it off the border. Collapsed, it
-                goes back to being a 32px button and gets its radius back. */}
+                goes back to being a 32px button and gets its radius back.
+                transition-none: the base variant animates width/height/padding,
+                but all three only matter to the button's own box — the mark
+                sits on axis 24 either way and must not move. Animating them
+                slides it there instead, which is the one thing to avoid. */}
             <SidebarMenuButton
               size="lg"
-              className="!h-14 rounded-none pl-2.5 group-data-[collapsible=icon]:!h-8 group-data-[collapsible=icon]:rounded-md"
+              className="!h-14 rounded-none pl-2.5 transition-none group-data-[collapsible=icon]:!h-8 group-data-[collapsible=icon]:rounded-md"
               asChild
             >
               <Link to="/">
