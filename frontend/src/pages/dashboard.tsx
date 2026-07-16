@@ -521,10 +521,14 @@ function Field({
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span>{children}</span>
-      {hint !== undefined && (
-        <span className="text-xs text-muted-foreground/80">{hint}</span>
-      )}
+      {/* Baseline, not centre: the value is mono and the hint is two sizes
+          smaller, so anything else has them floating past each other. */}
+      <span className="flex items-baseline gap-2">
+        {children}
+        {hint !== undefined && (
+          <span className="text-xs text-muted-foreground/80">{hint}</span>
+        )}
+      </span>
     </div>
   )
 }
