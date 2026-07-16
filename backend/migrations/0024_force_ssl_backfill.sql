@@ -1,0 +1,26 @@
+-- Backfill force_ssl so the now-working toggle does not silently downgrade
+-- existing hosts to cleartext.
+--
+-- Until now gen_host() never read proxy_hosts.force_ssl: the :80 -> :443
+-- redirect was emitted for EVERY host with a ready certificate, whatever the
+-- flag said. The column defaults to 0 and the UI shipped it as 0, so nearly
+-- every stored host has force_ssl = 0 while actually redirecting in
+-- production. Now that the generator honours the flag, those hosts would stop
+-- redirecting and start serving plain HTTP on :80 the next time the config is
+-- applied.
+--
+-- Setting force_ssl = 1 wherever a certificate is attached reproduces the old
+-- behaviour exactly, including for a certificate that has not been issued yet:
+-- the redirect stays gated on `ready` either way, so a pending host serves
+-- HTTP now and redirects once issuance completes — same as before.
+--
+-- Hosts with no certificate keep force_ssl = 0. They have no :443 to redirect
+-- to, so the flag is inert; leaving it off means attaching a certificate later
+-- is a deliberate choice rather than a surprise redirect.
+UPDATE proxy_hosts SET force_ssl = 1 WHERE certificate_id IS NOT NULL;
+
+-- The column keeps its `DEFAULT 0` on purpose: every INSERT in repo.rs binds
+-- force_ssl explicitly, so the SQL default is never exercised, and rebuilding
+-- the table (SQLite cannot ALTER a default in place) would risk far more than
+-- it buys. The real creation default now lives in ProxyHostInput
+-- (#[serde(default = "default_true")]) and the host editor form.

@@ -31,7 +31,9 @@ fn settings(default_site: DefaultSite, ipv6: bool) -> EffectiveSettings {
     }
 }
 
-/// A minimal, all-toggles-off host. Callers mutate fields they care about.
+/// A minimal host: every optional toggle off, except the ones the product
+/// turns on by default (http2, force_ssl). Callers mutate fields they care
+/// about. force_ssl is inert here until a caller attaches a ready certificate.
 fn base_host(id: i64, domain: &str) -> ProxyHost {
     ProxyHost {
         id,
@@ -44,7 +46,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         cache_assets: false,
         http2: true,
         http3: false,
-        force_ssl: false,
+        force_ssl: true,
         hsts: false,
         hsts_subdomains: false,
         trust_forwarded_proto: false,
@@ -639,6 +641,50 @@ fn golden_https_host_with_cert() {
     let (name, body) = only_host_file(&files);
     assert_eq!(name, "20-host-7-secure-example-com.conf");
     assert_golden("20-host-https.conf", body);
+}
+
+#[test]
+fn golden_https_host_force_ssl_off() {
+    // Force SSL off with a ready certificate: :80 keeps serving the site over
+    // plain HTTP (no 301) next to the :443 server, and both carry the same
+    // status_zone — Angie aggregates them. Regression guard: the :80 redirect
+    // used to be emitted for every host with a ready cert, ignoring the flag.
+    let mut host = base_host(7, "secure.example.com");
+    host.certificate_id = Some(42);
+    host.force_ssl = false;
+    host.http2 = true;
+    let cert = ready_cert(42, "secure", &["secure.example.com"]);
+    let files = generate(&input(
+        vec![host],
+        vec![cert],
+        settings(DefaultSite::NotFound, true),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(
+        !body.contains("return 301"),
+        "force_ssl=false must not redirect"
+    );
+    assert!(body.contains("listen 443 ssl;"), "TLS is still served");
+    assert_golden("20-host-https-no-force-ssl.conf", body);
+}
+
+#[test]
+fn force_ssl_needs_a_ready_cert() {
+    // force_ssl is inert without a certificate to redirect to: emitting the 301
+    // would bounce visitors into a TLS error during the first-issuance window
+    // (PLAN.md §4). base_host already has force_ssl = true.
+    let host = base_host(1, "app.example.com");
+    assert!(host.force_ssl);
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(!body.contains("return 301"), "no cert -> no redirect");
+    assert!(!body.contains("listen 443"), "no cert -> no TLS listener");
 }
 
 #[test]

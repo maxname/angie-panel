@@ -217,6 +217,67 @@ describe('host editor rate limiting', () => {
     expect(body.http3).toBe(true)
   })
 
+  it('defaults Force SSL on for a new host and submits it', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'SSL' }))
+    expect(screen.getByLabelText('Force SSL')).toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.force_ssl).toBe(true)
+  })
+
+  it('submits force_ssl false when Force SSL is switched off', async () => {
+    // The toggle is a real opt-out: the generator only emits the :80 -> :443
+    // redirect when this is true.
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await fillValidBasics(user)
+    await user.click(screen.getByRole('tab', { name: 'SSL' }))
+    await user.click(screen.getByLabelText('Force SSL'))
+    expect(screen.getByLabelText('Force SSL')).not.toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.force_ssl).toBe(false)
+  })
+
   it('submits the mTLS CA bundle from the SSL tab', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {

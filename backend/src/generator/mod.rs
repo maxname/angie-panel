@@ -1166,18 +1166,25 @@ fn gen_host(
     out.push('\n');
 
     if https {
-        // Separate :80 server whose only job is the force-ssl redirect. The
-        // redirect is UNCONDITIONAL — no /.well-known exception — because the
-        // ACME module intercepts http-01 challenges at the POST_READ phase,
-        // before `return` runs (PLAN.md §4).
-        let _ = writeln!(out, "server {{");
-        let _ = writeln!(out, "    listen 80;");
-        if ipv6 {
-            let _ = writeln!(out, "    listen [::]:80;");
+        if host.force_ssl {
+            // Separate :80 server whose only job is the force-ssl redirect. The
+            // redirect carries no /.well-known exception — the ACME module
+            // intercepts http-01 challenges at the POST_READ phase, before
+            // `return` runs (PLAN.md §4).
+            let _ = writeln!(out, "server {{");
+            let _ = writeln!(out, "    listen 80;");
+            if ipv6 {
+                let _ = writeln!(out, "    listen [::]:80;");
+            }
+            let _ = writeln!(out, "    server_name {server_names};");
+            let _ = writeln!(out, "    return 301 https://$host$request_uri;");
+            let _ = writeln!(out, "}}");
+        } else {
+            // Force SSL off: :80 serves the site over plain HTTP alongside the
+            // :443 server below. Both carry the same status_zone; Angie
+            // aggregates the two servers' metrics into it (verified on 1.11.8).
+            gen_http_server(&mut out, &zone, &server_names, ipv6, host, input)?;
         }
-        let _ = writeln!(out, "    server_name {server_names};");
-        let _ = writeln!(out, "    return 301 https://$host$request_uri;");
-        let _ = writeln!(out, "}}");
         out.push('\n');
 
         // The real :443 server.
@@ -1235,19 +1242,38 @@ fn gen_host(
         host_features(&mut out, host, input, /* tls */ true)?;
         let _ = writeln!(out, "}}");
     } else {
-        // Plain-HTTP host: no 443, no force-ssl redirect.
-        let _ = writeln!(out, "server {{");
-        let _ = writeln!(out, "    listen 80;");
-        if ipv6 {
-            let _ = writeln!(out, "    listen [::]:80;");
-        }
-        let _ = writeln!(out, "    server_name {server_names};");
-        let _ = writeln!(out, "    status_zone {zone};");
-        host_features(&mut out, host, input, /* tls */ false)?;
-        let _ = writeln!(out, "}}");
+        // No (ready) certificate: HTTP-only, and the force-ssl redirect is
+        // suppressed regardless of the flag — redirecting to a :443 we don't
+        // render would send visitors into a TLS error (PLAN.md §4
+        // first-issuance window). The redirect returns on its own once the
+        // certificate goes ready.
+        gen_http_server(&mut out, &zone, &server_names, ipv6, host, input)?;
     }
 
     Ok((filename, out))
+}
+
+/// The `:80` server that serves the site over plain HTTP. Used both for hosts
+/// with no ready certificate and for hosts that have one but leave Force SSL
+/// off.
+fn gen_http_server(
+    out: &mut String,
+    zone: &str,
+    server_names: &str,
+    ipv6: bool,
+    host: &ProxyHost,
+    input: &GeneratorInput,
+) -> anyhow::Result<()> {
+    let _ = writeln!(out, "server {{");
+    let _ = writeln!(out, "    listen 80;");
+    if ipv6 {
+        let _ = writeln!(out, "    listen [::]:80;");
+    }
+    let _ = writeln!(out, "    server_name {server_names};");
+    let _ = writeln!(out, "    status_zone {zone};");
+    host_features(out, host, input, /* tls */ false)?;
+    let _ = writeln!(out, "}}");
+    Ok(())
 }
 
 /// Body shared between the HTTP-only and HTTPS server blocks: HSTS, shared

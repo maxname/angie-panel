@@ -847,7 +847,10 @@ pub struct ProxyHostInput {
     pub http2: bool,
     #[serde(default)]
     pub http3: bool,
-    #[serde(default)]
+    // Secure by default: a host that gets a certificate redirects HTTP to it
+    // unless the caller opts out. Only takes effect once the certificate is
+    // ready — see gen_host().
+    #[serde(default = "default_true")]
     pub force_ssl: bool,
     #[serde(default)]
     pub hsts: bool,

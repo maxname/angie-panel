@@ -148,7 +148,7 @@ function initialState(host: Host | null): FormState {
       cache_assets: false,
       http2: true,
       http3: false,
-      force_ssl: false,
+      force_ssl: true,
       hsts: false,
       hsts_subdomains: false,
       trust_forwarded_proto: false,
