@@ -11,10 +11,10 @@ import { AppShell } from '@/components/layout/app-shell'
 import { RouterError, RouterPending } from '@/components/router-fallbacks'
 import { api } from '@/lib/api'
 // Login and setup stay eager: they are the first paint for anyone without a
-// session, and they are small. Every page behind the auth guard is split out —
-// the panel is served by the ARM box it configures, so keeping ~120 kB of pages
-// the visitor isn't looking at out of the entry chunk saves parse time on a
-// modest CPU, not just bytes.
+// session, and they are small. Every page behind the auth guard is split out,
+// so opening the dashboard doesn't also download and parse the audit log, the
+// settings page and twelve others. (The SBC only serves these bytes — it's the
+// admin's browser, possibly on a phone over a VPN, that pays for them.)
 import { LoginPage } from '@/pages/login'
 import { SetupPage } from '@/pages/setup'
 

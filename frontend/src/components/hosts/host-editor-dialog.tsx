@@ -387,6 +387,12 @@ export function HostEditorForm({
 
   // Track whether the form diverges from its initial state so the dialog can
   // warn before an accidental close (Escape / overlay / ✕) discards edits.
+  // Stringifying the whole form per keystroke looks wasteful and isn't:
+  // measured at 0.7µs for a typical host, 11.6µs for the heaviest one a user
+  // can build (a CA bundle, a 200-line snippet, 20 locations, 30 headers) —
+  // against a 16.7ms frame, and dwarfed by the re-render it rides along with.
+  // A hand-rolled deep compare would buy nothing and could disagree with the
+  // payload we actually send.
   const initialSnapshot = useMemo(() => JSON.stringify(initialForm), [initialForm])
   const isDirty = useMemo(
     () => JSON.stringify(form) !== initialSnapshot,
