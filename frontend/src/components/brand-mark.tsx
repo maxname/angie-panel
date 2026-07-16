@@ -1,34 +1,25 @@
 import { cn } from '@/lib/utils'
 
 /**
- * The Angie "A", in the accent's hue.
+ * The Angie "A", in the accent's hue (293°) with the gradient carried by
+ * lightness — purple to dark purple, at the light button's weight.
  *
- * Two files rather than one, because one cannot work. At hue 293° there is no
- * lightness that scores 4.5 against both the light sidebar (#F9F4F1) and the
- * dark one (#1B1613) — the requirements exclude each other. Aiming between them
- * is what makes the mark look disabled next to the button. This is the same
- * reason --primary is a pair (#6D28D9 / #7C3AED); a raster mark just has to
- * carry its pair as files. The light one sits at the button's weight (L .50,
- * C .22 against its .49 / .24); the dark one is lifted to L .60 so it reads on
- * charcoal, which also lands it brighter than the dark button — the right side
- * of wrong for a brand mark.
+ * One file for both themes, by choice, and it favours the light one. Measured
+ * against the sidebar it sits on: 6.5 contrast on #F9F4F1, but 2.60 on
+ * #1B1613 (3.30 at its lightest, 1.73 at its darkest) — under the 3.0 a
+ * graphic wants. No single weight clears both; that is why --primary is a pair
+ * (#6D28D9 / #7C3AED). So this is a choice of theme, not a compromise serving
+ * both, and the dark sidebar is where it is paid for.
  *
- * Both are in the markup, and CSS picks: switching themes fetches nothing and
- * cannot flash. alt="" on both — decorative, since the product name is always
- * next to it as text.
+ * To give dark its own again: regenerate with a lighter median (L .60 reads at
+ * ~5 there and keeps chroma clipping to 6%; L .66 looks obvious but purple's
+ * gamut runs out and flattens 43% of the pixels), then render two <img> and
+ * swap them on `dark:` — both sit in the markup, so CSS picks and nothing is
+ * fetched on a theme change. scratchpad/extract-a.swift takes hue, median
+ * lightness, median chroma and hue-spread as its 4th–7th arguments.
  *
- * Regenerate either from the source artwork with scratchpad/extract-a.swift:
- * hue, then median lightness and chroma, are its 4th–6th arguments.
+ * alt="" — decorative: the product name is always next to it as text.
  */
 export function BrandMark({ className }: { className?: string }) {
-  return (
-    <>
-      <img src="/logo.png" alt="" className={cn('dark:hidden', className)} />
-      <img
-        src="/logo-dark.png"
-        alt=""
-        className={cn('hidden dark:block', className)}
-      />
-    </>
-  )
+  return <img src="/logo.png" alt="" className={cn(className)} />
 }
