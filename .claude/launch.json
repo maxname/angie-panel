@@ -1,1 +1,27 @@
-{ "version":"0.0.1","configurations":[{"name":"angie-panel","runtimeExecutable":"bash","runtimeArgs":["-c","cd backend && exec cargo run -q -- serve --config ../dev/angie-panel.toml"],"port":8090}] }
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "angie-panel",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd backend && exec cargo run -q -- serve --config ../dev/angie-panel.toml"
+      ],
+      "port": 8090
+    },
+    {
+      "name": "frontend-dist",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "preview",
+        "--port",
+        "4173",
+        "--strictPort"
+      ],
+      "cwd": "frontend",
+      "port": 4173
+    }
+  ]
+}

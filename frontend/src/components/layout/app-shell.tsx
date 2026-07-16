@@ -24,6 +24,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { changeLanguage } from '@/i18n'
+
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -358,7 +360,7 @@ function SidebarUser() {
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault()
-            void i18n.changeLanguage(next)
+            void changeLanguage(next)
           }}
         >
           <Languages aria-hidden="true" />

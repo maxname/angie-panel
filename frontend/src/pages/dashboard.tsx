@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { StatusPill } from '@/components/certificate-status'
 import { DomainBadges } from '@/components/domain-badges'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -36,7 +37,6 @@ import {
   type DashboardUpstream,
 } from '@/lib/api'
 
-import { StatusPill } from './certificates'
 
 const CONFIGTEST_QUERY_KEY = ['system', 'configtest'] as const
 
