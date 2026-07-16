@@ -97,8 +97,14 @@
     --control-shadow: 0 1px 2px 0 rgb(40 33 29 / 0.12);
     /* A recess has two edges, not one: the rim above casts into it, and the
        floor bounces light back onto the rim below. Only the top shadow and it
-       reads as a stain rather than a hollow. */
-    --field-inset: inset 0 1px 2px rgb(40 33 29 / 0.07), inset 0 -1px 0 rgb(255 255 255 / 0.75);
+       reads as a stain rather than a hollow.
+       The bounce is blurred wider than the shadow that caused it (3px vs 2px)
+       — bounced light is diffuse. At 0 blur it was a drawn line, not light.
+       25%, not 90%: at 90% the bottom edge came out at luminance .990 against
+       the card's .977 — brighter than the surface it is supposedly reflecting
+       off, which is why it read as a white stripe. 25% lifts the rim by about
+       as much as the 7% ink above darkens it: a bevel, symmetric. */
+    --field-inset: inset 0 1px 2px rgb(40 33 29 / 0.07), inset 0 -2px 3px rgb(255 255 255 / 0.25);
     /* Light at the top fading out — never a dark wash at the bottom. Dark
        text on a tint loses contrast as the tint darkens, and the destructive
        alert has none to spare (3.72:1 as it stands, see --destructive). */
@@ -155,7 +161,7 @@
     --panel-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.40), 0 4px 12px -4px rgb(0 0 0 / 0.30),
         inset 0 1px 0 rgb(255 255 255 / 0.04);
     --control-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.07);
-    --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.32), inset 0 -1px 0 rgb(255 255 255 / 0.05);
+    --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.32), inset 0 -2px 3px rgb(255 255 255 / 0.07);
     /* 4%, not 5%: light text on the destructive tint has the least room
        (5.16:1), and the extra point would leave the top edge at 4.60 — over
        the line, but not by enough to spend on a gradient nobody can see. */
