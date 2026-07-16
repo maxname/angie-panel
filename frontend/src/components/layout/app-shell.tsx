@@ -30,7 +30,6 @@ import { Separator } from '@/components/ui/separator'
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -271,14 +270,6 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
         })}
       </SidebarContent>
 
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarUser />
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-
       <SidebarRail
         aria-label={t('nav.toggleSidebar')}
         title={t('nav.toggleSidebar')}
@@ -363,32 +354,3 @@ function useLogout() {
   })
 }
 
-function userInitials(email: string): string {
-  const local = email.split('@')[0] || email
-  return (local.slice(0, 2) || '?').toUpperCase()
-}
-
-/** The footer identity row: who you are signed in as, and nothing to click —
- *  theme, language and logout moved to the header. Collapses to the avatar
- *  alone in icon mode. */
-function SidebarUser() {
-  const { t } = useTranslation()
-  const { data: me } = useMe()
-
-  const email = me?.email ?? ''
-  const roleLabel = me ? t(`users.roles.${me.role}`) : ''
-
-  return (
-    <div className="flex items-center gap-2 p-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary">
-        {userInitials(email)}
-      </span>
-      <div className="grid min-w-0 flex-1 leading-tight group-data-[collapsible=icon]:hidden">
-        <span className="truncate text-sm font-medium">{email}</span>
-        <span className="truncate text-xs text-muted-foreground">
-          {roleLabel}
-        </span>
-      </div>
-    </div>
-  )
-}
