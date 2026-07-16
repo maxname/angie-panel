@@ -40,7 +40,7 @@ import {
 
 const CONFIGTEST_QUERY_KEY = ['system', 'configtest'] as const
 
-const EMERALD_BADGE =
+const SUCCESS_BADGE =
   'bg-success/10 text-success'
 
 export function DashboardPage() {
@@ -204,7 +204,7 @@ function AngieStatusCard({ angie }: { angie: DashboardAngie }) {
         <CardTitle>{t('dashboard.angie.title')}</CardTitle>
         <CardAction>
           {angie.up ? (
-            <Badge className={EMERALD_BADGE}>{t('dashboard.angie.running')}</Badge>
+            <Badge className={SUCCESS_BADGE}>{t('dashboard.angie.running')}</Badge>
           ) : (
             <Badge variant="destructive">{t('dashboard.angie.unreachable')}</Badge>
           )}
@@ -215,7 +215,10 @@ function AngieStatusCard({ angie }: { angie: DashboardAngie }) {
           <Field label={t('dashboard.angie.version')}>
             <span className="font-mono text-sm">{angie.version ?? '—'}</span>
           </Field>
-          <Field label={t('dashboard.angie.generation')}>
+          <Field
+            label={t('dashboard.angie.generation')}
+            hint={t('dashboard.angie.generationHint')}
+          >
             <span className="font-mono text-sm">
               {angie.generation !== null
                 ? formatNumber(angie.generation, i18n.language)
@@ -243,6 +246,9 @@ function AngieStatusCard({ angie }: { angie: DashboardAngie }) {
                 label={t('dashboard.angie.connections.dropped')}
                 value={angie.connections.dropped}
               />
+              <p className="col-span-2 text-xs text-muted-foreground sm:col-span-4">
+                {t('dashboard.angie.connections.note')}
+              </p>
             </div>
           )
         ) : (
@@ -395,7 +401,7 @@ function HostRow({ host }: { host: DashboardHost }) {
       </TableCell>
       <TableCell>
         {host.https_active ? (
-          <Badge className={EMERALD_BADGE}>{t('dashboard.hosts.https.on')}</Badge>
+          <Badge className={SUCCESS_BADGE}>{t('dashboard.hosts.https.on')}</Badge>
         ) : (
           <Badge variant="outline" className="text-muted-foreground">
             {t('dashboard.hosts.https.off')}
@@ -425,7 +431,7 @@ function HostRow({ host }: { host: DashboardHost }) {
       </TableCell>
       <TableCell className="pr-4">
         {host.enabled ? (
-          <Badge className={EMERALD_BADGE}>{t('hosts.status.enabled')}</Badge>
+          <Badge className={SUCCESS_BADGE}>{t('hosts.status.enabled')}</Badge>
         ) : (
           <Badge variant="outline" className="text-muted-foreground">
             {t('hosts.status.disabled')}
@@ -491,11 +497,22 @@ function formatNumber(value: number, language: string): string {
   return value.toLocaleString(language)
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+}) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs text-muted-foreground">{label}</span>
       <span>{children}</span>
+      {hint !== undefined && (
+        <span className="text-xs text-muted-foreground/80">{hint}</span>
+      )}
     </div>
   )
 }
@@ -563,7 +580,7 @@ function ConfigtestSection() {
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
               {report.ok ? (
-                <Badge className={EMERALD_BADGE}>{t('configtest.passed')}</Badge>
+                <Badge className={SUCCESS_BADGE}>{t('configtest.passed')}</Badge>
               ) : (
                 <Badge variant="destructive">{t('configtest.failed')}</Badge>
               )}

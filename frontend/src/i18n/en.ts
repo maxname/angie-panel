@@ -129,12 +129,14 @@ export const en = {
       unreachable: 'Unreachable',
       version: 'Version',
       generation: 'Config generation',
+      generationHint: '+1 on every reload',
       unreachableNote: 'Angie status API unreachable — is Angie running?',
       connections: {
         active: 'Active',
         idle: 'Idle',
         accepted: 'Accepted',
         dropped: 'Dropped',
+        note: 'Active and idle are right now. Accepted and dropped are running totals since Angie started; dropped ones were accepted, then closed without a response.',
       },
     },
     certs: {

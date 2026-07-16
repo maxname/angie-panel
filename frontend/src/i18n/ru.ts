@@ -126,12 +126,16 @@ export const ru: typeof en = {
       unreachable: 'Недоступен',
       version: 'Версия',
       generation: 'Поколение конфигурации',
+      generationHint: '+1 при каждой перезагрузке',
       unreachableNote: 'Status API Angie недоступен — запущен ли Angie?',
       connections: {
         active: 'Активные',
         idle: 'Простаивающие',
         accepted: 'Принято',
         dropped: 'Отброшено',
+        // The row mixes live state with running totals, which is what makes
+        // "1 active" next to "14 329 accepted" look like nonsense.
+        note: 'Активные и простаивающие — прямо сейчас. Принято и отброшено — накопительно с запуска Angie; отброшенные приняты, но закрыты без ответа.',
       },
     },
     certs: {
