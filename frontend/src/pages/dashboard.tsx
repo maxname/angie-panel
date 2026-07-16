@@ -231,14 +231,16 @@ function AngieStatusCard({ angie }: { angie: DashboardAngie }) {
           angie.connections !== null && (
             // The tiles count one thing — client connections — and never said
             // so: "Active" and "Accepted" have no subject without this.
-            <div className="space-y-2">
+            // Spacing carries the grouping: the heading stands off, while the
+            // note stays tucked against the tiles it explains.
+            <div>
               {/* Heavier than a Field label on purpose: in muted xs it reads as
                   a fifth field next to Version, not as the heading the four
                   tiles below hang off. */}
-              <span className="text-xs font-medium text-foreground">
+              <span className="block text-xs font-medium text-foreground">
                 {t('dashboard.angie.connections.title')}
               </span>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="mt-2.5 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <StatTile
                   label={t('dashboard.angie.connections.active')}
                   value={angie.connections.active}
@@ -256,7 +258,7 @@ function AngieStatusCard({ angie }: { angie: DashboardAngie }) {
                   value={angie.connections.dropped}
                 />
               </div>
-              <p className="text-xs text-muted-foreground">
+              <p className="mt-2 text-xs text-muted-foreground">
                 {t('dashboard.angie.connections.note')}
               </p>
             </div>
