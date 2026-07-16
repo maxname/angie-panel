@@ -242,7 +242,13 @@ function AppSidebar({ isAdmin, pending }: { isAdmin: boolean; pending: number })
                             {/* Visual only — the link's aria-label already names
                                 the count, so don't announce it twice. */}
                             <SidebarMenuBadge
-                              className="rounded-full bg-primary text-primary-foreground"
+                              // The badge carries its own indigo fill, so it must
+                              // keep its own text colour: SidebarMenuBadge repaints
+                              // the label sidebar-accent-foreground when the item is
+                              // active or hovered, which is dark slate on indigo.
+                              // Restating those variants lets tailwind-merge drop
+                              // them rather than leaving it to class order.
+                              className="rounded-full bg-primary text-primary-foreground peer-hover/menu-button:text-primary-foreground peer-data-active/menu-button:text-primary-foreground"
                               aria-hidden="true"
                             >
                               {pending}
