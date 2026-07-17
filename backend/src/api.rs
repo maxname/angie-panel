@@ -44,6 +44,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/hosts/{id}",
             get(hosts::get_one).put(hosts::update).delete(hosts::delete),
         )
+        .route("/hosts/{id}/health", get(hosts::health))
         .route("/hosts/{id}/enable", post(hosts::enable))
         .route("/hosts/{id}/disable", post(hosts::disable))
         .route("/certificates", get(certs::list).post(certs::create))

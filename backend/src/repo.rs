@@ -2076,9 +2076,6 @@ pub async fn insert_beat(
 
 /// The newest `limit` beats for a host+kind, newest first — what the uptime bar
 /// reads.
-// Unused until the API lands in the next step; kept here so the whole storage
-// shape lives in one place rather than arriving piecemeal.
-#[allow(dead_code)]
 pub async fn recent_beats(
     db: &SqlitePool,
     host_id: i64,

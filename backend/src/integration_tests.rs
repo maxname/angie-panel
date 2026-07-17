@@ -1955,3 +1955,86 @@ async fn host_health_checks_persist() {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(body_json(res).await["health_checks"], json!([]));
 }
+
+#[tokio::test]
+async fn health_settings_validate_and_surface_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Untouched: the response carries the built-in defaults, so the settings
+    // form has something to show without every install having written them.
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/settings", None, Some(&cookie)))
+        .await
+        .unwrap();
+    let body = body_json(res).await;
+    assert_eq!(body["effective"]["health_interval_secs"], json!(60));
+    assert_eq!(body["effective"]["health_retention_days"], json!(30));
+
+    // A zero interval would busy-loop the scheduler; reject it at the door.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/settings",
+            Some(json!({ "health_interval_secs": "0" })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // A real value sticks and comes back as the effective default.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/settings",
+            Some(json!({ "health_interval_secs": "120" })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(res).await["effective"]["health_interval_secs"],
+        json!(120)
+    );
+}
+
+#[tokio::test]
+async fn health_endpoint_returns_beats_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["mon.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.5","forward_port":80
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let id = body_json(res).await["id"].as_i64().unwrap();
+
+    // No beats yet (the scheduler never ran in a test), but the endpoint exists
+    // and answers with the shape the bar reads.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/hosts/{id}/health"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["beats"], json!([]));
+}

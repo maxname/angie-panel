@@ -217,6 +217,18 @@ pub async fn get_settings(
             "default_site": format!("{:?}", eff.default_site),
             "ipv6_enabled": eff.ipv6_enabled,
             "resolvers": eff.resolvers,
+            "health_interval_secs": map
+                .get(settings::KEY_HEALTH_INTERVAL)
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(crate::health::DEFAULT_INTERVAL_SECS),
+            "health_timeout_secs": map
+                .get(settings::KEY_HEALTH_TIMEOUT)
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(crate::health::DEFAULT_TIMEOUT_SECS),
+            "health_retention_days": map
+                .get(settings::KEY_HEALTH_RETENTION_DAYS)
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(crate::health::DEFAULT_RETENTION_DAYS),
         }
     })))
 }
@@ -233,6 +245,9 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     settings::KEY_IPV6_ENABLED,
     settings::KEY_RESOLVER_OVERRIDE,
     settings::KEY_ACME_EMAIL,
+    settings::KEY_HEALTH_INTERVAL,
+    settings::KEY_HEALTH_TIMEOUT,
+    settings::KEY_HEALTH_RETENTION_DAYS,
 ];
 
 pub async fn put_settings(
@@ -256,6 +271,16 @@ pub async fn put_settings(
         // it can't inject directives or a bogus address into the generated conf.
         if k == settings::KEY_RESOLVER_OVERRIDE && !v.trim().is_empty() {
             validate_resolver_override(v)?;
+        }
+        // Health defaults are plain positive integers. Reject 0 and junk here so
+        // the scheduler never has to defend against a "0s interval" busy-loop.
+        if matches!(
+            k.as_str(),
+            settings::KEY_HEALTH_INTERVAL
+                | settings::KEY_HEALTH_TIMEOUT
+                | settings::KEY_HEALTH_RETENTION_DAYS
+        ) {
+            validate_positive_int(k, v)?;
         }
         repo::set_setting(&state.db, k, v).await?;
     }
@@ -282,6 +307,16 @@ fn validate_resolver_override(v: &str) -> ApiResult<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_positive_int(key: &str, v: &str) -> ApiResult<()> {
+    match v.parse::<u32>() {
+        Ok(n) if n > 0 => Ok(()),
+        _ => Err(ApiError::bad_request(
+            "invalid_setting",
+            format!("{key} must be a positive whole number of seconds/days"),
+        )),
+    }
 }
 
 fn validate_redirect_url(url: &str) -> ApiResult<()> {

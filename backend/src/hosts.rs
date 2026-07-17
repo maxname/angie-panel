@@ -203,3 +203,31 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         enabled,
     }
 }
+
+/// GET /api/hosts/{id}/health — the recent beats for the uptime bars.
+///
+/// One flat array covering every kind the host checks; the UI groups by kind.
+/// Capped so a chatty host with a short interval cannot ask for its whole 30-day
+/// history in one call — the bar only ever shows the tail.
+pub async fn health(
+    _u: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    // Enough to fill the bar (Kuma-style ~50) for each of two kinds, with slack.
+    const PER_KIND: i64 = 60;
+    let mut beats: Vec<Value> = Vec::new();
+    for kind in ["tcp", "http"] {
+        for (ts, ok, latency_ms, error) in repo::recent_beats(&state.db, id, kind, PER_KIND).await?
+        {
+            beats.push(json!({
+                "kind": kind,
+                "ts": ts,
+                "ok": ok,
+                "latency_ms": latency_ms,
+                "error": error,
+            }));
+        }
+    }
+    Ok(Json(json!({ "beats": beats })))
+}
