@@ -25,6 +25,24 @@ if (proto && !proto.hasPointerCapture) {
   proto.scrollIntoView = () => {}
 }
 
+// jsdom has no matchMedia. ThemeProvider reads it to follow the OS, and
+// useIsMobile — which SidebarProvider mounts — calls it on every render, so any
+// component tree containing a Sidebar throws without this. Reports "not
+// matching": tests then see the desktop layout, which is what their queries
+// assume.
+if (!globalThis.matchMedia) {
+  globalThis.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+}
+
 afterEach(() => {
   cleanup()
 })

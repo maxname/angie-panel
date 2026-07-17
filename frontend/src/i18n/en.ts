@@ -151,6 +151,8 @@ export const en = {
       empty: 'No proxy hosts yet.',
       manage: 'Add a proxy host',
       table: {
+        sortAsc: 'Sort A→Z',
+        sortDesc: 'Sort Z→A',
         domains: 'Domains',
         target: 'Forward target',
         https: 'HTTPS',
@@ -220,6 +222,7 @@ export const en = {
       editTitle: 'Edit proxy host',
       description: 'Forward incoming requests for your domains to an upstream server.',
       unsavedConfirm: 'You have unsaved changes. Discard them and close?',
+      section: 'Section',
       tabs: {
         details: 'Details',
         ssl: 'SSL',

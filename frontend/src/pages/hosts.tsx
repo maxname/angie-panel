@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { ArrowDown, ArrowUp, Loader2, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DomainBadges } from '@/components/domain-badges'
@@ -49,6 +49,23 @@ export function HostsPage() {
     queryKey: ['certificates'],
     queryFn: () => api.listCertificates(),
   })
+  // Sort by the first domain — the column operators actually scan. Order is
+  // view state, not a query param: the list is already in memory and the
+  // backend returns it in insertion order.
+  const [sortAsc, setSortAsc] = useState(true)
+  const sortedHosts = useMemo(() => {
+    const rows = hostsQuery.data?.hosts ?? []
+    // localeCompare, not <: domains are ASCII here, but numeric:'base' keeps
+    // host10 after host9 instead of before it.
+    return [...rows].sort((a, b) => {
+      const cmp = (a.domains[0] ?? '').localeCompare(b.domains[0] ?? '', undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      })
+      return sortAsc ? cmp : -cmp
+    })
+  }, [hostsQuery.data?.hosts, sortAsc])
+
   const certsById = new Map(
     (certsQuery.data?.certificates ?? []).map((cert) => [cert.id, cert]),
   )
@@ -101,7 +118,23 @@ export function HostsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('hosts.table.domains')}</TableHead>
+                  <TableHead className="p-0">
+                    <Button
+                      variant="ghost"
+                      onClick={() => setSortAsc((v) => !v)}
+                      className="h-auto w-full justify-start gap-1.5 rounded-none px-4 py-3 font-medium hover:bg-transparent"
+                      aria-label={t(
+                        sortAsc ? 'hosts.table.sortDesc' : 'hosts.table.sortAsc',
+                      )}
+                    >
+                      {t('hosts.table.domains')}
+                      {sortAsc ? (
+                        <ArrowUp className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                      ) : (
+                        <ArrowDown className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                      )}
+                    </Button>
+                  </TableHead>
                   <TableHead>{t('hosts.table.target')}</TableHead>
                   <TableHead>{t('hosts.table.certificate')}</TableHead>
                   <TableHead>{t('hosts.table.status')}</TableHead>
@@ -111,7 +144,7 @@ export function HostsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {hostsQuery.data.hosts.map((host) => (
+                {sortedHosts.map((host) => (
                   <HostRow
                     key={host.id}
                     host={host}

@@ -48,7 +48,19 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+} from '@/components/ui/sidebar'
+import { Tabs as TabsPrimitive } from 'radix-ui'
+
+import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import {
   api,
@@ -627,46 +639,100 @@ export function HostEditorForm({
     })
 
   return (
-    <form
-      className="flex max-h-[85vh] flex-col overflow-hidden"
-      onSubmit={handleSubmit}
-      noValidate
-    >
+    <form className="flex flex-col overflow-hidden" onSubmit={handleSubmit} noValidate>
       <Tabs
         value={tab}
         onValueChange={setTab}
         orientation="vertical"
-        className="flex min-h-0 flex-1 flex-row items-stretch gap-0"
+        className="min-h-0 flex-1 gap-0"
       >
-        {/* Sidebar navigation. */}
-        <TabsList className="h-auto w-52 shrink-0 flex-col items-stretch justify-start gap-1 rounded-none border-r bg-muted/30 p-3">
-          {EDITOR_SECTIONS.map(({ key, Icon }) => (
-            <TabsTrigger
-              key={key}
-              value={key}
-              className="h-9 justify-start gap-2.5 rounded-md px-3 font-normal text-muted-foreground hover:bg-muted hover:text-foreground data-[state=active]:bg-background data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-            >
-              <Icon className="size-4 shrink-0" aria-hidden="true" />
-              {t(`hosts.editor.tabs.${key}`)}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        {/* The real Sidebar, per shadcn's settings-dialog block, rather than a
+            TabsList wearing one's clothes. Radix's tab semantics stay: the list
+            and each trigger render *as* the sidebar's own elements, so keyboard
+            navigation and aria-controls survive the costume change.
 
-        {/* Right column: header + the scrolling panel. The visible title is a
-            plain heading so the form renders outside a Dialog (in tests); the
-            accessible DialogTitle lives in the parent. */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="px-6 pt-6 pb-4">
-            <h2 className="font-heading text-base leading-none font-medium">
-              {host === null
-                ? t('hosts.editor.createTitle')
-                : t('hosts.editor.editTitle')}
-            </h2>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              {t('hosts.editor.description')}
-            </p>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
+            min-h-0 is load-bearing — SidebarProvider ships min-h-svh for
+            page-level use, which inside a dialog braces it open to the full
+            viewport. shadcn's block gets away with it by clipping; killing it
+            outright also lets the sidebar stretch to the panel's height, so its
+            border runs the full side instead of stopping under the last item. */}
+        <SidebarProvider
+          className="min-h-0 w-full"
+          style={{ '--sidebar-width': '13rem' } as React.CSSProperties}
+        >
+          <Sidebar collapsible="none" className="hidden border-r md:flex">
+            <SidebarContent>
+              <SidebarGroup>
+                <SidebarGroupContent>
+                  {/* Radix's primitives, not shadcn's styled TabsList/Trigger:
+                      the styled ones carry their own look (a centred pill), and
+                      asChild joins classNames as plain strings rather than
+                      merging them — so justify-center and justify-start both
+                      land on the element and source order picks the winner. It
+                      picked centre. Unstyled primitives give the tab semantics
+                      and leave the sidebar's own look alone. */}
+                  <TabsPrimitive.List asChild>
+                    <SidebarMenu>
+                      {EDITOR_SECTIONS.map(({ key, Icon }) => (
+                        <SidebarMenuItem key={key}>
+                          <TabsPrimitive.Trigger value={key} asChild>
+                            <SidebarMenuButton isActive={tab === key}>
+                              <Icon aria-hidden="true" />
+                              <span>{t(`hosts.editor.tabs.${key}`)}</span>
+                            </SidebarMenuButton>
+                          </TabsPrimitive.Trigger>
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
+                  </TabsPrimitive.List>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            </SidebarContent>
+          </Sidebar>
+
+          {/* Right column: header + the scrolling panel. The visible title is a
+              plain heading so the form renders outside a Dialog (in tests); the
+              accessible DialogTitle lives in the parent.
+
+              The height is fixed rather than driven by content: sections range
+              from two switches to a dozen fields, and letting the panel size
+              itself made the dialog jump every time you moved between them. */}
+          <div className="flex h-[70vh] max-h-[560px] min-w-0 flex-1 flex-col">
+            <div className="px-6 pt-6 pb-4">
+              <h2 className="font-heading text-base leading-none font-medium">
+                {host === null
+                  ? t('hosts.editor.createTitle')
+                  : t('hosts.editor.editTitle')}
+              </h2>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {t('hosts.editor.description')}
+              </p>
+            </div>
+            {/* The sidebar is gone below md, so the sections need another way
+                across. Without this the dialog is a single section on a phone
+                with no way out of it. */}
+            <div className="px-6 pb-4 md:hidden">
+              <Select value={tab} onValueChange={setTab}>
+                {/* The value span is display:block in this select.tsx, so an
+                    icon inside it stacks above the label instead of sitting
+                    beside it. */}
+                <SelectTrigger
+                  className="w-full [&>span]:flex [&>span]:items-center [&>span]:gap-2"
+                  aria-label={t('hosts.editor.section')}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EDITOR_SECTIONS.map(({ key, Icon }) => (
+                    <SelectItem key={key} value={key}>
+                      <Icon aria-hidden="true" />
+                      {t(`hosts.editor.tabs.${key}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
         <TabsContent value="details" className="space-y-4">
           {/* Keeps the id: submitting with no domains focuses it (see fail()). */}
           <DomainChipsField
@@ -1862,7 +1928,8 @@ export function HostEditorForm({
           </div>
         </TabsContent>
           </div>
-        </div>
+          </div>
+        </SidebarProvider>
       </Tabs>
 
       <div className="space-y-3 border-t px-6 py-4">

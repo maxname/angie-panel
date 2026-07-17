@@ -150,6 +150,8 @@ export const ru: typeof en = {
       empty: 'Прокси-хостов пока нет.',
       manage: 'Добавить прокси-хост',
       table: {
+        sortAsc: 'Сортировать А→Я',
+        sortDesc: 'Сортировать Я→А',
         domains: 'Домены',
         target: 'Назначение',
         https: 'HTTPS',
@@ -219,6 +221,7 @@ export const ru: typeof en = {
       editTitle: 'Изменить прокси-хост',
       description: 'Проксирование входящих запросов для ваших доменов на вышестоящий сервер.',
       unsavedConfirm: 'Есть несохранённые изменения. Отменить их и закрыть?',
+      section: 'Раздел',
       tabs: {
         details: 'Основное',
         ssl: 'SSL',

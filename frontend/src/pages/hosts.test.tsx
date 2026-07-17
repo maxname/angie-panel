@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import i18n from '@/i18n'
@@ -87,6 +88,44 @@ function renderPage() {
 }
 
 describe('proxy hosts page', () => {
+  it('sorts by domain, and reverses on a second click', async () => {
+    // Insertion order from the API is deliberately not alphabetical, so a table
+    // that ignored the sort would still show zeta first and pass nothing.
+    const rows = ['zeta.example.com', 'alpha.example.com', 'host9.example.com', 'host10.example.com']
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        hosts: rows.map((d, i) => ({ ...sampleHost, id: i + 1, domains: [d] })),
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderPage()
+    await screen.findByText('alpha.example.com')
+
+    const shown = () =>
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .map((r) => r.textContent?.match(/[a-z0-9]+\.example\.com/)?.[0])
+
+    // host9 before host10: plain string order would put 10 first.
+    expect(shown()).toEqual([
+      'alpha.example.com',
+      'host9.example.com',
+      'host10.example.com',
+      'zeta.example.com',
+    ])
+
+    await userEvent.click(screen.getByRole('button', { name: /sort/i }))
+
+    expect(shown()).toEqual([
+      'zeta.example.com',
+      'host10.example.com',
+      'host9.example.com',
+      'alpha.example.com',
+    ])
+  })
+
   it('renders the hosts table from a mocked fetch', async () => {
     const fetchMock = vi
       .fn()
