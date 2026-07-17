@@ -713,13 +713,7 @@ export function HostEditorForm({
                 with no way out of it. */}
             <div className="px-6 pb-4 md:hidden">
               <Select value={tab} onValueChange={setTab}>
-                {/* The value span is display:block in this select.tsx, so an
-                    icon inside it stacks above the label instead of sitting
-                    beside it. */}
-                <SelectTrigger
-                  className="w-full [&>span]:flex [&>span]:items-center [&>span]:gap-2"
-                  aria-label={t('hosts.editor.section')}
-                >
+                <SelectTrigger className="w-full" aria-label={t('hosts.editor.section')}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
