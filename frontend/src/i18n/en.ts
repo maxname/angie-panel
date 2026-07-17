@@ -209,6 +209,7 @@ export const en = {
     },
     health: {
       up: 'up',
+      latency: 'Response {{ms}} ms',
       down: 'down',
     },
     actions: {

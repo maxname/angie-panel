@@ -1,6 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
+import { Tooltip as TooltipPrimitive } from 'radix-ui'
+import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { api, type HealthBeat } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -69,18 +76,26 @@ export function UptimeBar({ hostId }: { hostId: number }) {
         label={`${percent}%`}
         tone={percent === 100 ? 'up' : percent >= 90 ? 'warn' : 'down'}
       />
-      <Track>
-        {Array.from({ length: pad }, (_, i) => (
-          <Segment key={`pad-${i}`} tone="empty" />
-        ))}
-        {beats.map((beat, i) => (
-          <Segment
-            key={i}
-            tone={beat.ok ? 'up' : 'down'}
-            title={beatTitle(beat, t)}
-          />
-        ))}
-      </Track>
+      {/* One shared provider for the whole bar rather than one per segment: a
+          small open delay stops a quick sweep from flashing 40 tooltips, and
+          skipDelay keeps them instant once you're already reading one. */}
+      <TooltipProvider delayDuration={200} skipDelayDuration={400}>
+        <Track>
+          {Array.from({ length: pad }, (_, i) => (
+            <Segment key={`pad-${i}`} tone="empty" />
+          ))}
+          {beats.map((beat, i) => (
+            <TooltipPrimitive.Root key={i}>
+              <TooltipTrigger asChild>
+                <Segment tone={beat.ok ? 'up' : 'down'} interactive />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                <BeatDetail beat={beat} t={t} />
+              </TooltipContent>
+            </TooltipPrimitive.Root>
+          ))}
+        </Track>
+      </TooltipProvider>
     </div>
   )
 }
@@ -89,23 +104,64 @@ function Track({ children }: { children: React.ReactNode }) {
   return <div className="flex items-center gap-[2px]">{children}</div>
 }
 
-function Segment({
-  tone,
-  title,
-}: {
-  tone: 'up' | 'down' | 'empty'
-  title?: string
-}) {
+const Segment = React.forwardRef<
+  HTMLSpanElement,
+  {
+    tone: 'up' | 'down' | 'empty'
+    interactive?: boolean
+  } & React.HTMLAttributes<HTMLSpanElement>
+>(function Segment({ tone, interactive, className, ...props }, ref) {
   return (
     <span
-      title={title}
+      ref={ref}
       className={cn(
         'h-4 w-[3px] rounded-[1px]',
+        interactive && 'transition-transform hover:scale-y-125',
         tone === 'up' && 'bg-success',
         tone === 'down' && 'bg-destructive',
         tone === 'empty' && 'bg-muted',
+        className,
       )}
+      {...props}
     />
+  )
+})
+
+/** Rich hover content for one probe: when, up or down, how fast, and — when it
+ *  failed — why. This is what makes a red square worth hovering. */
+function BeatDetail({
+  beat,
+  t,
+}: {
+  beat: HealthBeat
+  t: (key: string, options?: Record<string, unknown>) => string
+}) {
+  const when = new Date(beat.ts * 1000).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-center gap-1.5 font-medium">
+        <span
+          className={cn(
+            'inline-block size-1.5 rounded-full',
+            beat.ok ? 'bg-success' : 'bg-destructive',
+          )}
+        />
+        {beat.kind.toUpperCase()} · {beat.ok ? t('hosts.health.up') : t('hosts.health.down')}
+      </div>
+      <div className="text-primary-foreground/70">{when}</div>
+      {beat.ok && beat.latency_ms != null && (
+        <div className="text-primary-foreground/70">
+          {t('hosts.health.latency', { ms: beat.latency_ms })}
+        </div>
+      )}
+      {!beat.ok && beat.error && (
+        <div className="break-words text-primary-foreground/70">{beat.error}</div>
+      )}
+    </div>
   )
 }
 
@@ -142,13 +198,4 @@ function BarSkeleton() {
       </div>
     </div>
   )
-}
-
-function beatTitle(beat: HealthBeat, t: (k: string) => string): string {
-  const kind = beat.kind.toUpperCase()
-  if (beat.ok) {
-    const ms = beat.latency_ms != null ? ` · ${beat.latency_ms}ms` : ''
-    return `${kind}: ${t('hosts.health.up')}${ms}`
-  }
-  return `${kind}: ${beat.error ?? t('hosts.health.down')}`
 }

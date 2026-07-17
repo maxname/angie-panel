@@ -208,6 +208,7 @@ export const ru: typeof en = {
     },
     health: {
       up: 'доступен',
+      latency: 'Ответ {{ms}} мс',
       down: 'недоступен',
     },
     actions: {
