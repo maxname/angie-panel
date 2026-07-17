@@ -16,6 +16,7 @@ mod error;
 mod export_import;
 mod generator;
 mod geo;
+mod health;
 mod helper;
 mod hosts;
 mod model;
@@ -148,6 +149,7 @@ async fn serve(cfg: config::PanelConfig, cfg_path: PathBuf) -> anyhow::Result<()
 
     // Background reconciler: auto-activate HTTPS once certificates are issued.
     reconcile::spawn(state.clone());
+    health::spawn(state.clone());
 
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind)

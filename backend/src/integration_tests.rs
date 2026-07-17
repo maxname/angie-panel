@@ -1878,3 +1878,80 @@ async fn hosts_revision_tracks_sni_router_edits() {
         .unwrap();
     assert!(crate::repo::hosts_revision(&state.db).await.unwrap() > 0);
 }
+
+#[tokio::test]
+async fn host_health_checks_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // A host carrying both kinds: one overriding the app defaults, one
+    // inheriting them. The nulls are the point — they must survive the round
+    // trip as nulls, not be frozen into today's default, or raising the default
+    // later would move nobody.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["mon.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.5","forward_port":8080,
+                "health_checks":[
+                    {"kind":"tcp","enabled":true,"interval_secs":30,"timeout_secs":5,"port":9000},
+                    {"kind":"http","enabled":true,"path":"/healthz","expected_status":[200,204],
+                     "keyword":"ok","keyword_absent":false}
+                ]
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let host = body_json(res).await;
+    let id = host["id"].as_i64().unwrap();
+
+    // Read it back rather than trusting the create response.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/hosts/{id}"),
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let host = body_json(res).await;
+    let checks = host["health_checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 2);
+
+    assert_eq!(checks[0]["kind"], json!("tcp"));
+    assert_eq!(checks[0]["interval_secs"], json!(30));
+    assert_eq!(checks[0]["port"], json!(9000));
+
+    assert_eq!(checks[1]["kind"], json!("http"));
+    assert_eq!(checks[1]["path"], json!("/healthz"));
+    assert_eq!(checks[1]["expected_status"], json!([200, 204]));
+    assert_eq!(checks[1]["keyword"], json!("ok"));
+    // Inherits: never written, so it must come back null.
+    assert_eq!(checks[1]["interval_secs"], json!(null));
+    assert_eq!(checks[1]["timeout_secs"], json!(null));
+
+    // A host that was never given checks has none — not a default probe.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({
+                "domains":["quiet.example.com"],"forward_scheme":"http",
+                "forward_host":"10.0.0.6","forward_port":80
+            })),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["health_checks"], json!([]));
+}

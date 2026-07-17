@@ -24,6 +24,13 @@ pub const KEY_GEO_COUNTRIES: &str = "geo_countries"; // JSON array of ISO codes
 /// (Per-provider DNS credentials are stored under `dns_cred:*` keys — see
 /// [`crate::dns_providers`] — and redacted like this one.)
 pub const KEY_ACME_HOOK_TOKEN: &str = "acme_hook_token";
+
+// Defaults every host's availability check inherits unless it overrides them.
+// Stored here rather than baked into each check so raising the interval moves
+// every host that never set its own.
+pub const KEY_HEALTH_INTERVAL: &str = "health_interval_secs";
+pub const KEY_HEALTH_TIMEOUT: &str = "health_timeout_secs";
+pub const KEY_HEALTH_RETENTION_DAYS: &str = "health_retention_days";
 /// hosts_revision that is currently live (set after each successful apply).
 /// Lets the reconciler distinguish external cert-readiness changes from
 /// pending user edits. Not user-editable.

@@ -626,6 +626,77 @@ impl Default for UpstreamServer {
     }
 }
 
+/// How a host is probed for availability.
+///
+/// Angie cannot do this itself — active `health_check` is PRO — so the panel
+/// polls. The two kinds answer different questions on purpose, and a host can
+/// carry both:
+///
+/// - [`HealthCheckKind::Tcp`] opens a socket to the host's own upstream. "Is my
+///   backend listening."
+/// - [`HealthCheckKind::Http`] asks Angie for the site, over loopback with the
+///   host's domain as SNI. "Does the whole chain — config, certificate,
+///   upstream — still serve."
+///
+/// Neither can tell you the internet reaches you: the request never leaves the
+/// box. Aiming the HTTP check at the public URL instead would be worse than
+/// useless — measured on the deploy target, the domain resolves to a machine
+/// that is not this one, and the probe came back 200 from a stranger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HealthCheckKind {
+    Tcp,
+    Http,
+}
+
+impl HealthCheckKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Http => "http",
+        }
+    }
+}
+
+/// One availability check on a proxy host.
+///
+/// `interval_secs` / `timeout_secs` are `None` when the host inherits the
+/// app-wide default, so raising the default moves every host that never
+/// overrode it — rather than freezing today's value into each row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthCheck {
+    pub kind: HealthCheckKind,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub interval_secs: Option<u32>,
+    #[serde(default)]
+    pub timeout_secs: Option<u32>,
+
+    // ---- HTTP only ----
+    /// Request path. Defaults to "/" when empty.
+    #[serde(default)]
+    pub path: String,
+    /// Response codes counted as up. Empty = any 2xx.
+    #[serde(default)]
+    pub expected_status: Vec<u16>,
+    /// Body must contain this text (or must not, with `keyword_absent`).
+    #[serde(default)]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub keyword_absent: bool,
+    /// Skip certificate verification. Off by default: verifying is free here and
+    /// catches an expired or wrong certificate, which is most of what an HTTPS
+    /// check is for.
+    #[serde(default)]
+    pub insecure: bool,
+
+    // ---- TCP only ----
+    /// Port to connect to. `None` = the host's own `forward_port`.
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
 /// Load balancing + passive health for a host. `servers` are ADDITIONAL peers;
 /// the primary is always the host's `forward_host:forward_port`. Passive health
 /// (`max_fails`/`fail_timeout`) applies to every peer — Angie removes a peer
@@ -761,6 +832,8 @@ pub struct ProxyHost {
     pub locations: Vec<CustomLocation>,
     pub advanced_snippet: Option<String>,
     pub rate_limit: RateLimit,
+    /// Availability checks. Empty = the host is not probed.
+    pub health_checks: Vec<HealthCheck>,
     pub upstream: Upstream,
     pub mtls: Mtls,
     pub forward_auth: ForwardAuth,
@@ -852,6 +925,9 @@ pub struct ProxyHostInput {
     // ready — see gen_host().
     #[serde(default = "default_true")]
     pub force_ssl: bool,
+    /// Availability checks. Absent = none; the host is simply not probed.
+    #[serde(default)]
+    pub health_checks: Vec<HealthCheck>,
     #[serde(default)]
     pub hsts: bool,
     #[serde(default)]
@@ -2483,6 +2559,7 @@ mod tests {
             http2: true,
             http3: false,
             force_ssl: false,
+            health_checks: vec![],
             hsts: false,
             hsts_subdomains: false,
             trust_forwarded_proto: false,

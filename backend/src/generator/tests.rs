@@ -63,6 +63,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         gzip: Gzip::default(),
         error_pages: ErrorPages::default(),
         proxy_tuning: ProxyTuning::default(),
+        health_checks: vec![],
         enabled: true,
         created_at: 0,
         updated_at: 0,

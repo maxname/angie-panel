@@ -183,6 +183,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         http2: h.http2,
         http3: h.http3,
         force_ssl: h.force_ssl,
+        health_checks: h.health_checks.clone(),
         hsts: h.hsts,
         hsts_subdomains: h.hsts_subdomains,
         trust_forwarded_proto: h.trust_forwarded_proto,

@@ -8,8 +8,8 @@ use sqlx::SqlitePool;
 use crate::db::now_epoch;
 use crate::model::{
     Certificate, CertificateInput, Challenge, CustomHeader, CustomLocation, DnsCredential,
-    DnsCredentialInput, ErrorPages, ForwardAuth, Gzip, KeyType, Maintenance, Mtls, ProxyHost,
-    ProxyHostInput, ProxyTuning, RateLimit, Scheme, Upstream,
+    DnsCredentialInput, ErrorPages, ForwardAuth, Gzip, HealthCheck, KeyType, Maintenance, Mtls,
+    ProxyHost, ProxyHostInput, ProxyTuning, RateLimit, Scheme, Upstream,
 };
 
 // ------------------------------------------------------------------- rows
@@ -43,6 +43,7 @@ struct HostRow {
     gzip: Option<String>,
     error_pages: Option<String>,
     proxy_tuning: Option<String>,
+    health_checks: Option<String>,
     enabled: i64,
     created_at: i64,
     updated_at: i64,
@@ -85,6 +86,7 @@ impl HostRow {
             gzip: gzip_from_json(self.gzip.as_deref())?,
             error_pages: error_pages_from_json(self.error_pages.as_deref())?,
             proxy_tuning: proxy_tuning_from_json(self.proxy_tuning.as_deref())?,
+            health_checks: health_checks_from_json(self.health_checks.as_deref())?,
             enabled: self.enabled != 0,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -180,6 +182,18 @@ fn gzip_from_json(raw: Option<&str>) -> anyhow::Result<Gzip> {
     }
 }
 
+fn health_checks_json(checks: &[HealthCheck]) -> String {
+    serde_json::to_string(checks).unwrap_or_else(|_| "[]".into())
+}
+
+/// Parse the stored health_checks JSON (NULL / absent = no checks).
+fn health_checks_from_json(raw: Option<&str>) -> anyhow::Result<Vec<HealthCheck>> {
+    match raw {
+        Some(s) if !s.is_empty() => Ok(serde_json::from_str(s).context("health_checks json")?),
+        _ => Ok(Vec::new()),
+    }
+}
+
 fn proxy_tuning_json(p: &ProxyTuning) -> String {
     serde_json::to_string(p).unwrap_or_else(|_| "{}".into())
 }
@@ -210,7 +224,7 @@ const HOST_COLUMNS: &str = "id, domains, forward_scheme, forward_host, forward_p
      websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
      hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
      advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
-     gzip, error_pages, proxy_tuning, enabled, created_at, updated_at";
+     gzip, error_pages, proxy_tuning, health_checks, enabled, created_at, updated_at";
 
 // -------------------------------------------------------------- host CRUD
 
@@ -249,8 +263,8 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
          websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
          hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
          advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, maintenance, \
-         gzip, error_pages, proxy_tuning, enabled, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+         gzip, error_pages, proxy_tuning, health_checks, enabled, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(domains_json(&input.domains))
     .bind(input.forward_scheme.as_str())
@@ -278,6 +292,7 @@ pub async fn insert_host(db: &SqlitePool, input: &ProxyHostInput) -> anyhow::Res
     .bind(gzip_json(&input.gzip))
     .bind(error_pages_json(&input.error_pages))
     .bind(proxy_tuning_json(&input.proxy_tuning))
+    .bind(health_checks_json(&input.health_checks))
     .bind(input.enabled as i64)
     .bind(now)
     .bind(now)
@@ -293,7 +308,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
          websockets_upgrade=?, block_exploits=?, cache_assets=?, http2=?, http3=?, force_ssl=?, hsts=?, \
          hsts_subdomains=?, trust_forwarded_proto=?, certificate_id=?, access_list_id=?, \
          locations=?, advanced_snippet=?, rate_limit=?, upstream=?, mtls=?, forward_auth=?, \
-         custom_headers=?, maintenance=?, gzip=?, error_pages=?, proxy_tuning=?, enabled=?, \
+         custom_headers=?, maintenance=?, gzip=?, error_pages=?, proxy_tuning=?, health_checks=?, enabled=?, \
          updated_at=? WHERE id=?",
     )
     .bind(domains_json(&input.domains))
@@ -322,6 +337,7 @@ pub async fn update_host(db: &SqlitePool, id: i64, input: &ProxyHostInput) -> an
     .bind(gzip_json(&input.gzip))
     .bind(error_pages_json(&input.error_pages))
     .bind(proxy_tuning_json(&input.proxy_tuning))
+    .bind(health_checks_json(&input.health_checks))
     .bind(input.enabled as i64)
     .bind(now_epoch())
     .bind(id)
@@ -1286,8 +1302,8 @@ pub async fn import_replace(
              websockets_upgrade, block_exploits, cache_assets, http2, http3, force_ssl, hsts, \
              hsts_subdomains, trust_forwarded_proto, certificate_id, access_list_id, locations, \
              advanced_snippet, rate_limit, upstream, mtls, forward_auth, custom_headers, \
-             maintenance, gzip, error_pages, proxy_tuning, enabled, created_at, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             maintenance, gzip, error_pages, proxy_tuning, health_checks, enabled, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(domains_json(&h.domains))
@@ -1316,6 +1332,7 @@ pub async fn import_replace(
         .bind(gzip_json(&h.gzip))
         .bind(error_pages_json(&h.error_pages))
         .bind(proxy_tuning_json(&h.proxy_tuning))
+        .bind(health_checks_json(&h.health_checks))
         .bind(h.enabled as i64)
         .bind(now)
         .bind(now)
@@ -2013,4 +2030,86 @@ pub async fn list_audit(db: &SqlitePool, limit: i64) -> anyhow::Result<Vec<Audit
     .fetch_all(db)
     .await?;
     Ok(rows)
+}
+
+// ------------------------------------------------------- health beats
+
+/// When a check for this host+kind last ran, or `None` if it never has.
+///
+/// The scheduler asks this rather than keeping timers in memory: a restart, a
+/// host edit or a changed interval then need no reconciliation — the next tick
+/// simply reads the truth.
+pub async fn last_beat_ts(
+    db: &SqlitePool,
+    host_id: i64,
+    kind: &str,
+) -> anyhow::Result<Option<i64>> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT ts FROM health_beats WHERE host_id=? AND kind=? ORDER BY ts DESC LIMIT 1",
+    )
+    .bind(host_id)
+    .bind(kind)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|r| r.0))
+}
+
+pub async fn insert_beat(
+    db: &SqlitePool,
+    host_id: i64,
+    kind: &str,
+    beat: &crate::health::Beat,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO health_beats (host_id, kind, ts, ok, latency_ms, error) VALUES (?,?,?,?,?,?)",
+    )
+    .bind(host_id)
+    .bind(kind)
+    .bind(beat.ts)
+    .bind(i64::from(beat.ok))
+    .bind(beat.latency_ms)
+    .bind(beat.error.as_deref())
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// The newest `limit` beats for a host+kind, newest first — what the uptime bar
+/// reads.
+// Unused until the API lands in the next step; kept here so the whole storage
+// shape lives in one place rather than arriving piecemeal.
+#[allow(dead_code)]
+pub async fn recent_beats(
+    db: &SqlitePool,
+    host_id: i64,
+    kind: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<(i64, bool, Option<i64>, Option<String>)>> {
+    let rows: Vec<(i64, i64, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT ts, ok, latency_ms, error FROM health_beats \
+         WHERE host_id=? AND kind=? ORDER BY ts DESC LIMIT ?",
+    )
+    .bind(host_id)
+    .bind(kind)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(ts, ok, ms, err)| (ts, ok != 0, ms, err))
+        .collect())
+}
+
+/// Drop beats older than `cutoff`, and any belonging to a host that no longer
+/// exists — deleting a host does not sweep its history, on purpose, so this is
+/// where the orphans go.
+pub async fn reap_beats(db: &SqlitePool, cutoff: i64) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM health_beats WHERE ts < ?")
+        .bind(cutoff)
+        .execute(db)
+        .await?;
+    sqlx::query("DELETE FROM health_beats WHERE host_id NOT IN (SELECT id FROM proxy_hosts)")
+        .execute(db)
+        .await?;
+    Ok(())
 }
