@@ -290,6 +290,7 @@ export interface HostInput {
   http2?: boolean
   http3?: boolean
   force_ssl?: boolean
+  health_checks?: HealthCheck[]
   hsts?: boolean
   hsts_subdomains?: boolean
   trust_forwarded_proto?: boolean

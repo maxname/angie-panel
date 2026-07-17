@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   FileArchive,
+  Activity,
   Gauge,
   Globe,
   KeyRound,
@@ -69,6 +70,7 @@ import {
   type CustomHeader,
   type ForwardScheme,
   type HeaderDirection,
+  type HealthCheck,
   type Host,
   type HostInput,
 } from '@/lib/api'
@@ -146,9 +148,77 @@ interface FormState {
   proxy_read_timeout: string
   proxy_send_timeout: string
   proxy_disable_buffering: boolean
+  // Availability checks, flattened per kind like rate_limit. Interval/timeout
+  // are strings so empty = inherit the app default.
+  health_tcp_enabled: boolean
+  health_tcp_interval: string
+  health_tcp_timeout: string
+  health_tcp_port: string
+  health_http_enabled: boolean
+  health_http_interval: string
+  health_http_timeout: string
+  health_http_path: string
+  health_http_insecure: boolean
+  /** Accepted status codes as free text (comma/space separated). Empty = any 2xx. */
+  health_http_expected: string
+  health_http_keyword: string
+  health_http_keyword_absent: boolean
+}
+
+/** '' for null/undefined, the number as a string otherwise — the inverse of the
+ *  parse on submit, so an inherited (null) interval stays empty in the form. */
+/** Turn the flat form fields back into the HealthCheck[] the API stores. Only
+ *  enabled kinds are emitted; a blank interval/timeout/port becomes null so the
+ *  host inherits the app default rather than freezing today's value. */
+function buildHealthChecks(form: FormState): HealthCheck[] {
+  const num = (v: string): number | null => {
+    const n = Number.parseInt(v, 10)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+  const checks: HealthCheck[] = []
+  if (form.health_tcp_enabled) {
+    checks.push({
+      kind: 'tcp',
+      enabled: true,
+      interval_secs: num(form.health_tcp_interval),
+      timeout_secs: num(form.health_tcp_timeout),
+      port: num(form.health_tcp_port),
+      // HTTP-only fields, inert for TCP but required by the type.
+      path: '',
+      expected_status: [],
+      keyword: null,
+      keyword_absent: false,
+      insecure: false,
+    })
+  }
+  if (form.health_http_enabled) {
+    checks.push({
+      kind: 'http',
+      enabled: true,
+      interval_secs: num(form.health_http_interval),
+      timeout_secs: num(form.health_http_timeout),
+      path: form.health_http_path.trim(),
+      expected_status: form.health_http_expected
+        .split(/[\s,]+/)
+        .map((c) => Number.parseInt(c, 10))
+        .filter((n) => Number.isFinite(n) && n >= 100 && n <= 599),
+      keyword: form.health_http_keyword.trim() || null,
+      keyword_absent: form.health_http_keyword_absent,
+      insecure: form.health_http_insecure,
+      port: null,
+    })
+  }
+  return checks
+}
+
+function numStr(n: number | null | undefined): string {
+  return n == null ? '' : String(n)
 }
 
 function initialState(host: Host | null): FormState {
+  const tcp = host?.health_checks.find((c) => c.kind === 'tcp')
+  const http = host?.health_checks.find((c) => c.kind === 'http')
+
   if (host === null) {
     return {
       domains: [],
@@ -203,6 +273,18 @@ function initialState(host: Host | null): FormState {
       proxy_read_timeout: '',
       proxy_send_timeout: '',
       proxy_disable_buffering: false,
+      health_tcp_enabled: false,
+      health_tcp_interval: '',
+      health_tcp_timeout: '',
+      health_tcp_port: '',
+      health_http_enabled: false,
+      health_http_interval: '',
+      health_http_timeout: '',
+      health_http_path: '',
+      health_http_insecure: false,
+      health_http_expected: '',
+      health_http_keyword: '',
+      health_http_keyword_absent: false,
     }
   }
   const rl = host.rate_limit
@@ -274,6 +356,18 @@ function initialState(host: Host | null): FormState {
     proxy_read_timeout: pt.read_timeout_secs > 0 ? String(pt.read_timeout_secs) : '',
     proxy_send_timeout: pt.send_timeout_secs > 0 ? String(pt.send_timeout_secs) : '',
     proxy_disable_buffering: pt.disable_buffering,
+    health_tcp_enabled: tcp?.enabled ?? false,
+    health_tcp_interval: numStr(tcp?.interval_secs),
+    health_tcp_timeout: numStr(tcp?.timeout_secs),
+    health_tcp_port: numStr(tcp?.port),
+    health_http_enabled: http?.enabled ?? false,
+    health_http_interval: numStr(http?.interval_secs),
+    health_http_timeout: numStr(http?.timeout_secs),
+    health_http_path: http?.path ?? '',
+    health_http_insecure: http?.insecure ?? false,
+    health_http_expected: (http?.expected_status ?? []).join(', '),
+    health_http_keyword: http?.keyword ?? '',
+    health_http_keyword_absent: http?.keyword_absent ?? false,
   }
 }
 
@@ -293,6 +387,7 @@ const EDITOR_SECTIONS: { key: string; Icon: LucideIcon }[] = [
   { key: 'locations', Icon: Route },
   { key: 'upstreams', Icon: Server },
   { key: 'rateLimit', Icon: Gauge },
+  { key: 'health', Icon: Activity },
   { key: 'proxyTuning', Icon: SlidersHorizontal },
   { key: 'headers', Icon: Tags },
   { key: 'gzip', Icon: FileArchive },
@@ -614,6 +709,10 @@ export function HostEditorForm({
         send_timeout_secs: Number.parseInt(form.proxy_send_timeout, 10) || 0,
         disable_buffering: form.proxy_disable_buffering,
       },
+      // Only enabled checks are stored; toggling a kind off drops its config,
+      // which matches "empty = not probed". Blank interval/timeout become null
+      // so the host keeps inheriting the app default.
+      health_checks: buildHealthChecks(form),
       enabled: host === null ? true : host.enabled,
     }
 
@@ -1493,6 +1592,136 @@ export function HostEditorForm({
           )}
         </TabsContent>
 
+        <TabsContent value="health" className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {t('hosts.editor.health.description')}
+          </p>
+
+          {/* TCP — is the backend listening. */}
+          <div className="space-y-3 rounded-lg border p-3">
+            <ToggleRow
+              id="host-health-tcp"
+              label={t('hosts.editor.health.tcpEnable')}
+              checked={form.health_tcp_enabled}
+              onChange={(checked) => patch({ health_tcp_enabled: checked })}
+            />
+            {form.health_tcp_enabled && (
+              <div className="grid gap-4 sm:grid-cols-3">
+                <HealthNumber
+                  id="host-health-tcp-port"
+                  label={t('hosts.editor.health.tcpPort')}
+                  placeholder={String(form.forward_port || t('hosts.editor.health.samePort'))}
+                  value={form.health_tcp_port}
+                  onChange={(v) => patch({ health_tcp_port: v })}
+                />
+                <HealthNumber
+                  id="host-health-tcp-interval"
+                  label={t('hosts.editor.health.interval')}
+                  placeholder={t('hosts.editor.health.inherit')}
+                  value={form.health_tcp_interval}
+                  onChange={(v) => patch({ health_tcp_interval: v })}
+                />
+                <HealthNumber
+                  id="host-health-tcp-timeout"
+                  label={t('hosts.editor.health.timeout')}
+                  placeholder={t('hosts.editor.health.inherit')}
+                  value={form.health_tcp_timeout}
+                  onChange={(v) => patch({ health_tcp_timeout: v })}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* HTTP — does the whole chain serve. */}
+          <div className="space-y-3 rounded-lg border p-3">
+            <ToggleRow
+              id="host-health-http"
+              label={t('hosts.editor.health.httpEnable')}
+              checked={form.health_http_enabled}
+              onChange={(checked) => patch({ health_http_enabled: checked })}
+            />
+            {form.health_http_enabled && (
+              <div className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="host-health-http-path">
+                      {t('hosts.editor.health.path')}
+                    </Label>
+                    <Input
+                      id="host-health-http-path"
+                      placeholder="/"
+                      value={form.health_http_path}
+                      onChange={(e) => patch({ health_http_path: e.target.value })}
+                    />
+                  </div>
+                  <HealthNumber
+                    id="host-health-http-interval"
+                    label={t('hosts.editor.health.interval')}
+                    placeholder={t('hosts.editor.health.inherit')}
+                    value={form.health_http_interval}
+                    onChange={(v) => patch({ health_http_interval: v })}
+                  />
+                  <HealthNumber
+                    id="host-health-http-timeout"
+                    label={t('hosts.editor.health.timeout')}
+                    placeholder={t('hosts.editor.health.inherit')}
+                    value={form.health_http_timeout}
+                    onChange={(v) => patch({ health_http_timeout: v })}
+                  />
+                </div>
+
+                {/* The rest is rarely touched — a plain 2xx check is the norm —
+                    so it sits behind a disclosure rather than crowding the tab. */}
+                <details className="rounded-md border px-3 py-2 text-sm [&_summary]:cursor-pointer">
+                  <summary className="text-muted-foreground">
+                    {t('hosts.editor.health.advanced')}
+                  </summary>
+                  <div className="mt-3 space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="host-health-http-status">
+                        {t('hosts.editor.health.expectedStatus')}
+                      </Label>
+                      <Input
+                        id="host-health-http-status"
+                        placeholder="200, 204"
+                        value={form.health_http_expected}
+                        onChange={(e) => patch({ health_http_expected: e.target.value })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t('hosts.editor.health.expectedStatusHint')}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="host-health-http-keyword">
+                        {t('hosts.editor.health.keyword')}
+                      </Label>
+                      <Input
+                        id="host-health-http-keyword"
+                        value={form.health_http_keyword}
+                        onChange={(e) => patch({ health_http_keyword: e.target.value })}
+                      />
+                      {form.health_http_keyword.trim() !== '' && (
+                        <ToggleRow
+                          id="host-health-http-keyword-absent"
+                          label={t('hosts.editor.health.keywordAbsent')}
+                          checked={form.health_http_keyword_absent}
+                          onChange={(c) => patch({ health_http_keyword_absent: c })}
+                        />
+                      )}
+                    </div>
+                    <ToggleRow
+                      id="host-health-http-insecure"
+                      label={t('hosts.editor.health.insecure')}
+                      checked={form.health_http_insecure}
+                      onChange={(c) => patch({ health_http_insecure: c })}
+                    />
+                  </div>
+                </details>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
         <TabsContent value="headers" className="space-y-4">
           <div className="space-y-1">
             <span className="text-sm font-medium">
@@ -1956,6 +2185,31 @@ export function HostEditorForm({
         </DialogFooter>
       </div>
     </form>
+  )
+}
+
+interface HealthNumberProps {
+  id: string
+  label: string
+  placeholder: string
+  value: string
+  onChange: (value: string) => void
+}
+
+/** A digits-only field for the health tab. Empty means "inherit the default",
+ *  so it never coerces to 0 — the placeholder shows what will be used. */
+function HealthNumber({ id, label, placeholder, value, onChange }: HealthNumberProps) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        inputMode="numeric"
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value.replace(/[^0-9]/g, ''))}
+      />
+    </div>
   )
 }
 

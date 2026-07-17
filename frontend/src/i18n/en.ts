@@ -234,6 +234,7 @@ export const en = {
         locations: 'Locations',
         upstreams: 'Upstreams',
         rateLimit: 'Rate limit',
+        health: 'Availability',
         proxyTuning: 'Proxy tuning',
         headers: 'Headers',
         gzip: 'Compression',
@@ -400,6 +401,24 @@ export const en = {
           'A peer is taken out of rotation after “max fails” errors within the fail timeout, then retried. max fails 0 disables passive checking.',
         errServer: 'Each backend server needs a host and a valid port (1–65535).',
         errIpHashBackup: 'ip_hash balancing cannot be combined with backup servers.',
+      },
+      health: {
+        description:
+          'Poll this host and show its uptime in the list. Probes run from the panel, over loopback — they confirm your Angie serves the site, not that the internet can reach it.',
+        tcpEnable: 'Check the backend port (TCP)',
+        httpEnable: 'Check the site over HTTP(S)',
+        tcpPort: 'Port',
+        samePort: 'same as target',
+        interval: 'Interval, s',
+        timeout: 'Timeout, s',
+        inherit: 'default',
+        path: 'Path',
+        advanced: 'Advanced',
+        expectedStatus: 'Accepted status codes',
+        expectedStatusHint: 'Comma-separated. Empty means any 2xx.',
+        keyword: 'Body must contain',
+        keywordAbsent: 'Fail if the text IS present instead',
+        insecure: 'Skip certificate verification',
       },
       rateLimit: {
         description:
