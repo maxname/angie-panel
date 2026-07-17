@@ -27,6 +27,7 @@ const sampleHost: Host = {
   http2: true,
   http3: false,
   force_ssl: false,
+  health_checks: [],
   hsts: false,
   hsts_subdomains: false,
   trust_forwarded_proto: false,
@@ -102,11 +103,13 @@ describe('proxy hosts page', () => {
     renderPage()
     await screen.findByText('alpha.example.com')
 
+    // Cards, not table rows: each host renders its domain as a link, and their
+    // DOM order is the list order.
     const shown = () =>
       screen
-        .getAllByRole('row')
-        .slice(1)
-        .map((r) => r.textContent?.match(/[a-z0-9]+\.example\.com/)?.[0])
+        .getAllByRole('link')
+        .map((el) => el.textContent?.trim())
+        .filter((t): t is string => !!t && /\.example\.com$/.test(t))
 
     // host9 before host10: plain string order would put 10 first.
     expect(shown()).toEqual([

@@ -213,6 +213,35 @@ export interface ForwardAuth {
   copy_headers: string[]
 }
 
+export type HealthCheckKind = 'tcp' | 'http'
+
+/** One availability check configured on a proxy host. Nulls inherit the
+ *  app-wide default from Settings. */
+export interface HealthCheck {
+  kind: HealthCheckKind
+  enabled: boolean
+  interval_secs: number | null
+  timeout_secs: number | null
+  // HTTP only
+  path: string
+  expected_status: number[]
+  keyword: string | null
+  keyword_absent: boolean
+  insecure: boolean
+  // TCP only
+  port: number | null
+}
+
+/** One recorded probe result, as returned by GET /hosts/{id}/health. */
+export interface HealthBeat {
+  kind: HealthCheckKind
+  /** Unix seconds. */
+  ts: number
+  ok: boolean
+  latency_ms: number | null
+  error: string | null
+}
+
 export interface Host {
   id: number
   domains: string[]
@@ -225,6 +254,7 @@ export interface Host {
   http2: boolean
   http3: boolean
   force_ssl: boolean
+  health_checks: HealthCheck[]
   hsts: boolean
   hsts_subdomains: boolean
   trust_forwarded_proto: boolean
@@ -849,6 +879,9 @@ export const api = {
     request<Host>('PUT', `/api/hosts/${id}`, body),
 
   deleteHost: (id: number) => request<OkResponse>('DELETE', `/api/hosts/${id}`),
+
+  hostHealth: (id: number) =>
+    request<{ beats: HealthBeat[] }>('GET', `/api/hosts/${id}/health`),
 
   enableHost: (id: number) =>
     request<{ ok: true; enabled: true }>('POST', `/api/hosts/${id}/enable`),

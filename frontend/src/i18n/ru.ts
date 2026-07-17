@@ -206,6 +206,10 @@ export const ru: typeof en = {
       enabled: 'Включён',
       disabled: 'Отключён',
     },
+    health: {
+      up: 'доступен',
+      down: 'недоступен',
+    },
     actions: {
       edit: 'Изменить',
       enable: 'Включить',

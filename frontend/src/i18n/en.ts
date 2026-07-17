@@ -207,6 +207,10 @@ export const en = {
       enabled: 'Enabled',
       disabled: 'Disabled',
     },
+    health: {
+      up: 'up',
+      down: 'down',
+    },
     actions: {
       edit: 'Edit',
       enable: 'Enable',

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 
 import { DomainBadges } from '@/components/domain-badges'
 import { HostEditorDialog } from '@/components/hosts/host-editor-dialog'
+import { UptimeBar } from '@/components/hosts/uptime-bar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -23,14 +24,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { api, ApiError, type Cert, type Host } from '@/lib/api'
 import { toast } from '@/lib/toast'
 
@@ -113,38 +106,29 @@ export function HostsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="p-0">
-          <CardContent className="px-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="p-0">
-                    <Button
-                      variant="ghost"
-                      onClick={() => setSortAsc((v) => !v)}
-                      className="h-auto w-full justify-start gap-1.5 rounded-none px-4 py-3 font-medium hover:bg-transparent"
-                      aria-label={t(
-                        sortAsc ? 'hosts.table.sortDesc' : 'hosts.table.sortAsc',
-                      )}
-                    >
-                      {t('hosts.table.domains')}
-                      {sortAsc ? (
-                        <ArrowUp className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                      ) : (
-                        <ArrowDown className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                      )}
-                    </Button>
-                  </TableHead>
-                  <TableHead>{t('hosts.table.target')}</TableHead>
-                  <TableHead>{t('hosts.table.certificate')}</TableHead>
-                  <TableHead>{t('hosts.table.status')}</TableHead>
-                  <TableHead className="w-0 text-right">
-                    <span className="sr-only">{t('hosts.table.actions')}</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedHosts.map((host) => (
+        <div className="space-y-3">
+          {/* Sort used to live in the column header; the card layout has none,
+              so it moves to a control over the list. Still by first domain —
+              the field operators scan. */}
+          <div className="flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSortAsc((v) => !v)}
+              className="gap-1.5 text-muted-foreground"
+              aria-label={t(sortAsc ? 'hosts.table.sortDesc' : 'hosts.table.sortAsc')}
+            >
+              {t('hosts.table.domains')}
+              {sortAsc ? (
+                <ArrowDown className="size-3.5" aria-hidden="true" />
+              ) : (
+                <ArrowUp className="size-3.5" aria-hidden="true" />
+              )}
+            </Button>
+          </div>
+          <Card className="p-0">
+            <CardContent className="divide-y p-0">
+              {sortedHosts.map((host) => (
                   <HostRow
                     key={host.id}
                     host={host}
@@ -156,11 +140,10 @@ export function HostsPage() {
                     onEdit={() => openEdit(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       <HostEditorDialog open={editorOpen} onOpenChange={setEditorOpen} host={editing} />
@@ -207,56 +190,20 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
   })
 
   const target = `${host.forward_scheme}://${host.forward_host}:${host.forward_port}`
+  // Only probed hosts get a bar. Config toggled off is not "down".
+  const probed = host.enabled && host.health_checks.some((c) => c.enabled)
 
   return (
-    <TableRow>
-      <TableCell>
+    <div className="space-y-2 p-4">
+      {/* Line 1: the domains, and the actions menu pinned right. */}
+      <div className="flex items-start justify-between gap-2">
         <DomainBadges domains={host.domains} secure={cert !== undefined} />
-      </TableCell>
-      <TableCell>
-        <span className="font-mono text-xs">{target}</span>
-      </TableCell>
-      <TableCell>
-        {cert ? (
-          <span
-            className="inline-flex items-center gap-1.5 text-sm"
-            title={cert.domains.join(', ')}
-          >
-            <ShieldCheck
-              className="size-4 shrink-0 text-success"
-              aria-hidden="true"
-            />
-            <span className="truncate">
-              {cert.domains[0]}
-              {cert.domains.length > 1 && (
-                <span className="text-muted-foreground">
-                  {' '}
-                  +{cert.domains.length - 1}
-                </span>
-              )}
-            </span>
-          </span>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        )}
-      </TableCell>
-      <TableCell>
-        {host.enabled ? (
-          <Badge variant="success">
-            {t('hosts.status.enabled')}
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="text-muted-foreground">
-            {t('hosts.status.disabled')}
-          </Badge>
-        )}
-      </TableCell>
-      <TableCell className="text-right">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="icon-sm"
+              className="-mt-1 shrink-0"
               disabled={toggleMutation.isPending}
               aria-label={t('hosts.table.actions')}
             >
@@ -280,8 +227,44 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </TableCell>
-    </TableRow>
+      </div>
+
+      {/* Line 2: status → target → certificate → uptime. Wraps on narrow
+          screens rather than overflowing — what the columnar table could not
+          do on a phone. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+        {host.enabled ? (
+          <Badge variant="success">{t('hosts.status.enabled')}</Badge>
+        ) : (
+          <Badge variant="outline" className="text-muted-foreground">
+            {t('hosts.status.disabled')}
+          </Badge>
+        )}
+
+        <span className="font-mono text-xs text-muted-foreground">{target}</span>
+
+        {cert && (
+          <span
+            className="inline-flex items-center gap-1.5"
+            title={cert.domains.join(', ')}
+          >
+            <ShieldCheck className="size-4 shrink-0 text-success" aria-hidden="true" />
+            <span className="truncate">
+              {cert.domains[0]}
+              {cert.domains.length > 1 && (
+                <span className="text-muted-foreground"> +{cert.domains.length - 1}</span>
+              )}
+            </span>
+          </span>
+        )}
+
+        {probed && (
+          <div className="ml-auto">
+            <UptimeBar hostId={host.id} />
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
