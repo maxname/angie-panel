@@ -317,10 +317,30 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
   const [ipv6Enabled, setIpv6Enabled] = useState<boolean>(saved.ipv6Enabled)
   const [resolvers, setResolvers] = useState<string[]>(saved.resolvers)
   const [acmeEmail, setAcmeEmail] = useState<string>(saved.acmeEmail)
+  // Health defaults come from `effective` — the backend already resolves the
+  // built-in fallback, so an install that never set them shows the real value
+  // rather than a blank. Edited as strings, like the other numeric fields.
+  const [healthInterval, setHealthInterval] = useState(String(data.effective.health_interval_secs))
+  const [healthTimeout, setHealthTimeout] = useState(String(data.effective.health_timeout_secs))
+  const [healthRetention, setHealthRetention] = useState(String(data.effective.health_retention_days))
 
   const isDirty = useIsDirty(
-    { defaultSite, redirectUrl, ipv6Enabled, resolvers, acmeEmail },
-    saved,
+    {
+      defaultSite,
+      redirectUrl,
+      ipv6Enabled,
+      resolvers,
+      acmeEmail,
+      healthInterval,
+      healthTimeout,
+      healthRetention,
+    },
+    {
+      ...saved,
+      healthInterval: String(data.effective.health_interval_secs),
+      healthTimeout: String(data.effective.health_timeout_secs),
+      healthRetention: String(data.effective.health_retention_days),
+    },
   )
 
   const mutation = useMutation({
@@ -339,6 +359,9 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
       ipv6_enabled: ipv6Enabled ? '1' : '0',
       resolver_override: resolvers.join(' '),
       acme_email: acmeEmail,
+      health_interval_secs: healthInterval,
+      health_timeout_secs: healthTimeout,
+      health_retention_days: healthRetention,
     })
   }
 
@@ -463,6 +486,53 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
               onChange={(event) => setAcmeEmail(event.target.value)}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('settings.health.title')}</CardTitle>
+          <CardDescription>{t('settings.health.description')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-2">
+              <Label htmlFor="health-interval">{t('settings.health.interval')}</Label>
+              <Input
+                id="health-interval"
+                inputMode="numeric"
+                value={healthInterval}
+                onChange={(e) =>
+                  setHealthInterval(e.target.value.replace(/[^0-9]/g, ''))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="health-timeout">{t('settings.health.timeout')}</Label>
+              <Input
+                id="health-timeout"
+                inputMode="numeric"
+                value={healthTimeout}
+                onChange={(e) =>
+                  setHealthTimeout(e.target.value.replace(/[^0-9]/g, ''))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="health-retention">{t('settings.health.retention')}</Label>
+              <Input
+                id="health-retention"
+                inputMode="numeric"
+                value={healthRetention}
+                onChange={(e) =>
+                  setHealthRetention(e.target.value.replace(/[^0-9]/g, ''))
+                }
+              />
+            </div>
+          </div>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t('settings.health.hint')}
+          </p>
         </CardContent>
       </Card>
 

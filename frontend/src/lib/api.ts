@@ -524,6 +524,10 @@ export interface EffectiveSettings {
   default_site: string
   ipv6_enabled: boolean
   resolvers: string[]
+  /** Health-check defaults every host inherits unless it overrides them. */
+  health_interval_secs: number
+  health_timeout_secs: number
+  health_retention_days: number
 }
 
 export interface SettingsResponse {

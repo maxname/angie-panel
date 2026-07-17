@@ -533,6 +533,14 @@ export const en = {
       description: 'Default contact email for ACME certificate accounts.',
       email: 'ACME account email',
     },
+    health: {
+      title: 'Availability checks',
+      description: 'Defaults for the per-host checks. A host that sets its own overrides these; the rest follow whatever you put here.',
+      interval: 'Interval, s',
+      timeout: 'Timeout, s',
+      retention: 'History, days',
+      hint: 'How often each check runs, how long it waits for a reply, and how long results are kept before old ones are dropped.',
+    },
     backup: {
       title: 'Backup & restore',
       description: 'Export the full configuration as a JSON file, or restore from one.',
