@@ -81,7 +81,11 @@ section = "admin"
 priority = "optional"
 conf-files = ["/etc/angie-panel.toml"]
 maintainer-scripts = "../packaging/debian"
-systemd-units = { unit-name = "angie-panel", enable = true, start = false }
+# No `systemd-units` key on purpose. It expects cargo-deb to locate and install
+# the unit files itself; we ship them through `assets` below, so the setting was
+# inert — it generated no enable, no restart-on-upgrade and no stop-on-removal,
+# while reading as though it had. packaging/debian/{postinst,prerm,postrm} do
+# that work explicitly instead.
 assets = [
     ["target/release/angie-panel", "usr/bin/", "755"],
     # A real second binary, not a symlink: apctl is its own crate now, and at a

@@ -5,6 +5,16 @@
 # token out here, not even in a comment — see postinst for what that costs.
 set -e
 
+# The enablement symlinks are removed in prerm (disable), while the unit file
+# still exists to read. Here we only reload a running systemd so it forgets the
+# now-deleted unit, and on purge clear deb-systemd-helper's own bookkeeping.
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+if [ "$1" = "purge" ] && [ -x /usr/bin/deb-systemd-helper ]; then
+    deb-systemd-helper purge angie-panel.service >/dev/null || true
+fi
+
 case "$1" in
     purge)
         # Remove all panel data (database, staging, backups, setup token).

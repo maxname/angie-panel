@@ -10,8 +10,17 @@
 # and printing `postinst: 13: token: not found`. It only stayed harmless
 # because the stray line landed above the `set -e` below.
 #
-# This script itself only manages the service account and the data directory.
+# Service management is done here by hand rather than left to cargo-deb's
+# `systemd-units` setting. That setting expects cargo-deb to find and install the
+# unit files itself; we ship them as plain assets, so it silently did nothing —
+# no enable, no restart on upgrade, no stop on removal. The upgrade case was the
+# damaging one: dpkg replaced the binary while the old process kept running, so
+# `--version` and `systemctl is-active` both looked upgraded while the running
+# code was not, and a pending schema migration never ran. Found on a live box
+# upgrading 0.1.0 -> 0.2.2; containers cannot show it, having no systemd.
 set -e
+
+UNIT=angie-panel.service
 
 case "$1" in
     configure)
@@ -41,6 +50,37 @@ case "$1" in
             install -d -o angie -g angie -m 0750 /var/cache/angie-panel-assets
         else
             install -d -m 0750 /var/cache/angie-panel-assets
+        fi
+
+        # Enable the panel so it survives a reboot. Only the main unit: the
+        # three oneshots are started on demand over D-Bus and must never be
+        # enabled. This runs even without a booted systemd (it only writes
+        # symlinks), so it works in a chroot or an image build.
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper unmask "$UNIT" >/dev/null || true
+            if deb-systemd-helper --quiet was-enabled "$UNIT"; then
+                deb-systemd-helper enable "$UNIT" >/dev/null || true
+            else
+                # Respect an operator who deliberately disabled it.
+                deb-systemd-helper update-state "$UNIT" >/dev/null || true
+            fi
+        fi
+
+        # The rest needs a running systemd.
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+            # $2 is the previously configured version: set on upgrade, empty on
+            # first install. Deliberately no start on a fresh install — the
+            # operator picks the bind address first, and install.sh starts it.
+            if [ -n "$2" ]; then
+                # try-restart, not restart: pick up the new binary if the
+                # service is running, but never start one that was stopped.
+                if [ -x /usr/bin/deb-systemd-invoke ]; then
+                    deb-systemd-invoke try-restart "$UNIT" >/dev/null || true
+                else
+                    systemctl try-restart "$UNIT" >/dev/null || true
+                fi
+            fi
         fi
         ;;
 

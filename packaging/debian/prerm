@@ -7,7 +7,28 @@
 set -e
 
 case "$1" in
-    remove|upgrade|deconfigure)
+    remove)
+        # Disable here, in prerm, NOT in postrm: deb-systemd-helper works out
+        # which symlinks to drop by reading the unit's [Install] section, and by
+        # the time postrm runs dpkg has already deleted the unit file — leaving
+        # the .wants symlink dangling. prerm still has the unit on disk.
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper disable angie-panel.service >/dev/null || true
+        fi
+
+        # Stop on removal only. NOT on upgrade: there the service is left
+        # running and postinst try-restarts it into the new binary, so an
+        # upgrade costs one restart instead of a stop-gap of downtime.
+        if [ -d /run/systemd/system ]; then
+            if [ -x /usr/bin/deb-systemd-invoke ]; then
+                deb-systemd-invoke stop angie-panel.service >/dev/null || true
+            else
+                systemctl stop angie-panel.service >/dev/null || true
+            fi
+        fi
+        ;;
+
+    upgrade|deconfigure)
         ;;
 
     failed-upgrade)
