@@ -28,8 +28,9 @@ and put the binary on your `PATH`:
 | Windows arm64 | `apctl-<version>-aarch64-pc-windows-msvc.zip` |
 
 The Linux builds are static musl: one binary per architecture, no distro or glibc
-requirements. Checksums and (when a signing key is configured) GPG signatures ship with
-every release.
+requirements. Every archive has a `.asc` signature and an entry in `SHA256SUMS.txt` —
+see [verifying artifacts](installation.md#verifying-artifacts) for the signing key's
+fingerprint and the steps.
 
 ## On the server: nothing to set up
 

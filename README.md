@@ -63,8 +63,15 @@ sudo cat /var/lib/angie-panel/setup-token
 Then open `http://<host>:8080/setup`. Details and the upgrade path:
 [docs/installation.md](docs/installation.md).
 
-Releases ship `.deb` packages for both architectures, `SHA256SUMS.txt`, and — when a signing
-key is configured — detached GPG signatures.
+Releases ship `.deb` packages for both architectures, standalone `apctl` binaries for six
+platforms, `SHA256SUMS.txt`, and detached GPG signatures. Verify against this fingerprint —
+not against the key bundled in the release, which proves nothing on its own:
+
+```
+E81C 9989 402A 5C15 B0DD  21B9 2177 3F03 FDFC 43ED
+```
+
+Steps: [docs/installation.md](docs/installation.md#verifying-artifacts).
 
 ## Feature tour
 

@@ -55,14 +55,38 @@ sudo ./install.sh angie-panel_<версия>_arm64.deb
 
 ### Проверка подписи артефактов
 
-Релизы подписаны GPG (если у мейнтейнера настроен ключ). Рядом с каждым файлом лежит
-`<файл>.asc`, а публичный ключ — `angie-panel-signing-key.asc`:
+Начиная с 0.2.1 релизы подписаны. Рядом с каждым файлом лежит `<файл>.asc`.
+
+Ключ подписи:
+
+```
+Angie Panel release signing <komlevma@gmail.com>
+ed25519, срок до 2028-07-18
+E81C 9989 402A 5C15 B0DD  21B9 2177 3F03 FDFC 43ED
+```
+
+**Сверять отпечаток обязательно.** Публичный ключ лежит и в самом релизе
+(`angie-panel-signing-key.asc`), но брать оттуда доверие бессмысленно: кто подменил
+пакет, подменит и ключ рядом. Якорь — отпечаток выше, он приходит другим каналом
+(этот файл в репозитории). Поэтому: импортировать ключ, **сверить отпечаток**, и
+только потом проверять подписи.
 
 ```sh
-gpg --import angie-panel-signing-key.asc
+# Ключ — с сервера ключей…
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 21773F03FDFC43ED
+# …или из релиза, если сервер недоступен:
+# gpg --import angie-panel-signing-key.asc
+
+# Сверить с отпечатком выше — строки должны совпасть символ в символ
+gpg --fingerprint 21773F03FDFC43ED
+
 gpg --verify angie-panel_<версия>_arm64.deb.asc angie-panel_<версия>_arm64.deb
 sha256sum -c SHA256SUMS.txt
 ```
+
+`gpg --verify` должен сказать `Good signature`. Строка
+`WARNING: This key is not certified with a trusted signature` — ожидаемая: она означает
+лишь, что вы не подписывали этот ключ своим. Сверенного отпечатка достаточно.
 
 ---
 
@@ -100,8 +124,32 @@ certificate and an IP allowlist) so traffic is HTTPS.
 
 ### Verifying artifacts
 
+Releases are signed from 0.2.1 on; every file has a `<file>.asc` beside it.
+
+```
+Angie Panel release signing <komlevma@gmail.com>
+ed25519, expires 2028-07-18
+E81C 9989 402A 5C15 B0DD  21B9 2177 3F03 FDFC 43ED
+```
+
+**Check the fingerprint.** The public key also ships in the release
+(`angie-panel-signing-key.asc`), but trusting it from there is circular — whoever could
+swap the package could swap the key next to it. The anchor is the fingerprint above,
+which reaches you by a different route (this file, in the repository).
+
 ```sh
-gpg --import angie-panel-signing-key.asc
+# The key from a keyserver…
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 21773F03FDFC43ED
+# …or from the release if that is unreachable:
+# gpg --import angie-panel-signing-key.asc
+
+# Compare against the fingerprint above — it must match character for character
+gpg --fingerprint 21773F03FDFC43ED
+
 gpg --verify angie-panel_<version>_arm64.deb.asc angie-panel_<version>_arm64.deb
 sha256sum -c SHA256SUMS.txt
 ```
+
+Expect `Good signature`. The `WARNING: This key is not certified with a trusted
+signature` line is normal — it only means you have not signed this key yourself; a
+matching fingerprint is enough.
