@@ -5,20 +5,40 @@
 //! rollback, the audit row — lives behind the API, and a CLI that went around
 //! it would be a second, weaker implementation of the apply pipeline.
 //!
-//! Reached two ways: `angie-panel ctl <cmd>`, or `apctl <cmd>` via a symlink
-//! that `main` dispatches on argv[0]. Same enum, same behaviour.
+//! This is its own crate, depending on nothing of the server's. That is what
+//! lets it build for macOS and Windows — the panel is Linux-only by nature
+//! (systemd, polkit, D-Bus) — and ship as a few MB rather than ~15 with an
+//! embedded frontend and SQLite that a CLI user has no use for.
+//!
+//! Reached two ways: the `apctl` binary, or `angie-panel ctl <cmd>` on the
+//! server, which links this crate and calls the same [`run`].
 //!
 //! Credentials, in order: `--token`, `$ANGIE_PANEL_TOKEN`, then the local token
 //! file in the data dir — which is what makes it zero-config on the box itself.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use clap::Subcommand;
 use serde_json::{json, Value};
 
-use crate::auth::CLI_TOKEN_FILE;
-use crate::config::PanelConfig;
+/// File in the panel's data dir holding the machine-local token. Must match
+/// `auth::CLI_TOKEN_FILE` in the panel; the panel has a test that pins it.
+pub const CLI_TOKEN_FILE: &str = "cli-token";
+
+/// Where to reach the panel and how to authenticate. The panel builds this from
+/// its own `PanelConfig`; the standalone binary builds it from the config file
+/// or from flags alone. Keeping it a plain struct is what stops this crate from
+/// having to know the server's configuration schema.
+pub struct Endpoint {
+    /// `--url`, else `$ANGIE_PANEL_URL`, else derived from bind_addr/port.
+    pub url: Option<String>,
+    /// `--token`, else `$ANGIE_PANEL_TOKEN`, else the local token file.
+    pub token: Option<String>,
+    pub bind_addr: String,
+    pub port: u16,
+    pub data_dir: PathBuf,
+}
 
 #[derive(Subcommand)]
 pub enum CtlCommand {
@@ -51,6 +71,9 @@ pub enum CtlCommand {
         /// bash, zsh, fish, elvish or powershell
         shell: clap_complete::Shell,
     },
+    /// Write this command's man page into DIR. Packaging-time only.
+    #[command(hide = true)]
+    Man { dir: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -170,11 +193,15 @@ impl Client {
 /// Resolve the panel's base URL. `bind_addr` may be a wildcard, which is not a
 /// usable destination — loopback is, and the panel always allows it in the Host
 /// allowlist.
-fn base_url(cfg: &PanelConfig, override_url: Option<String>) -> String {
-    if let Some(u) = override_url.or_else(|| std::env::var("ANGIE_PANEL_URL").ok()) {
+fn base_url(ep: &Endpoint) -> String {
+    if let Some(u) = ep
+        .url
+        .clone()
+        .or_else(|| std::env::var("ANGIE_PANEL_URL").ok())
+    {
         return u.trim_end_matches('/').to_string();
     }
-    let host = match cfg.bind_addr.as_str() {
+    let host = match ep.bind_addr.as_str() {
         "0.0.0.0" | "::" | "" => "127.0.0.1",
         h => h,
     };
@@ -183,11 +210,11 @@ fn base_url(cfg: &PanelConfig, override_url: Option<String>) -> String {
     } else {
         host.to_string()
     };
-    format!("http://{host}:{}", cfg.port)
+    format!("http://{host}:{}", ep.port)
 }
 
-fn resolve_token(cfg: &PanelConfig, override_token: Option<String>) -> anyhow::Result<String> {
-    if let Some(t) = override_token {
+fn resolve_token(ep: &Endpoint) -> anyhow::Result<String> {
+    if let Some(t) = ep.token.clone() {
         return Ok(t);
     }
     if let Ok(t) = std::env::var("ANGIE_PANEL_TOKEN") {
@@ -195,7 +222,7 @@ fn resolve_token(cfg: &PanelConfig, override_token: Option<String>) -> anyhow::R
             return Ok(t.trim().to_string());
         }
     }
-    let path: PathBuf = cfg.data_dir.join(CLI_TOKEN_FILE);
+    let path: PathBuf = ep.data_dir.join(CLI_TOKEN_FILE);
     match std::fs::read_to_string(&path) {
         Ok(t) => Ok(t.trim().to_string()),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => bail!(
@@ -251,30 +278,85 @@ fn parse_upstream(raw: &str) -> anyhow::Result<(String, String, u16)> {
     Ok((scheme.to_string(), host, port))
 }
 
-/// Write a completion script for `cmd` to stdout. Lives here rather than in
-/// `main` so both entry points share it, but it is dispatched from `main`,
-/// which is where the clap `Command` for each spelling is defined — and it must
-/// run before any token lookup, since it talks to nothing.
+/// Write a completion script for `cmd` to stdout. Dispatched from each binary's
+/// `main`, which is where its clap `Command` is defined — and it must run
+/// before any token lookup, since it talks to nothing.
 pub fn print_completions(shell: clap_complete::Shell, cmd: &mut clap::Command) {
     let name = cmd.get_name().to_string();
     clap_complete::generate(shell, cmd, name, &mut std::io::stdout());
 }
 
+/// Render `cmd`'s man page into `dir` as `<name>.1`.
+///
+/// Generated rather than committed so the page cannot drift from the clap
+/// definitions it documents. Lives in this crate so the panel can render both
+/// its own page and the CLI's from one place.
+pub fn write_man_page(dir: &Path, cmd: clap::Command) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(format!("{}.1", cmd.get_name()));
+    let mut buf = Vec::new();
+    clap_mangen::Man::new(cmd)
+        .render(&mut buf)
+        .with_context(|| format!("rendering {}", path.display()))?;
+    std::fs::write(&path, buf).with_context(|| format!("writing {}", path.display()))?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+/// The slice of the panel's `angie-panel.toml` the CLI cares about.
+///
+/// Deliberately not the panel's `PanelConfig`: serde ignores unknown keys, so
+/// this reads the same file without this crate having to track the server's
+/// configuration schema (or depend on the server at all).
+#[derive(Debug, serde::Deserialize)]
+pub struct CliConfig {
+    #[serde(default = "default_bind_addr")]
+    pub bind_addr: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    #[serde(default = "default_data_dir")]
+    pub data_dir: PathBuf,
+}
+
+// Kept in step with the panel's config.rs defaults; `cli_config_defaults_match`
+// in the panel's test suite fails if they drift.
+fn default_bind_addr() -> String {
+    "127.0.0.1".into()
+}
+fn default_port() -> u16 {
+    8080
+}
+fn default_data_dir() -> PathBuf {
+    PathBuf::from("/var/lib/angie-panel")
+}
+
+impl CliConfig {
+    /// Load the panel's config, falling back to defaults when there is none —
+    /// with `--url` and `--token` the CLI needs no config file at all.
+    pub fn load(explicit: Option<PathBuf>) -> Self {
+        let path = explicit
+            .or_else(|| std::env::var("ANGIE_PANEL_CONFIG").ok().map(PathBuf::from))
+            .or_else(|| {
+                ["/etc/angie-panel.toml", "./angie-panel.toml"]
+                    .iter()
+                    .map(PathBuf::from)
+                    .find(|p| p.exists())
+            });
+        path.and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|raw| toml::from_str(&raw).ok())
+            .unwrap_or_else(|| toml::from_str("").expect("CliConfig defaults"))
+    }
+}
+
 // ----------------------------------------------------------------- commands
 
-pub async fn run(
-    cmd: CtlCommand,
-    cfg: PanelConfig,
-    url: Option<String>,
-    token: Option<String>,
-    json_out: bool,
-) -> anyhow::Result<()> {
+pub async fn run(cmd: CtlCommand, ep: Endpoint, json_out: bool) -> anyhow::Result<()> {
     let client = Client {
         http: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?,
-        base: base_url(&cfg, url),
-        token: resolve_token(&cfg, token)?,
+        base: base_url(&ep),
+        token: resolve_token(&ep)?,
         json_out,
     };
 
@@ -292,7 +374,9 @@ pub async fn run(
         CtlCommand::Cert(CertCommand::Ls) => cert_ls(&client).await,
         CtlCommand::Export => export(&client).await,
         CtlCommand::Import { file } => import(&client, &file).await,
-        CtlCommand::Completions { .. } => unreachable!("handled in main"),
+        CtlCommand::Completions { .. } | CtlCommand::Man { .. } => {
+            unreachable!("handled in main")
+        }
     }
 }
 
@@ -594,19 +678,55 @@ mod tests {
         }
     }
 
+    fn endpoint(bind: &str, port: u16, url: Option<&str>) -> Endpoint {
+        Endpoint {
+            url: url.map(str::to_string),
+            token: Some("ap_test".into()),
+            bind_addr: bind.into(),
+            port,
+            data_dir: PathBuf::from("/var/lib/angie-panel"),
+        }
+    }
+
     #[test]
     fn base_url_falls_back_to_loopback_on_wildcard_binds() {
-        let wildcard: PanelConfig = toml::from_str("bind_addr = \"0.0.0.0\"\nport = 8080").unwrap();
-        assert_eq!(base_url(&wildcard, None), "http://127.0.0.1:8080");
-
-        let specific: PanelConfig =
-            toml::from_str("bind_addr = \"192.168.1.5\"\nport = 9000").unwrap();
-        assert_eq!(base_url(&specific, None), "http://192.168.1.5:9000");
-
+        assert_eq!(
+            base_url(&endpoint("0.0.0.0", 8080, None)),
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(
+            base_url(&endpoint("192.168.1.5", 9000, None)),
+            "http://192.168.1.5:9000"
+        );
+        // A bare IPv6 literal has to be bracketed to be a valid authority.
+        assert_eq!(base_url(&endpoint("::1", 8080, None)), "http://[::1]:8080");
         // An explicit override wins and loses any trailing slash.
         assert_eq!(
-            base_url(&specific, Some("http://panel.lan:1234/".into())),
+            base_url(&endpoint(
+                "192.168.1.5",
+                9000,
+                Some("http://panel.lan:1234/")
+            )),
             "http://panel.lan:1234"
         );
+    }
+
+    /// The config file is the panel's, so only the fields the CLI actually
+    /// reads may be required — anything else in it must be ignored, not error.
+    #[test]
+    fn cli_config_ignores_the_rest_of_the_panels_file() {
+        let cfg: CliConfig = toml::from_str(
+            "bind_addr = \"10.0.0.5\"\nport = 9999\ndata_dir = \"/srv/ap\"\n\
+             allow_advanced_snippets = true\n[angie]\nbin = \"/usr/sbin/angie\"",
+        )
+        .expect("unknown panel keys must not break the CLI");
+        assert_eq!(cfg.bind_addr, "10.0.0.5");
+        assert_eq!(cfg.port, 9999);
+        assert_eq!(cfg.data_dir, PathBuf::from("/srv/ap"));
+
+        // And an absent file is equivalent to defaults.
+        let empty: CliConfig = toml::from_str("").unwrap();
+        assert_eq!(empty.bind_addr, "127.0.0.1");
+        assert_eq!(empty.port, 8080);
     }
 }

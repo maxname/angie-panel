@@ -102,7 +102,9 @@ jobs:
       # the cross-compiled musl binary below cannot be executed on the runner.
       - name: Generate man pages
         working-directory: backend
-        run: cargo run --quiet -- man ../packaging/man
+        run: |
+          cargo run --quiet -p angie-panel -- man ../packaging/man
+          cargo run --quiet -p apctl -- man ../packaging/man
 
       - name: Build release binary (cargo-zigbuild)
         working-directory: backend
@@ -122,9 +124,97 @@ jobs:
           path: backend/target/${{ matrix.target }}/debian/*.deb
           if-no-files-found: error
 
+  # Standalone apctl for operators who drive the panel from a workstation.
+  # It is its own crate depending on nothing of the server's, so this job needs
+  # neither the frontend artifact nor any of the .deb machinery — and it builds
+  # for platforms the panel itself never could (the panel is systemd + polkit +
+  # D-Bus by nature).
+  build-cli:
+    name: Build apctl (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One unavailable runner or toolchain must not sink the other five.
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: static musl, so one binary per arch runs on any distro.
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, zig: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, zig: true }
+          # macOS runners are arm64; the x86_64 slice is a plain cross-compile.
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: .exe }
+          # Native arm64 Windows runner: cross-compiling this target needs the
+          # ARM64 MSVC C toolchain for `ring`, which the x86_64 image does not
+          # reliably carry.
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, ext: .exe }
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: cli-${{ matrix.target }}
+
+      # Zig supplies the cross C toolchain that `ring` needs for musl.
+      - uses: mlugg/setup-zig@v2
+        if: matrix.zig
+        with:
+          version: 0.14.1
+      - name: Install cargo-zigbuild
+        if: matrix.zig
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Build
+        working-directory: backend
+        shell: bash
+        run: |
+          if [ "${{ matrix.zig }}" = "true" ]; then
+            cargo zigbuild -p apctl --release --target ${{ matrix.target }}
+          else
+            cargo build -p apctl --release --target ${{ matrix.target }}
+          fi
+
+      # Sanity check: the thing we are about to publish must at least run and
+      # report the version we tagged. Skipped when cross-compiling, where the
+      # artifact cannot execute on the runner.
+      - name: Smoke-test the binary
+        if: matrix.target != 'x86_64-apple-darwin' && matrix.target != 'aarch64-unknown-linux-musl'
+        working-directory: backend
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/apctl${{ matrix.ext }} --version
+
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="apctl-${version}-${{ matrix.target }}"
+          mkdir -p "staging/$name"
+          cp "backend/target/${{ matrix.target }}/release/apctl${{ matrix.ext }}" "staging/$name/"
+          cp LICENSE docs/cli.md "staging/$name/"
+          cd staging
+          if [ -n "${{ matrix.ext }}" ]; then
+            # Windows: zip, so it unpacks with a double-click and no tar.
+            7z a -tzip "../$name.zip" "$name" >/dev/null
+          else
+            tar czf "../$name.tar.gz" "$name"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            apctl-*.tar.gz
+            apctl-*.zip
+          if-no-files-found: error
+
   release:
     name: Publish GitHub release
-    needs: build-deb
+    needs: [build-deb, build-cli]
     runs-on: ubuntu-latest
     # Job-level env so the sign step's `if:` can read whether a key is set
     # (secrets cannot be referenced directly in `if:` conditions).
@@ -137,7 +227,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          pattern: deb-*
+          pattern: "{deb,cli}-*"
           merge-multiple: true
           path: dist
 
@@ -153,7 +243,10 @@ jobs:
             exit 1
           fi
           cd dist
-          sha256sum -- *.deb install.sh > SHA256SUMS.txt
+          # nullglob: a CLI target whose runner was unavailable must leave the
+          # checksum list short, not insert a literal "apctl-*.zip" entry.
+          shopt -s nullglob
+          sha256sum -- *.deb apctl-*.tar.gz apctl-*.zip install.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # GPG-sign the artifacts (detached ASCII .asc for each .deb, install.sh,
@@ -166,7 +259,9 @@ jobs:
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
-          for f in dist/*.deb dist/install.sh dist/SHA256SUMS.txt; do
+          shopt -s nullglob
+          for f in dist/*.deb dist/apctl-*.tar.gz dist/apctl-*.zip \
+                   dist/install.sh dist/SHA256SUMS.txt; do
             gpg --batch --yes --pinentry-mode loopback \
                 --passphrase "${GPG_PASSPHRASE:-}" \
                 --local-user "$keyid" \

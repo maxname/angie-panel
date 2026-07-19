@@ -6,17 +6,6 @@
 set -e
 
 case "$1" in
-    remove|purge)
-        # postinst created this symlink, so dpkg does not track it and will not
-        # clean it up. Only remove our own link, never a file someone replaced
-        # it with. Falls through to the purge block below when purging.
-        if [ -L /usr/bin/apctl ] && [ "$(readlink /usr/bin/apctl)" = "angie-panel" ]; then
-            rm -f /usr/bin/apctl
-        fi
-        ;;
-esac
-
-case "$1" in
     purge)
         # Remove all panel data (database, staging, backups, setup token).
         # Guard: only if it is a real directory, never follow a symlink.

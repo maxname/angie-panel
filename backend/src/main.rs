@@ -9,7 +9,6 @@ mod auth;
 mod bans;
 mod certs;
 mod config;
-mod ctl;
 mod dashboard;
 mod db;
 mod dns_providers;
@@ -39,7 +38,7 @@ mod users;
 mod integration_tests;
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -77,36 +76,16 @@ enum Command {
         #[command(flatten)]
         opts: CtlOptions,
         #[command(subcommand)]
-        command: ctl::CtlCommand,
+        command: apctl::CtlCommand,
     },
-    /// Write angie-panel.1 and apctl.1 into DIR. Packaging-time only: the
-    /// release build runs this on the host, since the cross-compiled musl
-    /// binary cannot be executed on the CI runner.
+    /// Write angie-panel.1 into DIR. Packaging-time only: the release build runs
+    /// this on the host, since the cross-compiled musl binary cannot be executed
+    /// on the CI runner. `apctl man` renders the CLI's own page.
     #[command(hide = true)]
     Man { dir: PathBuf },
 }
 
-/// Render both spellings' man pages. Generated rather than committed so they
-/// cannot drift from the clap definitions they document.
-fn write_man_pages(dir: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    for (name, cmd) in [
-        ("angie-panel.1", Cli::command()),
-        ("apctl.1", CtlCli::command()),
-    ] {
-        let path = dir.join(name);
-        let mut buf = Vec::new();
-        clap_mangen::Man::new(cmd)
-            .render(&mut buf)
-            .with_context(|| format!("rendering {name}"))?;
-        std::fs::write(&path, buf).with_context(|| format!("writing {}", path.display()))?;
-        println!("{}", path.display());
-    }
-    Ok(())
-}
-
-/// Shared by `angie-panel ctl` and the `apctl` entry point, so the two spellings
-/// can never drift apart.
+/// Options for `angie-panel ctl`, mirroring the standalone `apctl` binary's.
 #[derive(clap::Args)]
 struct CtlOptions {
     /// Panel URL (default: $ANGIE_PANEL_URL, else the configured bind address)
@@ -120,34 +99,8 @@ struct CtlOptions {
     json: bool,
 }
 
-/// The `apctl` spelling: the same subcommands, hoisted to the top level.
-#[derive(Parser)]
-#[command(
-    name = "apctl",
-    version,
-    about = "Operator CLI for the Angie panel (same as `angie-panel ctl`)"
-)]
-struct CtlCli {
-    /// Config file (default: $ANGIE_PANEL_CONFIG, /etc/angie-panel.toml, ./angie-panel.toml)
-    #[arg(long, global = true)]
-    config: Option<PathBuf>,
-    #[command(flatten)]
-    opts: CtlOptions,
-    #[command(subcommand)]
-    command: ctl::CtlCommand,
-}
-
-/// True when argv[0] is the `apctl` symlink rather than the panel binary.
-fn invoked_as_ctl() -> bool {
-    std::env::args_os()
-        .next()
-        .map(PathBuf::from)
-        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
-        .is_some_and(|name| name == "apctl")
-}
-
-/// Config for the CLI. Unlike the server, a missing config file is not fatal:
-/// with `--url` and `--token` there is nothing to read from it.
+/// Config for the CLI path. Unlike the server, a missing config file is not
+/// fatal: with `--url` and `--token` there is nothing to read from it.
 fn ctl_config(explicit: Option<PathBuf>) -> config::PanelConfig {
     config::resolve_path(explicit)
         .and_then(|p| config::load(&p))
@@ -166,51 +119,37 @@ enum HelperMode {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // The CLI talks to an operator, not to journald: keep its stderr for real
-    // problems instead of the server's info-level narration.
-    let default_filter = if invoked_as_ctl() {
-        "warn"
-    } else {
-        "info,sqlx=warn"
-    };
+    let cli = Cli::parse();
+
+    // The CLI path talks to an operator, not to journald: keep its stderr for
+    // real problems instead of the server's info-level narration.
+    let ctl_path = matches!(cli.command, Some(Command::Ctl { .. }));
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| default_filter.into()),
+                .unwrap_or_else(|_| if ctl_path { "warn" } else { "info,sqlx=warn" }.into()),
         )
         .init();
 
-    if invoked_as_ctl() {
-        let cli = CtlCli::parse();
-        // Before anything that needs a token or a reachable panel.
-        if let ctl::CtlCommand::Completions { shell } = cli.command {
-            ctl::print_completions(shell, &mut CtlCli::command());
-            return Ok(());
-        }
-        let cfg = ctl_config(cli.config);
-        return ctl::run(
-            cli.command,
-            cfg,
-            cli.opts.url,
-            cli.opts.token,
-            cli.opts.json,
-        )
-        .await;
-    }
-
-    let cli = Cli::parse();
     // `ctl` and `man` are split out first: neither may require a config file the
     // way the server does — --url/--token can supply everything the CLI needs,
     // and man generation runs in a build sandbox with no config at all.
     let command = match cli.command {
-        Some(Command::Man { dir }) => return write_man_pages(&dir),
+        Some(Command::Man { dir }) => return apctl::write_man_page(&dir, Cli::command()),
         Some(Command::Ctl { opts, command }) => {
-            if let ctl::CtlCommand::Completions { shell } = command {
-                ctl::print_completions(shell, &mut Cli::command());
+            if let apctl::CtlCommand::Completions { shell } = command {
+                apctl::print_completions(shell, &mut Cli::command());
                 return Ok(());
             }
             let cfg = ctl_config(cli.config);
-            return ctl::run(command, cfg, opts.url, opts.token, opts.json).await;
+            let endpoint = apctl::Endpoint {
+                url: opts.url,
+                token: opts.token,
+                bind_addr: cfg.bind_addr,
+                port: cfg.port,
+                data_dir: cfg.data_dir,
+            };
+            return apctl::run(command, endpoint, opts.json).await;
         }
         other => other.unwrap_or(Command::Serve),
     };

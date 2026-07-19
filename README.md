@@ -31,7 +31,8 @@ Built for small always-on boxes: a single static binary, no runtime dependencies
   an uptime bar right in the host list.
 - **A real CLI, not just a web UI.** `apctl status`, `apctl apply`, and `export`/`import`
   for configuration in git. It talks to the same API the browser does, so scripted changes
-  get the same validation, rollback and audit trail. See [docs/cli.md](docs/cli.md).
+  get the same validation, rollback and audit trail. Ships as a standalone ~4 MB binary for
+  Linux, macOS and Windows on both arm64 and x86_64. See [docs/cli.md](docs/cli.md).
 
 ## Screenshots
 

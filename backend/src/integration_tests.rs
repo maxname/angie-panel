@@ -2039,6 +2039,26 @@ async fn health_endpoint_returns_beats_shape() {
     assert_eq!(body_json(res).await["beats"], json!([]));
 }
 
+/// `apctl` is a standalone crate that deliberately knows nothing about the
+/// server — which means these few values are duplicated rather than shared.
+/// Duplication is fine; silent drift is not. If the panel writes its token to a
+/// different filename, or its config defaults move, the CLI would look in the
+/// wrong place and fail with "no API token available" on a perfectly good box.
+#[test]
+fn apctl_crate_agrees_with_the_panel_on_the_shared_contract() {
+    assert_eq!(
+        auth::CLI_TOKEN_FILE,
+        apctl::CLI_TOKEN_FILE,
+        "the CLI must look for the token file the panel actually writes"
+    );
+
+    let panel: config::PanelConfig = toml::from_str("").unwrap();
+    let cli: apctl::CliConfig = toml::from_str("").unwrap();
+    assert_eq!(panel.bind_addr, cli.bind_addr, "default bind_addr drifted");
+    assert_eq!(panel.port, cli.port, "default port drifted");
+    assert_eq!(panel.data_dir, cli.data_dir, "default data_dir drifted");
+}
+
 // ------------------------------------------------------------- API tokens
 
 /// Same as `request`, but authenticating with `Authorization: Bearer` instead

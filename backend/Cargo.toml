@@ -1,12 +1,29 @@
+# The panel is the workspace root; `apctl` is a member rather than a second
+# [[bin]] here so the CLI links none of the server's dependencies — that is what
+# lets it build for macOS and Windows, where SQLite, systemd and D-Bus have no
+# business being.
+[workspace]
+members = ["apctl"]
+# Without this, a plain `cargo build` here builds only the root package, and
+# apctl comes along as a *library* dependency — its binary is never produced.
+# The .deb asset would then be missing and `cargo test`/`clippy` would skip the
+# CLI's own targets, both silently.
+default-members = [".", "apctl"]
+
+[workspace.package]
+version = "0.1.0"
+
 [package]
 name = "angie-panel"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Web configurator for the Angie reverse proxy (nginx-proxy-manager analog, native systemd service)"
 license = "MIT"
 authors = ["Angie Panel contributors"]
 
 [dependencies]
+# The CLI, so `angie-panel ctl` and the standalone `apctl` can never drift.
+apctl = { path = "apctl" }
 anyhow = "1"
 argon2 = "0.5"
 askama = "0.16.0"
@@ -16,8 +33,6 @@ axum-extra = { version = "0.10", features = ["cookie"] }
 bcrypt = "0.15"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
-clap_complete = "4.6.7"
-clap_mangen = "0.3.0"
 getrandom = "0.3"
 hex = "0.4"
 hickory-resolver = "0.24"
@@ -69,6 +84,9 @@ maintainer-scripts = "../packaging/debian"
 systemd-units = { unit-name = "angie-panel", enable = true, start = false }
 assets = [
     ["target/release/angie-panel", "usr/bin/", "755"],
+    # A real second binary, not a symlink: apctl is its own crate now, and at a
+    # few MB it costs far less than the argv[0] indirection it replaces.
+    ["target/release/apctl", "usr/bin/", "755"],
     ["../packaging/angie-panel.toml", "etc/angie-panel.toml", "644"],
     ["../packaging/systemd/angie-panel.service", "lib/systemd/system/", "644"],
     ["../packaging/systemd/angie-panel-configtest.service", "lib/systemd/system/", "644"],
@@ -82,10 +100,10 @@ assets = [
     # with the full public-domain dataset before cargo-deb packages it.
     ["data/geoip-countries.csv", "usr/share/angie-panel/geoip-countries.csv", "644"],
     ["../packaging/tmpfiles/angie-panel.conf", "usr/lib/tmpfiles.d/", "644"],
-    # Man pages for both spellings of the binary. Not committed: generated from
-    # the clap definitions by `angie-panel man packaging/man` so they cannot
-    # drift from the actual flags. release.yml runs it with a host-native build,
-    # since the cross-compiled musl binary will not execute on the runner.
+    # Man pages for both binaries. Not committed: generated from the clap
+    # definitions by `angie-panel man packaging/man` so they cannot drift from
+    # the actual flags. release.yml runs it with a host-native build, since the
+    # cross-compiled musl binary will not execute on the runner.
     ["../packaging/man/angie-panel.1", "usr/share/man/man1/", "644"],
     ["../packaging/man/apctl.1", "usr/share/man/man1/", "644"],
     # Vendored acme.sh core + the dnsapi plugins used by the DNS-01 provider hook

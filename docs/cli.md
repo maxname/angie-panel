@@ -1,12 +1,35 @@
 # The `apctl` CLI
 
-`apctl` is the same binary as the panel, installed as a symlink and dispatching on
-`argv[0]`. Every command is also spelled `angie-panel ctl <command>` — identical
-behaviour, so scripts can use either.
-
-It is a client of the panel's own REST API, not a second way into the database. Config
+`apctl` is a client of the panel's REST API, not a second way into the database. Config
 generation, `angie -t` validation, the atomic swap with rollback and the audit trail all
 stay in one place; the CLI only calls them.
+
+It is its own crate, depending on nothing of the server's — no SQLite, no embedded
+frontend, no systemd. That is what lets it run on a workstation the panel could never run
+on, and ship as ~4 MB rather than the panel's ~15. On the panel host the `.deb` installs
+it alongside the service; everywhere else you download one file.
+
+Every command is also spelled `angie-panel ctl <command>` on the server, which links the
+same crate — identical behaviour, so existing scripts can use either.
+
+## Install
+
+On the panel host, the `.deb` already brought it. Elsewhere, grab the archive for your
+platform from the [latest release](https://github.com/maxname/angie-panel/releases/latest)
+and put the binary on your `PATH`:
+
+| Platform | Archive |
+|---|---|
+| Linux x86_64 | `apctl-<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux arm64 | `apctl-<version>-aarch64-unknown-linux-musl.tar.gz` |
+| macOS Apple silicon | `apctl-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `apctl-<version>-x86_64-apple-darwin.tar.gz` |
+| Windows x86_64 | `apctl-<version>-x86_64-pc-windows-msvc.zip` |
+| Windows arm64 | `apctl-<version>-aarch64-pc-windows-msvc.zip` |
+
+The Linux builds are static musl: one binary per architecture, no distro or glibc
+requirements. Checksums and (when a signing key is configured) GPG signatures ship with
+every release.
 
 ## On the server: nothing to set up
 
@@ -22,13 +45,21 @@ the service account — not because the CLI needs root for anything else.
 
 To rotate that token, delete the file and restart the service.
 
-## From anywhere else
+## From your workstation
 
 Create a token in the panel under **API tokens**, then:
 
 ```bash
 export ANGIE_PANEL_TOKEN=ap_…
 export ANGIE_PANEL_URL=https://panel.example.com
+apctl status
+```
+
+In PowerShell:
+
+```powershell
+$env:ANGIE_PANEL_TOKEN = "ap_…"
+$env:ANGIE_PANEL_URL   = "https://panel.example.com"
 apctl status
 ```
 
