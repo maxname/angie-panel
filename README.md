@@ -29,6 +29,9 @@ Built for small always-on boxes: a single static binary, no runtime dependencies
 - **No Docker anywhere.** One `.deb`, one systemd service, one SQLite file.
 - **Uptime monitoring built in.** Per-host TCP and HTTP(S) checks with history, shown as
   an uptime bar right in the host list.
+- **A real CLI, not just a web UI.** `apctl status`, `apctl apply`, and `export`/`import`
+  for configuration in git. It talks to the same API the browser does, so scripted changes
+  get the same validation, rollback and audit trail. See [docs/cli.md](docs/cli.md).
 
 ## Screenshots
 
@@ -99,7 +102,7 @@ frontend/    React 19 + Vite + Tailwind + shadcn/ui
 backend/     Rust: axum, sqlx/SQLite, config generator, ACME hook, root helper
 packaging/   .deb metadata, systemd units, polkit rules, install.sh
 e2e/         real Angie + pebble, exercising issuance end to end
-docs/        installation, certificates, security, troubleshooting
+docs/        installation, certificates, CLI, security, troubleshooting
 ```
 
 More detail: [PLAN.md](PLAN.md) (Russian) and [docs/research/](docs/research/).

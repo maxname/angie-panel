@@ -7,7 +7,7 @@ use axum::Router;
 use crate::state::AppState;
 use crate::{
     access_lists, acme_hook, apply_api, assets, audit, auth, bans, certs, dashboard, export_import,
-    geo, hosts, other_hosts, security, sni_routers, streams, system, users,
+    geo, hosts, other_hosts, security, sni_routers, streams, system, tokens, users,
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -34,6 +34,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/users/me/password", post(users::change_own_password))
         .route("/users/{id}", axum::routing::delete(users::delete))
         .route("/users/{id}/role", axum::routing::put(users::update_role))
+        .route("/tokens", get(tokens::list).post(tokens::create))
+        .route("/tokens/{id}", axum::routing::delete(tokens::delete))
         .route("/system/status", get(system::get_status))
         .route(
             "/system/configtest",

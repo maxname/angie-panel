@@ -16,11 +16,19 @@ pub const REQUEST_HEADER: &str = "x-ap-request";
 
 /// Mutating endpoints any authenticated (or unauthenticated) user may call —
 /// exempt from the admin role gate. Everything else requires admin.
+///
+/// API tokens are here because a token inherits its owner's role: a viewer
+/// minting one gets a viewer token, so there is nothing to escalate. Ownership
+/// (you may only revoke your own) is enforced in the handler.
 fn is_self_service(path: &str) -> bool {
     matches!(
         path,
-        "/api/auth/login" | "/api/auth/setup" | "/api/auth/logout" | "/api/users/me/password"
-    )
+        "/api/auth/login"
+            | "/api/auth/setup"
+            | "/api/auth/logout"
+            | "/api/users/me/password"
+            | "/api/tokens"
+    ) || path.starts_with("/api/tokens/")
 }
 
 /// The ACME DNS-01 hook Angie calls during issuance. It carries no session and

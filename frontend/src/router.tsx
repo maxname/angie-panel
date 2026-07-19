@@ -137,6 +137,12 @@ const usersRoute = createRoute({
   component: lazyRouteComponent(() => import('@/pages/users'), 'UsersPage'),
 })
 
+const tokensRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/tokens',
+  component: lazyRouteComponent(() => import('@/pages/tokens'), 'TokensPage'),
+})
+
 const auditRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/audit',
@@ -165,6 +171,7 @@ const routeTree = rootRoute.addChildren([
     blocklistRoute,
     applyRoute,
     usersRoute,
+    tokensRoute,
     auditRoute,
     settingsRoute,
   ]),

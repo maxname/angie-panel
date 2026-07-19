@@ -2038,3 +2038,293 @@ async fn health_endpoint_returns_beats_shape() {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(body_json(res).await["beats"], json!([]));
 }
+
+// ------------------------------------------------------------- API tokens
+
+/// Same as `request`, but authenticating with `Authorization: Bearer` instead
+/// of a session cookie. The CSRF marker is still sent — tokens are not exempt
+/// from it, they simply are not ambient credentials.
+fn bearer_request(method: Method, uri: &str, body: Option<Value>, token: &str) -> Request<Body> {
+    let mut req = request(method, uri, body, None);
+    req.headers_mut().insert(
+        header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    req
+}
+
+/// Mint a token over the API and return its one-time secret.
+async fn mint_token(app: &axum::Router, cookie: &str, name: &str, days: Option<i64>) -> String {
+    let mut body = json!({ "name": name });
+    if let Some(d) = days {
+        body["expires_in_days"] = json!(d);
+    }
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/tokens",
+            Some(body),
+            Some(cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "minting token {name}");
+    body_json(res).await["secret"].as_str().unwrap().to_string()
+}
+
+/// The invariant that makes bearer auth safe to add: a token carries its
+/// owner's role, and the *central* role gate sees it. If token resolution ever
+/// gets wired into the `AuthUser` extractor alone, the middleware would read
+/// "no session" for a viewer's token, skip the gate, and let the handler run —
+/// a silent privilege escalation. These assertions fail if that happens.
+#[tokio::test]
+async fn api_token_inherits_owner_role_and_hits_the_central_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, admin) = authed_app(dir.path()).await;
+
+    let admin_token = mint_token(&app, &admin, "ci", None).await;
+
+    // Admin token: reads and mutations both work.
+    let res = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/hosts",
+            None,
+            &admin_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/hosts",
+            Some(json!({"domains":["t.example.com"],"forward_scheme":"http",
+                        "forward_host":"10.0.0.9","forward_port":80})),
+            &admin_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "admin token may mutate");
+
+    // A viewer mints a token for themselves.
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/users",
+            Some(json!({"email":"v@example.com","password":"viewerpass","role":"viewer"})),
+            Some(&admin),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/auth/login",
+            Some(json!({"email":"v@example.com","password":"viewerpass"})),
+            None,
+        ))
+        .await
+        .unwrap();
+    let viewer = session_cookie(&res);
+    let viewer_token = mint_token(&app, &viewer, "readonly", None).await;
+
+    // It reads…
+    let res = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/hosts",
+            None,
+            &viewer_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // …and every mutation is refused, exactly as the viewer's own session is.
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/api/hosts",
+            Some(json!({"domains":["v2.example.com"],"forward_scheme":"http",
+                        "forward_host":"10.0.0.1","forward_port":80})),
+        ),
+        (Method::POST, "/api/apply", Some(json!({}))),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(bearer_request(method.clone(), path, body, &viewer_token))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "viewer token must not {method} {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn api_token_expiry_revocation_and_no_self_minting() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, admin) = authed_app(dir.path()).await;
+
+    // A garbage bearer is simply unauthenticated.
+    let res = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::GET,
+            "/api/hosts",
+            None,
+            "ap_deadbeef",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // A token may not mint another token: one leaked secret must not be able to
+    // spawn successors that survive revoking it.
+    let token = mint_token(&app, &admin, "ci", Some(30)).await;
+    let res = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/tokens",
+            Some(json!({"name":"child"})),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // Expiry is enforced at lookup: backdate it and the token stops working.
+    let pool = db::connect(dir.path()).await.unwrap();
+    sqlx::query("UPDATE api_tokens SET expires_at = ? WHERE is_local = 0")
+        .bind(db::now_epoch() - 60)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(bearer_request(Method::GET, "/api/hosts", None, &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "expired token");
+
+    // Revoking through the API removes it.
+    let fresh = mint_token(&app, &admin, "second", None).await;
+    let res = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/tokens", None, Some(&admin)))
+        .await
+        .unwrap();
+    let listed = body_json(res).await;
+    let id = listed["tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == json!("second"))
+        .expect("minted token is listed")["id"]
+        .as_i64()
+        .unwrap();
+    // The listing never leaks the secret, only a recognizable prefix.
+    assert!(listed["tokens"][0].get("secret").is_none());
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/tokens/{id}"),
+            None,
+            Some(&admin),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(bearer_request(Method::GET, "/api/hosts", None, &fresh))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "revoked token");
+}
+
+/// The zero-config path for `apctl` on the box: a token file in the data dir,
+/// admin-capable, tied to no account.
+#[tokio::test]
+async fn local_cli_token_bootstraps_and_authenticates() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _admin) = authed_app(dir.path()).await;
+
+    let pool = db::connect(dir.path()).await.unwrap();
+    let cfg: config::PanelConfig = toml::from_str(&format!(
+        "bind_addr = \"127.0.0.1\"\ndata_dir = \"{}\"",
+        dir.path().display()
+    ))
+    .unwrap();
+    let state = Arc::new(AppState::new(cfg, dir.path().join("test.toml"), pool));
+    auth::bootstrap_cli_token(&state).await.unwrap();
+
+    let path = dir.path().join(auth::CLI_TOKEN_FILE);
+    let secret = std::fs::read_to_string(&path).unwrap().trim().to_string();
+    assert!(secret.starts_with(auth::API_TOKEN_PREFIX));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "token file must not be readable by all"
+        );
+    }
+
+    // It is admin-capable — this is what lets `apctl apply` work unattended.
+    let res = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::POST,
+            "/api/hosts",
+            Some(
+                json!({"domains":["local.example.com"],"forward_scheme":"http",
+                        "forward_host":"10.0.0.2","forward_port":80}),
+            ),
+            &secret,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Re-running the bootstrap is a no-op: the secret on disk stays valid.
+    auth::bootstrap_cli_token(&state).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap().trim(),
+        secret,
+        "bootstrap must not rotate a working token"
+    );
+
+    // It cannot be revoked over the API (rotation is a file operation).
+    let id: i64 = sqlx::query_scalar("SELECT id FROM api_tokens WHERE is_local = 1")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(bearer_request(
+            Method::DELETE,
+            &format!("/api/tokens/{id}"),
+            None,
+            &secret,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}

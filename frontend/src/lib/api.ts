@@ -18,6 +18,27 @@ export interface User {
   created_at: number
 }
 
+export interface ApiToken {
+  id: number
+  name: string
+  /** Recognizable fragment (`ap_3f9a2b1c…`), never the usable secret. */
+  prefix: string
+  /** Owning account, or null for the machine-local `apctl` token. */
+  owner: string | null
+  is_local: boolean
+  /** Unix timestamps, seconds. */
+  created_at: number
+  last_used_at: number | null
+  expires_at: number | null
+}
+
+/** Only ever returned by `createToken` — the secret exists here and nowhere else. */
+export interface CreatedToken {
+  id: number
+  name: string
+  secret: string
+}
+
 export interface OkResponse {
   ok: true
 }
@@ -865,6 +886,13 @@ export const api = {
     current_password: string
     new_password: string
   }) => request<OkResponse>('POST', '/api/users/me/password', body),
+
+  listTokens: () => request<{ tokens: ApiToken[] }>('GET', '/api/tokens'),
+
+  createToken: (body: { name: string; expires_in_days?: number }) =>
+    request<CreatedToken>('POST', '/api/tokens', body),
+
+  deleteToken: (id: number) => request<OkResponse>('DELETE', `/api/tokens/${id}`),
 
   getDashboard: () => request<Dashboard>('GET', '/api/dashboard'),
 
