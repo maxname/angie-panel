@@ -148,6 +148,15 @@ jobs:
   build-cli:
     name: Build apctl (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    # Job-level so the macOS signing step's `if:` can test whether a certificate
+    # is configured (secrets cannot be referenced directly in `if:`).
+    env:
+      APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+      APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
     strategy:
       # One unavailable runner or toolchain must not sink the other five.
       fail-fast: false
@@ -203,6 +212,87 @@ jobs:
         working-directory: backend
         shell: bash
         run: ./target/${{ matrix.target }}/release/apctl${{ matrix.ext }} --version
+
+      # Sign and notarize the macOS slices, so a browser-downloaded archive does
+      # not hit Gatekeeper. Must run before packaging: notarization is recorded
+      # against the signed binary's cdhash, so the tar.gz has to contain exactly
+      # the file that was submitted.
+      #
+      # No stapling — Apple's notarization ticket can only be attached to a
+      # .app, .pkg or .dmg, never a bare executable. Gatekeeper therefore checks
+      # this one online, which is the accepted trade for keeping every platform
+      # on the same plain archive.
+      #
+      # Skipped when no certificate is configured, so forks and unsigned builds
+      # still produce a release.
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_BASE64 != ''
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/apctl"
+
+          # Throwaway keychain: never touch the runner's default, and take the
+          # secrets off disk again in the cleanup step below.
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          # Let codesign use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+                     | awk '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$identity" ]; then
+            echo "::error::no Developer ID Application identity in the imported certificate"
+            exit 1
+          fi
+
+          # Hardened runtime and a secure timestamp are both required for
+          # notarization to be accepted.
+          codesign --force --timestamp --options runtime \
+                   --sign "$identity" "$bin"
+          codesign --verify --strict --verbose=2 "$bin"
+
+          # notarytool takes an archive, not a Mach-O file. No --keepParent:
+          # for a bare executable that would bury it under the build directory's
+          # name instead of leaving it at the archive root.
+          ditto -c -k "$bin" "$RUNNER_TEMP/apctl.zip"
+          echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/key.p8"
+          result=$(xcrun notarytool submit "$RUNNER_TEMP/apctl.zip" \
+                     --key "$RUNNER_TEMP/key.p8" \
+                     --key-id "$APPLE_API_KEY_ID" \
+                     --issuer "$APPLE_API_ISSUER_ID" \
+                     --team-id "$APPLE_TEAM_ID" \
+                     --wait --output-format json)
+          echo "$result"
+          status=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+          if [ "$status" != "Accepted" ]; then
+            # Fail loudly: shipping a rejected binary would be worse than not
+            # signing at all, since users would be told it is verified.
+            id=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+            xcrun notarytool log "$id" --key "$RUNNER_TEMP/key.p8" \
+              --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            echo "::error::notarization was not accepted (status: $status)"
+            exit 1
+          fi
+
+          # Informational: without a stapled ticket this depends on the runner
+          # reaching Apple, so it must not gate the release on its own.
+          spctl --assess --type exec -vv "$bin" || true
+
+      - name: Remove signing material
+        if: always() && runner.os == 'macOS'
+        run: |
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/key.p8" "$RUNNER_TEMP/apctl.zip"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
 
       - name: Package
         shell: bash
