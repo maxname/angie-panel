@@ -111,7 +111,7 @@ fn ctl_config(explicit: Option<PathBuf>) -> config::PanelConfig {
 enum HelperMode {
     /// Validate the live Angie configuration (angie -t)
     Configtest,
-    /// Apply staged configuration (M1, not implemented yet)
+    /// Write the staged configuration live and reload Angie
     Apply,
     /// Activate the Angie stream {} context in the live angie.conf (one-time)
     EnableStreams,
