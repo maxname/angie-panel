@@ -22,6 +22,17 @@
       ],
       "cwd": "frontend",
       "port": 4173
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4180"
+      ],
+      "cwd": "site",
+      "port": 4180
     }
   ]
 }

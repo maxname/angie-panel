@@ -1,0 +1,50 @@
+# Publish the landing page in site/ to GitHub Pages.
+#
+# Screenshots are NOT duplicated into site/img: docs/screenshots/ is their only
+# home in git (the READMEs point there), and they are copied into the artifact
+# here. Keeps ~1.3 MB of PNGs out of the repo twice over.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/screenshots/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let a newer push finish rather than queueing behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Assemble the site
+        run: |
+          cp docs/screenshots/*.png site/img/
+          # Fail loudly rather than deploying a page with broken images.
+          for f in hosts dashboard certificates editor settings; do
+            test -s "site/img/$f.png" || { echo "missing screenshot: $f.png" >&2; exit 1; }
+          done
+          ls -l site/img
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
