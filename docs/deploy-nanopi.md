@@ -1,7 +1,8 @@
 # Установка и настройка Angie на NanoPi R6S (Armbian / Debian 13)
 
 > Пошаговая инструкция, как поставить и оптимально настроить Angie на NanoPi R6S
-> под управление Angie Panel. Проверено вживую на устройстве `192.168.8.4`.
+> под управление Angie Panel. Проверено вживую на реальном устройстве. Адрес `192.168.1.10` ниже — пример:
+> подставьте свой.
 > English summary at the bottom.
 
 ## Целевое устройство (проверено)
@@ -14,7 +15,7 @@
 | Диск | eMMC/SD 57 ГБ (после установки занято ~1.6 ГБ) |
 | Angie | **1.12.0** из официального репозитория |
 
-Всё делается под `root` по SSH: `ssh root@192.168.8.4`.
+Всё делается под `root` по SSH: `ssh root@192.168.1.10`.
 
 ## 0. Предпосылки
 
@@ -174,9 +175,9 @@ cargo deb --target aarch64-unknown-linux-musl --no-build --no-strip
 и bind-адрес). Ниже — те же шаги вручную/неинтерактивно (проверено вживую):
 
 ```bash
-scp angie-panel_*_arm64.deb root@192.168.8.4:/root/          # с dev-машины
+scp angie-panel_*_arm64.deb root@192.168.1.10:/root/          # с dev-машины
 
-ssh root@192.168.8.4
+ssh root@192.168.1.10
 chmod 644 /root/angie-panel_*_arm64.deb
 apt-get install -y /root/angie-panel_*_arm64.deb             # тянет polkitd, создаёт юзера angie-panel + /var/lib/angie-panel
 systemctl daemon-reload                                       # postinst не делает это сам
@@ -185,13 +186,13 @@ systemctl daemon-reload                                       # postinst не д
 rm -f /etc/angie/http.d/default.conf && systemctl reload angie
 
 # Адрес веб-панели (LAN, чтобы открывать из локалки; НЕ 0.0.0.0 и не WAN):
-sed -i 's|^bind_addr = .*|bind_addr = "192.168.8.4"|' /etc/angie-panel.toml
+sed -i 's|^bind_addr = .*|bind_addr = "192.168.1.10"|' /etc/angie-panel.toml
 
 systemctl enable --now angie-panel && systemctl restart angie-panel
 cat /var/lib/angie-panel/setup-token                          # одноразовый токен
 ```
 
-Готово: открыть `http://192.168.8.4:8080/setup`, ввести токен, создать админа. Дашборд
+Готово: открыть `http://192.168.1.10:8080/setup`, ввести токен, создать админа. Дашборд
 покажет «status недоступен», пока не сделаете первый **Apply** — панель генерит свой
 `00-panel.conf` (default-сайт + `/status` на :8100), активирует `stream {}` при первом
 стриме и кладёт ACME-серты в `/var/lib/angie/acme` (всё уже подготовлено пакетом Angie).

@@ -1,124 +1,150 @@
 # Angie Panel
 
-> Рабочее название проекта. [English version below.](#english)
+> 🇷🇺 [Читать по-русски](README.rus.md)
 
-![status: M4 feature-complete](https://img.shields.io/badge/status-M4_feature--complete-brightgreen)
+[![CI](https://github.com/maxname/angie-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/maxname/angie-panel/actions/workflows/ci.yml)
 ![license: MIT](https://img.shields.io/badge/license-MIT-blue)
+![arm64 · amd64](https://img.shields.io/badge/arch-arm64%20%C2%B7%20amd64-informational)
 
-**Angie Panel** — веб-конфигуратор reverse-proxy на базе [Angie](https://angie.software/): аналог nginx-proxy-manager, но нативный systemd-сервис без Docker и с сертификатами через встроенный ACME-модуль Angie.
+A web UI for running [Angie](https://en.angie.software/) as a reverse proxy — think
+nginx-proxy-manager, but a plain systemd service instead of a Docker stack, with
+certificates issued by Angie's own ACME module instead of certbot.
 
-**Статус:** функционально готов (этапы M0–M4). Реальный выпуск сертификата проверяется на каждый push в CI (Angie + pebble). Осталась проверка на самом устройстве (systemd-reload на живом железе).
+Built for small always-on boxes: a single static binary, no runtime dependencies, and
+~10–20 MB of RAM.
 
-**Документация:** [установка](docs/installation.md) · [сертификаты/ACME](docs/certificates.md) · [безопасность](docs/security.md) · [диагностика](docs/troubleshooting.md).
+![Proxy hosts with live uptime bars](docs/screenshots/hosts.png)
 
-## Чем отличается
+## Why this instead of nginx-proxy-manager
 
-- **Встроенный ACME вместо certbot** — Angie сам выпускает и продлевает сертификаты (http-01, tls-alpn-01, dns-01/wildcard); никаких certbot/pip/cron.
-- **Честный apply-пайплайн** — diff перед применением, валидация staging-конфига через `angie -t`, атомарная запись и автоматический откат по снапшоту при любой ошибке.
-- **Панель без root** — конфиги генерирует непривилегированный пользователь; в `/etc` пишет только маленький аудируемый root-хелпер (oneshot systemd-юнит, доступ строго через polkit).
-- **arm64 SBC — first-class target** — разрабатывается под NanoPi R-серию (R4S/R6S, Armbian/Debian 12/13; на живом железе проверяется на R6S); один статический musl-бинарник, ~10–20 МБ RAM.
+- **Angie issues the certificates, not certbot.** http-01, tls-alpn-01 and dns-01
+  (including wildcards) are handled by Angie's built-in ACME module. No certbot, no pip,
+  no renewal cron — and no container to keep alive just to hold a certificate.
+- **The apply pipeline tells you the truth.** You see a diff before anything is written.
+  The staged config is validated with `angie -t`, written atomically, and rolled back from
+  a snapshot if the reload fails. Config drift on disk is detected and shown.
+- **The panel never runs as root.** It generates config as an unprivileged user; a small
+  auditable helper — the same binary, invoked through a systemd oneshot unit behind polkit
+  — is the only thing that writes to `/etc`.
+- **No Docker anywhere.** One `.deb`, one systemd service, one SQLite file.
+- **Uptime monitoring built in.** Per-host TCP and HTTP(S) checks with history, shown as
+  an uptime bar right in the host list.
 
-## Архитектура (кратко)
+## Screenshots
 
-Бэкенд на Rust (axum) со встроенным React UI работает от пользователя `angie-panel` и хранит всё в SQLite — конфиги Angie являются детерминированной проекцией БД. Изменения применяются через тонкий root-хелпер (тот же бинарник, отдельные oneshot-юниты за polkit): линтер → `angie -t` на staging-конфиге → снапшот → атомарная синхронизация в `/etc/angie/http.d/` → graceful reload, при сбое — откат. Сертификаты выпускает и продлевает сам Angie через встроенный ACME-модуль.
+| | |
+|---|---|
+| **Dashboard** — live Angie metrics, certificate state, per-host traffic | **Certificates** — issued by Angie, http-01 / dns-01 / wildcard |
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Certificates](docs/screenshots/certificates.png) |
+| **Host editor** — thirteen sections, from SSL to rate limits | **Settings** — defaults for the whole install |
+| ![Host editor](docs/screenshots/editor.png) | ![Settings](docs/screenshots/settings.png) |
 
-Подробности: [PLAN.md](PLAN.md) и [docs/research/](docs/research/).
+## Install
 
-## Разработка
-
-Бэкенд:
-
-```bash
-# однократно, если фронтенд ещё не собран (rust-embed требует каталог при компиляции):
-mkdir -p frontend/dist && touch frontend/dist/index.html
-
-cd backend
-cargo run -- serve --config ../dev/angie-panel.toml
-```
-
-Фронтенд (dev-сервер Vite):
-
-```bash
-cd frontend
-pnpm install
-pnpm dev
-```
-
-Панель доступна на <http://127.0.0.1:5173>, запросы к `/api` проксируются на бэкенд (порт 8080).
-
-## Установка на устройство
-
-Подробности и первый вход — в [docs/installation.md](docs/installation.md). Кратко:
+Debian/Ubuntu on `amd64` or `arm64`, with Angie already installed
+(see [docs/deploy-nanopi.md](docs/deploy-nanopi.md) for a full walkthrough on a fresh box):
 
 ```bash
 curl -fsSL https://github.com/maxname/angie-panel/releases/latest/download/install.sh -o install.sh
-less install.sh   # сначала прочитайте скрипт
+less install.sh          # read it before running it
 sudo bash install.sh
 ```
 
-Дефолтного пароля нет: при первом запуске возьмите одноразовый setup-токен
-(`sudo cat /var/lib/angie-panel/setup-token`) и создайте администратора на `/setup`.
-
-## Дорожная карта
-
-| Этап | Кратко | Статус |
-|---|---|---|
-| **M0** | Каркас и фундамент привилегий: repo/CI/cross-сборка, auth + setup-токен, .deb + systemd-юниты + polkit, root-хелпер | ✅ |
-| **M1** | Хосты и apply: CRUD proxy-хостов, генератор + линтер, staging-валидация, снапшоты и rollback, детект дрейфа | ✅ |
-| **M2** | Сертификаты: встроенный ACME (http-01 / tls-alpn-01 / dns-01 wildcard), state machine первого выпуска; проверено на Angie+pebble | ✅ |
-| **M3** | Дашборд: /status-поллинг, метрики по хостам, статусы сертификатов, детект дрейфа, авто-включение HTTPS после выпуска | ✅ |
-| **M4** | Экспорт/импорт конфигурации (JSON), документация RU/EN, GPG-подпись артефактов | ✅ |
-
-Осталось: e2e-прогон на реальном NanoPi R6S (systemd-reload и выпуск на живом железе).
-Полная дорожная карта — в [PLAN.md](PLAN.md), §10.
-
-## Лицензия
-
-[MIT](LICENSE). Вендоренный `acme.sh` (в `.deb` для DNS-01 через API провайдеров)
-распространяется под собственной лицензией GPLv3 как отдельные скрипты — панель лишь
-вызывает их как подпроцесс.
-
----
-
-## English
-
-**Angie Panel** (working title) is a web-based reverse-proxy configurator built on [Angie](https://en.angie.software/) — think nginx-proxy-manager, but a native systemd service (no Docker) with certificates handled by Angie's built-in ACME module.
-
-**Status:** feature-complete (milestones M0–M4). Real certificate issuance is exercised on
-every CI push (Angie + pebble); on-device verification (systemd reload on real hardware) is
-what remains. Docs: [installation](docs/installation.md) ·
-[certificates/ACME](docs/certificates.md) · [security](docs/security.md) ·
-[troubleshooting](docs/troubleshooting.md).
-
-Key differentiators:
-
-- **Built-in ACME instead of certbot** — Angie itself issues and renews certificates (http-01, tls-alpn-01, dns-01/wildcard).
-- **Honest apply pipeline** — diff preview, staged `angie -t` validation, atomic sync, automatic snapshot rollback on any failure.
-- **The panel never runs as root** — config generation is unprivileged; only a small auditable root helper (oneshot systemd unit behind polkit) writes to `/etc`.
-- **arm64 SBCs are a first-class target** — developed for the NanoPi R-series (R4S/R6S, Armbian/Debian 12/13; on-device validation on the R6S); a single static musl binary.
-
-Architecture in short: a Rust (axum) backend with an embedded React UI stores everything in SQLite; Angie config files are a deterministic projection of the database, applied through the root helper (lint → staged `angie -t` → snapshot → atomic sync into `/etc/angie/http.d/` → graceful reload, rollback on failure). Details: [PLAN.md](PLAN.md) (Russian) and [docs/research/](docs/research/).
-
-Dev quickstart:
+There is no default password. Read the one-time setup token and create the first admin:
 
 ```bash
-# backend (once: mkdir -p frontend/dist && touch frontend/dist/index.html for rust-embed)
+sudo cat /var/lib/angie-panel/setup-token
+```
+
+Then open `http://<host>:8080/setup`. Details and the upgrade path:
+[docs/installation.md](docs/installation.md).
+
+Releases ship `.deb` packages for both architectures, `SHA256SUMS.txt`, and — when a signing
+key is configured — detached GPG signatures.
+
+## Feature tour
+
+**Hosts.** Proxy hosts, redirection hosts, 404 hosts, TCP/UDP streams and SNI routers.
+Per host: websockets, HTTP/2 and HTTP/3, HSTS, custom locations, upstreams with load
+balancing, rate limits, custom headers, gzip, error pages, maintenance mode, mTLS, forward
+auth, and a raw snippet escape hatch.
+
+**Certificates.** Issued and renewed by Angie. DNS-01 works through provider APIs via a
+vendored `acme.sh` (Cloudflare, reg.ru, Route 53, and others); the hook waits for the TXT
+record to propagate to every authoritative nameserver before telling the CA to check.
+
+**Availability.** Opt-in TCP and HTTP(S) checks per host, on their own schedule. HTTP
+checks go over loopback with the host's domain as SNI and verify the certificate — so they
+report whether *your Angie* serves the site. They cannot tell you the internet reaches you;
+nothing running on the box can.
+
+**Security.** Access lists (basic auth + IP rules), an IP blocklist, GeoIP country policy,
+an audit log, and role-based users.
+
+**Operations.** Config export/import as JSON, apply history, drift detection, and a
+dashboard fed by Angie's own status API.
+
+## Architecture
+
+A Rust ([axum](https://github.com/tokio-rs/axum)) backend with the React UI embedded in the
+binary. Everything lives in SQLite; the files under `/etc/angie/http.d/` are a deterministic
+projection of that database, never edited by hand.
+
+Applying changes goes: lint → `angie -t` against a staged copy → snapshot → atomic sync →
+graceful reload, with an automatic rollback if any step fails. The privileged half is a
+handful of oneshot systemd units the panel can start through polkit, and nothing else.
+
+```
+frontend/    React 19 + Vite + Tailwind + shadcn/ui
+backend/     Rust: axum, sqlx/SQLite, config generator, ACME hook, root helper
+packaging/   .deb metadata, systemd units, polkit rules, install.sh
+e2e/         real Angie + pebble, exercising issuance end to end
+docs/        installation, certificates, security, troubleshooting
+```
+
+More detail: [PLAN.md](PLAN.md) (Russian) and [docs/research/](docs/research/).
+
+## Development
+
+```bash
+# backend — rust-embed needs the frontend directory to exist at compile time
+mkdir -p frontend/dist && touch frontend/dist/index.html
 cd backend && cargo run -- serve --config ../dev/angie-panel.toml
 
 # frontend
 cd frontend && pnpm install && pnpm dev
 ```
 
-Panel at <http://127.0.0.1:5173>; `/api` is proxied to the backend on port 8080.
+The UI is at <http://127.0.0.1:5173> and proxies `/api` to the backend on port 8080.
 
-Install on a device: see [docs/installation.md](docs/installation.md). There is no default
-password — read the one-time setup token (`sudo cat /var/lib/angie-panel/setup-token`) and
-create the admin at `/setup`.
+Checks, all of which CI runs on every push:
 
-Roadmap: **M0** skeleton & privilege model → **M1** proxy hosts & apply pipeline → **M2**
-certificates via built-in ACME → **M3** live dashboard, drift detection & auto-HTTPS → **M4**
-v1.0 release (export/import, docs, signed artifacts) — all ✅. On-device e2e on the NanoPi
-R6S is what remains. See [PLAN.md](PLAN.md) §10.
+```bash
+cd backend  && cargo fmt --check && cargo clippy --all-targets && cargo test
+cd frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm build
+cd e2e      && ./run.sh        # real Angie + pebble; needs Docker
+```
 
-License: [MIT](LICENSE). The vendored `acme.sh` (bundled in the `.deb` for DNS-01 via
-provider APIs) keeps its own GPLv3 license as separate scripts invoked as a subprocess.
+## Status
+
+Feature-complete and running on real hardware. Certificate issuance is exercised against a
+real Angie + [pebble](https://github.com/letsencrypt/pebble) on every CI push, and the
+panel is deployed and verified on a NanoPi R6S (Armbian/Debian 13, arm64) — install,
+migrations, apply, live certificate issuance through reg.ru DNS-01, and the availability
+scheduler writing real beats.
+
+This is a personal project used in production by its author. It has not been through an
+external security review; see [SECURITY.md](SECURITY.md) before exposing the panel to the
+internet.
+
+## Contributing
+
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to
+run the checks and what the commit history expects.
+
+## License
+
+[MIT](LICENSE).
+
+The `.deb` vendors [acme.sh](https://github.com/acmesh-official/acme.sh) for DNS-01 provider
+APIs. Those scripts keep their own GPLv3 license and are invoked as a subprocess, not linked.
