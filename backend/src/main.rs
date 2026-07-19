@@ -31,6 +31,7 @@ mod state;
 mod streams;
 mod system;
 mod systemd;
+mod tokens;
 mod users;
 
 #[cfg(test)]
@@ -131,6 +132,7 @@ async fn serve(cfg: config::PanelConfig, cfg_path: PathBuf) -> anyhow::Result<()
     let state = Arc::new(AppState::new(cfg, cfg_path, pool));
 
     auth::bootstrap_setup_token(&state).await?;
+    auth::bootstrap_cli_token(&state).await?;
 
     // Seal any DNS credential written before encryption-at-rest landed, so no
     // plaintext token survives an upgrade.

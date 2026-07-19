@@ -117,7 +117,9 @@ pub async fn delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-    if id == user.user_id {
+    // Also blocks deleting the account an API token belongs to, since the
+    // token's user_id is the owner's.
+    if user.user_id == Some(id) {
         return Err(ApiError::bad_request(
             "cannot_delete_self",
             "you cannot delete your own account",
@@ -146,8 +148,12 @@ pub async fn change_own_password(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PasswordChange>,
 ) -> ApiResult<Json<Value>> {
+    // Password changes are a browser-session flow: an API token proves nothing
+    // about knowing the password, and the local token has no account at all.
+    user.require_session()?;
+    let user_id = user.require_user_id()?;
     check_password(&req.new_password)?;
-    let hash = repo::user_password_hash(&state.db, user.user_id)
+    let hash = repo::user_password_hash(&state.db, user_id)
         .await?
         .ok_or_else(ApiError::unauthorized)?;
     if !auth::verify_password(&state, req.current_password, hash).await? {
@@ -157,7 +163,7 @@ pub async fn change_own_password(
         ));
     }
     let new_hash = auth::hash_password(&state, req.new_password).await?;
-    repo::set_user_password(&state.db, user.user_id, &new_hash).await?;
+    repo::set_user_password(&state.db, user_id, &new_hash).await?;
     Ok(Json(json!({ "ok": true })))
 }
 

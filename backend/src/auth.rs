@@ -24,6 +24,15 @@ const TOKEN_TTL: Duration = Duration::from_secs(24 * 3600);
 pub const TOKEN_FILE: &str = "setup-token";
 pub const MIN_PASSWORD_LEN: usize = 8;
 
+/// Prefix on every API token. Makes the secret recognizable in a shell history
+/// or a CI log, and gives secret scanners something to match.
+pub const API_TOKEN_PREFIX: &str = "ap_";
+/// File in the data dir holding the machine-local token used by `apctl`.
+pub const CLI_TOKEN_FILE: &str = "cli-token";
+/// `last_used_at` is refreshed at most this often, so a busy API does not turn
+/// every read into a write.
+const TOKEN_USE_STAMP_INTERVAL: i64 = 60;
+
 /// Operator role. `admin` may change anything; `viewer` is read-only (enforced
 /// centrally in `security::security_layer` — every mutating request from a
 /// non-admin is rejected there, so no handler can forget the check).
@@ -185,6 +194,57 @@ pub async fn bootstrap_setup_token(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Ensure the machine-local `apctl` token exists and matches the DB.
+///
+/// This is what makes the CLI zero-config on the box: no login, no token to
+/// paste. It grants no new authority — the file is 0600 in a 0700 data dir, so
+/// its readers (the service account and root) can already read the database
+/// itself. Delete the file and restart to rotate it.
+pub async fn bootstrap_cli_token(state: &AppState) -> anyhow::Result<()> {
+    let path = state.cfg.data_dir.join(CLI_TOKEN_FILE);
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let hash = hash_api_token(existing.trim());
+        let known: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM api_tokens WHERE token_hash = ? AND is_local = 1")
+                .bind(&hash)
+                .fetch_optional(&state.db)
+                .await?;
+        if known.is_some() {
+            return Ok(());
+        }
+        tracing::warn!(
+            "{} does not match any local token in the database — reissuing",
+            path.display()
+        );
+    }
+
+    let (secret, hash, prefix) = new_api_token()
+        .map_err(|e| anyhow::anyhow!("generating local CLI token: {}", e.message))?;
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM api_tokens WHERE is_local = 1")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO api_tokens (name, token_hash, prefix, user_id, is_local, created_at) \
+         VALUES ('apctl', ?, ?, NULL, 1, ?)",
+    )
+    .bind(&hash)
+    .bind(&prefix)
+    .bind(now_epoch())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    std::fs::write(&path, format!("{secret}\n"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    tracing::info!("local CLI token written to {} (mode 0600)", path.display());
+    Ok(())
+}
+
 // ---------------------------------------------------------------- sessions
 
 fn new_session_id() -> ApiResult<String> {
@@ -228,10 +288,61 @@ fn removal_cookie(secure: bool) -> Cookie<'static> {
         .build()
 }
 
+// ------------------------------------------------------------- API tokens
+
+/// Generate a token secret and its storage form: `(secret, hash, prefix)`.
+/// Only the hash and prefix are persisted — the secret is shown once and is
+/// unrecoverable afterwards.
+pub fn new_api_token() -> ApiResult<(String, String, String)> {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).map_err(ApiError::internal)?;
+    let body = hex::encode(buf);
+    let secret = format!("{API_TOKEN_PREFIX}{body}");
+    let hash = hash_api_token(&secret);
+    let prefix = body[..8].to_string();
+    Ok((secret, hash, prefix))
+}
+
+/// Storage hash for a token secret.
+///
+/// Plain SHA-256, deliberately not argon2: the secret is 256 CSPRNG bits, so
+/// there is no dictionary to slow down, and a password KDF would run on every
+/// authenticated API request. Argon2 remains in use for human passwords, where
+/// the work factor is what actually buys security.
+pub fn hash_api_token(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(secret.trim().as_bytes()))
+}
+
+/// Token names end up in the audit log, so keep them to plain printable text.
+pub fn normalize_token_name(raw: &str) -> Result<String, ApiError> {
+    let name = raw.trim();
+    let ok = !name.is_empty()
+        && name.chars().count() <= 40
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-'));
+    if !ok {
+        return Err(ApiError::bad_request(
+            "invalid_name",
+            "token name must be 1-40 chars of letters, digits, space, dot, underscore or dash",
+        ));
+    }
+    Ok(name.to_string())
+}
+
+/// Who is making this request. A session and a token differ in more than
+/// bookkeeping: the machine-local token has no owning account at all, so
+/// endpoints that act on "my user" must not silently pick one.
 pub struct AuthUser {
-    pub user_id: i64,
+    /// The owning account. `None` for the machine-local `apctl` token.
+    pub user_id: Option<i64>,
+    /// Actor label for the audit log — an email for sessions, an email plus
+    /// token name for API tokens.
     pub email: String,
     pub role: Role,
+    /// `Some(name)` when authenticated by an API token rather than a cookie.
+    pub token_name: Option<String>,
 }
 
 impl AuthUser {
@@ -250,6 +361,30 @@ impl AuthUser {
             ))
         }
     }
+
+    /// The owning account id, for endpoints that act on "the current user".
+    /// Errors for the machine-local token, which has no account — better a
+    /// clean 403 than operating on an arbitrary one.
+    pub fn require_user_id(&self) -> ApiResult<i64> {
+        self.user_id.ok_or_else(|| {
+            ApiError::forbidden(
+                "no_account",
+                "this token is not tied to a user account; use a browser session",
+            )
+        })
+    }
+
+    /// Reject API tokens. For flows that only make sense in a browser —
+    /// changing your own password, ending your own session.
+    pub fn require_session(&self) -> ApiResult<()> {
+        if self.token_name.is_some() {
+            return Err(ApiError::forbidden(
+                "session_required",
+                "this action requires a browser session, not an API token",
+            ));
+        }
+        Ok(())
+    }
 }
 
 async fn session_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser> {
@@ -265,25 +400,106 @@ async fn session_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser> {
     .ok()
     .flatten();
     row.map(|(user_id, email, role)| AuthUser {
-        user_id,
+        user_id: Some(user_id),
         email,
         role: Role::from_str(&role),
+        token_name: None,
     })
 }
 
-/// The session's role, looked up from raw request headers. Used by the security
-/// middleware to gate mutations. `None` = no/invalid session (the handler's
-/// `AuthUser` extractor then returns a clean 401).
-pub async fn session_role(state: &AppState, headers: &HeaderMap) -> Option<Role> {
-    let jar = CookieJar::from_headers(headers);
-    session_user(state, &jar).await.map(|u| u.role)
+/// Resolve an `Authorization: Bearer <secret>` header against `api_tokens`.
+async fn token_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> {
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())?;
+    let secret = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?
+        .trim();
+    if !secret.starts_with(API_TOKEN_PREFIX) {
+        return None;
+    }
+    let hash = hash_api_token(secret);
+    let now = now_epoch();
+    // Looked up BY the hash: an attacker cannot probe this with timing without
+    // already knowing the 256-bit secret, so no constant-time compare is needed.
+    // The role comes from the owning account, so demoting a user immediately
+    // demotes their tokens; the local token has no account and is admin.
+    type TokenRow = (
+        i64,
+        String,
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    );
+    let row: Option<TokenRow> = sqlx::query_as(
+        "SELECT t.id, t.name, t.is_local, t.user_id, u.email, u.role, t.last_used_at \
+             FROM api_tokens t LEFT JOIN users u ON u.id = t.user_id \
+             WHERE t.token_hash = ? AND (t.expires_at IS NULL OR t.expires_at > ?)",
+    )
+    .bind(&hash)
+    .bind(now)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let (token_id, name, is_local, user_id, owner_email, owner_role, last_used) = row?;
+
+    // A token whose owner row is gone is dead. The FK cascades on user delete,
+    // so this only guards against a hand-edited database.
+    if is_local == 0 && owner_email.is_none() {
+        return None;
+    }
+
+    if last_used.is_none_or(|t| now - t >= TOKEN_USE_STAMP_INTERVAL) {
+        let _ = sqlx::query("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(token_id)
+            .execute(&state.db)
+            .await;
+    }
+
+    let (email, role) = match owner_email {
+        Some(e) => (
+            format!("{e} (token: {name})"),
+            Role::from_str(owner_role.as_deref().unwrap_or("")),
+        ),
+        // Machine-local token: root on this host, hence admin.
+        None => (format!("apctl (local token: {name})"), Role::Admin),
+    };
+    Some(AuthUser {
+        user_id,
+        email,
+        role,
+        token_name: Some(name),
+    })
 }
 
-/// The session's user email from raw headers, for the audit log. `None` = no
-/// (or invalid) session — e.g. an unauthenticated login request.
-pub async fn session_email(state: &AppState, headers: &HeaderMap) -> Option<String> {
+/// The single principal resolver. Everything that needs to know who is calling
+/// goes through here — the `AuthUser` extractor, the role gate and the audit
+/// log alike. Keeping it in one place is what stops a token from satisfying a
+/// handler while being invisible to the middleware that guards it.
+pub async fn authenticate(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> {
+    if let Some(u) = token_user(state, headers).await {
+        return Some(u);
+    }
     let jar = CookieJar::from_headers(headers);
-    session_user(state, &jar).await.map(|u| u.email)
+    session_user(state, &jar).await
+}
+
+/// The caller's role, from raw request headers. Used by the security middleware
+/// to gate mutations. `None` = no/invalid credentials (the handler's `AuthUser`
+/// extractor then returns a clean 401).
+pub async fn session_role(state: &AppState, headers: &HeaderMap) -> Option<Role> {
+    authenticate(state, headers).await.map(|u| u.role)
+}
+
+/// The caller's audit label from raw headers. `None` = unauthenticated — e.g. a
+/// login request.
+pub async fn session_email(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    authenticate(state, headers).await.map(|u| u.email)
 }
 
 impl FromRequestParts<Arc<AppState>> for AuthUser {
@@ -293,8 +509,7 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let jar = CookieJar::from_headers(&parts.headers);
-        session_user(state, &jar)
+        authenticate(state, &parts.headers)
             .await
             .ok_or_else(ApiError::unauthorized)
     }
