@@ -218,7 +218,10 @@ sudo bash install.sh</div>
     <div class="code" style="margin-top: 14px;"><span class="c"># on the server</span>
 sudo apctl status
 
-<span class="c"># from anywhere else — create a token on the API tokens page first</span>
+<span class="c"># on macOS or Linux elsewhere</span>
+brew install maxname/tap/apctl
+
+<span class="c"># then point it at the panel — create a token on the API tokens page first</span>
 export ANGIE_PANEL_TOKEN=ap_…
 apctl --url https://panel.example.com status</div>
 

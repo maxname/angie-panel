@@ -1,0 +1,51 @@
+# Template for the apctl Homebrew formula. The release workflow fills in the
+# version and checksums and pushes the result to maxname/homebrew-tap; edit this
+# template, not the copy there. Do not add a `version` line: Homebrew scans it
+# from the URL, and `brew audit --strict` rejects it as redundant.
+#
+# Prebuilt binaries only — apctl is published signed and, on macOS, notarized,
+# and a from-source build would discard that.
+class Apctl < Formula
+  desc "Operator CLI for the Angie reverse-proxy panel"
+  homepage "https://github.com/maxname/angie-panel"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/maxname/angie-panel/releases/download/v__VERSION__/apctl-__VERSION__-aarch64-apple-darwin.tar.gz"
+      sha256 "__SHA_DARWIN_ARM64__"
+    end
+    on_intel do
+      url "https://github.com/maxname/angie-panel/releases/download/v__VERSION__/apctl-__VERSION__-x86_64-apple-darwin.tar.gz"
+      sha256 "__SHA_DARWIN_X86__"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/maxname/angie-panel/releases/download/v__VERSION__/apctl-__VERSION__-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "__SHA_LINUX_ARM64__"
+    end
+    on_intel do
+      url "https://github.com/maxname/angie-panel/releases/download/v__VERSION__/apctl-__VERSION__-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "__SHA_LINUX_X86__"
+    end
+  end
+
+  def install
+    bin.install "apctl"
+
+    # apctl renders its own completions and man page, so they never drift from
+    # the binary being installed.
+    generate_completions_from_executable(bin/"apctl", "completions", shells: [:bash, :zsh, :fish])
+    system bin/"apctl", "man", buildpath
+    man1.install "apctl.1"
+  end
+
+  test do
+    assert_match "apctl #{version}", shell_output("#{bin}/apctl --version")
+    # Hermetic: --help touches no config, no token, no network, so it behaves
+    # the same whether or not a panel is installed on the test machine.
+    assert_match "status", shell_output("#{bin}/apctl --help")
+  end
+end

@@ -14,9 +14,20 @@ same crate — identical behaviour, so existing scripts can use either.
 
 ## Install
 
-On the panel host, the `.deb` already brought it. Elsewhere, grab the archive for your
-platform from the [latest release](https://github.com/maxname/angie-panel/releases/latest)
-and put the binary on your `PATH`:
+On the panel host, the `.deb` already brought it.
+
+On macOS or Linux, Homebrew is the easiest way to get it elsewhere:
+
+```sh
+brew install maxname/tap/apctl
+```
+
+That installs the signed (and on macOS notarized) release binary, its man page, and
+completions for bash, zsh and fish, and `brew upgrade` tracks new versions.
+
+Otherwise grab the archive for your platform from the
+[latest release](https://github.com/maxname/angie-panel/releases/latest) and put the
+binary on your `PATH`:
 
 | Platform | Archive |
 |---|---|

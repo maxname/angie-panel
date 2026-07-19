@@ -380,3 +380,67 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # Update the Homebrew tap so `brew install maxname/tap/apctl` gets this
+  # version. Separate repo, so it needs a token with contents:write there —
+  # HOMEBREW_TAP_TOKEN (a fine-grained PAT). Gated on it like the signing steps:
+  # without the token the release still publishes, the tap just isn't bumped.
+  update-tap:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # The checksums are already computed and signed in the release; read them
+      # back rather than recomputing, so the formula pins exactly what shipped.
+      - name: Fetch release checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt
+
+      - name: Render the formula
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sha() {
+            awk -v f="$1" '$2 == f || $2 == "*" f {print $1; exit}' SHA256SUMS.txt
+          }
+          d_arm=$(sha "apctl-$version-aarch64-apple-darwin.tar.gz")
+          d_x86=$(sha "apctl-$version-x86_64-apple-darwin.tar.gz")
+          l_arm=$(sha "apctl-$version-aarch64-unknown-linux-musl.tar.gz")
+          l_x86=$(sha "apctl-$version-x86_64-unknown-linux-musl.tar.gz")
+          # A missing checksum would render a formula pinned to nothing; refuse.
+          for v in "$d_arm" "$d_x86" "$l_arm" "$l_x86"; do
+            [ -n "$v" ] || { echo "::error::missing an apctl checksum for $version"; exit 1; }
+          done
+          sed -e "s/__VERSION__/$version/g" \
+              -e "s/__SHA_DARWIN_ARM64__/$d_arm/" \
+              -e "s/__SHA_DARWIN_X86__/$d_x86/" \
+              -e "s/__SHA_LINUX_ARM64__/$l_arm/" \
+              -e "s/__SHA_LINUX_X86__/$l_x86/" \
+              packaging/homebrew/apctl.rb.tmpl > apctl.rb
+          test "$(grep -c '__' apctl.rb)" = 0  # every placeholder filled
+
+      - name: Push to the tap
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/maxname/homebrew-tap.git" tap
+          cp apctl.rb tap/Formula/apctl.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/apctl.rb
+          # No-op if the formula is unchanged (e.g. a re-run of the same tag).
+          if git diff --cached --quiet; then
+            echo "formula already current, nothing to push"
+          else
+            git commit -m "apctl $version"
+            git push
+          fi
