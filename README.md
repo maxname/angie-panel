@@ -63,6 +63,10 @@ sudo cat /var/lib/angie-panel/setup-token
 Then open `http://<host>:8080/setup`. Details and the upgrade path:
 [docs/installation.md](docs/installation.md).
 
+The package also installs `apctl`, the command-line tool — on the server it needs no
+token. To drive the panel from your own machine, download the standalone `apctl` binary
+for your platform. Both are covered in the [CLI guide](docs/cli.md).
+
 Releases ship `.deb` packages for both architectures, standalone `apctl` binaries for six
 platforms, `SHA256SUMS.txt`, and detached GPG signatures. Verify against this fingerprint —
 not against the key bundled in the release, which proves nothing on its own:

@@ -208,6 +208,25 @@ sudo bash install.sh</div>
 
     <div class="code" style="margin-top: 14px;">sudo cat /var/lib/angie-panel/setup-token</div>
 
+    <h3 style="margin-top: 40px;">The command-line tool</h3>
+    <p class="lede" style="margin-top: 10px;">
+      On the panel host, <code>apctl</code> came with the package — no token needed, it reads
+      the local one. To drive the panel from your own machine, grab the standalone binary for
+      your platform (Linux, macOS and Windows, arm64 and x86_64) and point it at the panel:
+    </p>
+
+    <div class="code" style="margin-top: 14px;"><span class="c"># on the server</span>
+sudo apctl status
+
+<span class="c"># from anywhere else — create a token on the API tokens page first</span>
+export ANGIE_PANEL_TOKEN=ap_…
+apctl --url https://panel.example.com status</div>
+
+    <p class="lede" style="margin-top: 16px;">
+      Downloads for every platform, verification, and the full command list are in the
+      <a href="https://github.com/maxname/angie-panel/blob/main/docs/cli.md">CLI guide</a>.
+    </p>
+
     <div class="note" style="margin-top: 28px;">
       <strong>Before you expose it.</strong> Whoever controls Angie's configuration controls
       the host — Angie's master runs as root. Treat access to this panel as root access:
