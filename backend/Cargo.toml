@@ -11,7 +11,7 @@ members = ["apctl"]
 default-members = [".", "apctl"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 
 [package]
 name = "angie-panel"
