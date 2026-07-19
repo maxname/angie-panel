@@ -103,6 +103,43 @@ jobs:
             fi
           done
 
+  # The CLI is released for macOS and Windows, but every day-to-day build here
+  # is Linux — so nothing else would notice a `std::os::unix` import or a
+  # Linux-only crate creeping into apctl until the release matrix half-failed on
+  # a tag. This catches it on the commit that causes it.
+  #
+  # windows-gnu rather than the released msvc targets on purpose: zig supplies
+  # the cross C toolchain `ring` needs, so this stays one cheap Linux job. What
+  # it proves is that the *code* is portable, which is the part that regresses.
+  cli-portability:
+    name: apctl builds off Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: cli-portability
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
+
+      # -p apctl only: the panel is Linux-only by design and must not be
+      # dragged into this. That it builds without ../frontend/dist is itself
+      # the proof the two are properly separated.
+      - name: Build apctl for Windows
+        working-directory: backend
+        run: cargo zigbuild -p apctl --release --target x86_64-pc-windows-gnu
+
   shellcheck:
     name: ShellCheck (packaging + e2e)
     runs-on: ubuntu-latest

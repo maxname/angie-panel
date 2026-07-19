@@ -106,6 +106,34 @@ assets = [
     # cross-compiled musl binary will not execute on the runner.
     ["../packaging/man/angie-panel.1", "usr/share/man/man1/", "644"],
     ["../packaging/man/apctl.1", "usr/share/man/man1/", "644"],
+    # Shell completions, generated the same way and for the same reason. The
+    # paths are the ones bash-completion, zsh and fish look in by default, so
+    # `apctl <tab>` works in a fresh login shell with no dotfile edits.
+    [
+        "../packaging/completions/apctl.bash",
+        "usr/share/bash-completion/completions/apctl",
+        "644",
+    ],
+    [
+        "../packaging/completions/_apctl",
+        "usr/share/zsh/vendor-completions/_apctl",
+        "644",
+    ],
+    [
+        "../packaging/completions/apctl.fish",
+        "usr/share/fish/vendor_completions.d/apctl.fish",
+        "644",
+    ],
+    [
+        "../packaging/completions/angie-panel.bash",
+        "usr/share/bash-completion/completions/angie-panel",
+        "644",
+    ],
+    [
+        "../packaging/completions/_angie-panel",
+        "usr/share/zsh/vendor-completions/_angie-panel",
+        "644",
+    ],
     # Vendored acme.sh core + the dnsapi plugins used by the DNS-01 provider hook
     # (GPLv3, redistributed unmodified). Not committed — release.yml runs
     # scripts/vendor-acme-dnsapi.sh to populate packaging/acme.sh/ before cargo-deb.

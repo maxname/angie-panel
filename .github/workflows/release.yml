@@ -100,11 +100,27 @@ jobs:
       # Man pages are rendered from the clap definitions rather than committed,
       # so they cannot drift from the real flags. This needs a host-native build:
       # the cross-compiled musl binary below cannot be executed on the runner.
-      - name: Generate man pages
+      # Man pages and completions are rendered from the clap definitions rather
+      # than committed, so they cannot drift from the real flags. Needs a
+      # host-native build: the cross-compiled musl binary below cannot execute
+      # on the runner.
+      - name: Generate man pages and shell completions
         working-directory: backend
         run: |
+          mkdir -p ../packaging/completions
           cargo run --quiet -p angie-panel -- man ../packaging/man
           cargo run --quiet -p apctl -- man ../packaging/man
+          for shell in bash zsh fish; do
+            cargo run --quiet -p apctl -- completions "$shell" \
+              > "../packaging/completions/apctl.$shell"
+          done
+          cargo run --quiet -p angie-panel -- ctl completions bash \
+            > ../packaging/completions/angie-panel.bash
+          cargo run --quiet -p angie-panel -- ctl completions zsh \
+            > ../packaging/completions/angie-panel.zsh
+          # zsh wants the file named _<command>, not <command>.zsh.
+          mv ../packaging/completions/apctl.zsh ../packaging/completions/_apctl
+          mv ../packaging/completions/angie-panel.zsh ../packaging/completions/_angie-panel
 
       - name: Build release binary (cargo-zigbuild)
         working-directory: backend

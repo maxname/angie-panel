@@ -15,6 +15,7 @@ dev-data/
 packaging/acme.sh/
 # Generated from the clap definitions at package time (see Cargo.toml assets).
 packaging/man/
+packaging/completions/
 
 # Site screenshots are copied from docs/screenshots/ at deploy time (see
 # .github/workflows/pages.yml). Keeping a second copy in git would duplicate
