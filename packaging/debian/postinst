@@ -42,6 +42,12 @@ case "$1" in
         else
             install -d -m 0750 /var/cache/angie-panel-assets
         fi
+
+        # `apctl` is the same binary: it dispatches on argv[0]. A symlink rather
+        # than a second copy — the release build is a ~15 MB static musl binary.
+        # Created here instead of shipping it as a package asset because
+        # cargo-deb copies assets by content and would materialize a duplicate.
+        ln -sf angie-panel /usr/bin/apctl
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)
