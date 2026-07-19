@@ -21,7 +21,18 @@ set -euo pipefail
 # path below refuses to run and asks for a local .deb instead. {ARCH} is
 # substituted at runtime with arm64 or amd64.
 PANEL_VERSION="__PANEL_VERSION__"
-PANEL_DEB_URL_TEMPLATE="https://github.com/maxname/angie-panel/releases/download/v${PANEL_VERSION}/angie-panel_${PANEL_VERSION}_{ARCH}.deb"
+PANEL_RELEASE_BASE="https://github.com/maxname/angie-panel/releases/download/v${PANEL_VERSION}"
+PANEL_DEB_URL_TEMPLATE="${PANEL_RELEASE_BASE}/angie-panel_${PANEL_VERSION}_{ARCH}.deb"
+
+# Fingerprint of the release signing key. THE trust anchor of this script: the
+# public key is fetched from the release like everything else, so it proves
+# nothing by itself — it is trusted only because its fingerprint matches this
+# constant, which reached you with the script (and is published in the README
+# and docs/installation.md, so you can compare it there before running this).
+#
+# Verify it independently:
+#   gpg --keyserver hkps://keys.openpgp.org --recv-keys 21773F03FDFC43ED
+PANEL_SIGNING_FPR="E81C9989402A5C15B0DD21B921773F03FDFC43ED"
 # ---------------------------------------------------------------------------
 
 PANEL_CONF=/etc/angie-panel.toml
@@ -38,6 +49,72 @@ die()  { printf '\033[1;31m[ошибка]\033[0m %s\n' "$*" >&2; exit 1; }
 # Print processes listening on TCP port $1 (empty output = port is free).
 port_listeners() {
     ss -tlnpH "( sport = :$1 )" 2>/dev/null || true
+}
+
+# Verify a downloaded .deb against the release's signed checksum list.
+#   $1 — path to the .deb, $2 — its filename as listed in SHA256SUMS.txt
+#
+# The chain: this script pins the signing key's fingerprint -> that key must be
+# the one that signed SHA256SUMS.txt -> the .deb must match its entry there.
+# Every link fails closed: TLS alone is not evidence about what a mirror or a
+# compromised release served us.
+verify_panel_deb() {
+    local deb_path="$1" deb_name="$2"
+    local dir; dir=$(dirname "$deb_path")
+    local gnupg_home="$dir/gnupg"
+
+    info "Проверяем подпись и контрольную сумму пакета..."
+
+    if ! curl -fsSL -o "$dir/SHA256SUMS.txt" "${PANEL_RELEASE_BASE}/SHA256SUMS.txt" \
+       || ! curl -fsSL -o "$dir/SHA256SUMS.txt.asc" "${PANEL_RELEASE_BASE}/SHA256SUMS.txt.asc" \
+       || ! curl -fsSL -o "$dir/signing-key.asc" "${PANEL_RELEASE_BASE}/angie-panel-signing-key.asc"; then
+        die "Не удалось скачать файлы проверки (SHA256SUMS.txt, .asc, ключ) из релиза.
+Пакет НЕ установлен: без них подлинность загрузки не подтвердить."
+    fi
+
+    # Isolated keyring: never touch root's, and leave nothing behind.
+    rm -rf "$gnupg_home"
+    mkdir -p "$gnupg_home"
+    chmod 700 "$gnupg_home"
+    if ! GNUPGHOME="$gnupg_home" gpg --batch --quiet --import "$dir/signing-key.asc" 2>/dev/null; then
+        die "Не удалось импортировать ключ подписи из релиза. Пакет НЕ установлен."
+    fi
+
+    local got_fpr
+    got_fpr=$(GNUPGHOME="$gnupg_home" gpg --batch --with-colons --fingerprint 2>/dev/null \
+              | awk -F: '/^fpr:/ {print $10; exit}')
+    if [ "$got_fpr" != "$PANEL_SIGNING_FPR" ]; then
+        die "Отпечаток ключа подписи не совпадает с ожидаемым. Пакет НЕ установлен.
+  ожидался: $PANEL_SIGNING_FPR
+  получен:  ${got_fpr:-<пусто>}
+Это либо подмена, либо смена ключа проекта. Не устанавливайте пакет,
+пока не сверите отпечаток с README на github.com/maxname/angie-panel"
+    fi
+
+    # --status-fd, а не текст вывода: формулировки gpg зависят от локали, а
+    # VALIDSIG несёт отпечаток подписавшего — сверяем именно его.
+    if ! GNUPGHOME="$gnupg_home" gpg --batch --status-fd 1 \
+            --verify "$dir/SHA256SUMS.txt.asc" "$dir/SHA256SUMS.txt" 2>/dev/null \
+            | grep -q "^\[GNUPG:\] VALIDSIG $PANEL_SIGNING_FPR"; then
+        die "Подпись SHA256SUMS.txt недействительна или сделана другим ключом.
+Пакет НЕ установлен."
+    fi
+
+    local expected actual
+    expected=$(awk -v f="$deb_name" '$2 == f || $2 == "*" f {print $1; exit}' "$dir/SHA256SUMS.txt")
+    if [ -z "$expected" ]; then
+        die "В SHA256SUMS.txt нет записи для $deb_name. Пакет НЕ установлен."
+    fi
+    actual=$(sha256sum "$deb_path" | awk '{print $1}')
+    if [ "$expected" != "$actual" ]; then
+        die "Контрольная сумма пакета не совпала. Пакет НЕ установлен.
+  ожидалась: $expected
+  получена:  $actual
+Скачанный файл повреждён или подменён."
+    fi
+
+    rm -rf "$gnupg_home"
+    info "Подпись верна, контрольная сумма совпала."
 }
 
 TMP_DIR=""
@@ -131,9 +208,11 @@ for port in "$DEFAULT_PANEL_PORT" "$STATUS_PORT"; do
 done
 
 # --- 2. Angie repository and package -----------------------------------------
-info "Устанавливаем базовые зависимости (ca-certificates, curl)..."
+# gnupg is needed to verify the panel package's signature below — not optional,
+# so it goes in with the rest rather than being probed for later.
+info "Устанавливаем базовые зависимости (ca-certificates, curl, gnupg)..."
 apt-get update
-apt-get install -y ca-certificates curl
+apt-get install -y ca-certificates curl gnupg
 
 info "Скачиваем ключ подписи репозитория Angie..."
 # -fsSL so an HTTP error/redirect fails loudly instead of writing an error page
@@ -170,6 +249,11 @@ if [ -n "$DEB_PATH" ]; then
         die "Файл пакета не найден: $DEB_PATH"
     fi
     DEB_PATH=$(realpath "$DEB_PATH")
+    # A file the operator handed us: we have nothing to check it against, and
+    # second-guessing a deliberate choice would be theatre. Say so plainly.
+    warn "Устанавливается локальный файл: $DEB_PATH"
+    warn "Его подпись и контрольная сумма не проверяются — проверьте сами:"
+    warn "  docs/installation.md, раздел «Проверка подписи артефактов»"
 else
     if [ "$PANEL_VERSION" = "__PANEL_VERSION__" ]; then
         die "Эта копия install.sh не привязана к релизу (версия не подставлена).
@@ -181,13 +265,17 @@ else
     TMP_DIR=$(mktemp -d)
     # Let apt's sandbox user (_apt) read the downloaded file.
     chmod 755 "$TMP_DIR"
-    DEB_PATH="$TMP_DIR/angie-panel.deb"
+    # Keep the release filename: SHA256SUMS.txt lists files by that name, and
+    # renaming here would make the checksum lookup silently miss.
+    DEB_NAME=$(basename "$PANEL_DEB_URL")
+    DEB_PATH="$TMP_DIR/$DEB_NAME"
     info "Скачиваем пакет angie-panel: $PANEL_DEB_URL"
     if ! curl -fL -o "$DEB_PATH" "$PANEL_DEB_URL"; then
         die "Не удалось скачать пакет angie-panel.
 Скачайте .deb вручную со страницы релизов и передайте путь к нему:
   sudo ./install.sh ./angie-panel_<версия>_${ARCH}.deb"
     fi
+    verify_panel_deb "$DEB_PATH" "$DEB_NAME"
 fi
 
 info "Устанавливаем angie-panel..."
