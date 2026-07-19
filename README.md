@@ -1,6 +1,6 @@
 # Angie Panel
 
-> 🇷🇺 [Читать по-русски](README.rus.md)
+> 🇷🇺 [Читать по-русски](README.rus.md) · 🌐 [angie-panel site](https://maxname.github.io/angie-panel/)
 
 [![CI](https://github.com/maxname/angie-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/maxname/angie-panel/actions/workflows/ci.yml)
 ![license: MIT](https://img.shields.io/badge/license-MIT-blue)
