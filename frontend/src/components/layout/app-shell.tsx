@@ -15,6 +15,7 @@ import {
   ShieldBan,
   ShieldCheck,
   Split,
+  Terminal,
   Users,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -85,6 +86,9 @@ const NAV_SECTIONS = [
     items: [
       { to: '/apply', labelKey: 'nav.apply', icon: Rocket, exact: false },
       { to: '/users', labelKey: 'nav.users', icon: Users, exact: false, adminOnly: true },
+      // Not adminOnly: a viewer's token inherits the viewer role, so letting
+      // them mint their own escalates nothing.
+      { to: '/tokens', labelKey: 'nav.tokens', icon: Terminal, exact: false },
       { to: '/audit', labelKey: 'nav.audit', icon: ScrollText, exact: false, adminOnly: true },
       { to: '/settings', labelKey: 'nav.settings', icon: Settings, exact: false },
     ],

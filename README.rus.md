@@ -29,6 +29,9 @@ nginx-proxy-manager, только обычный systemd-сервис вмест
 - **Никакого Docker.** Один `.deb`, один systemd-сервис, один файл SQLite.
 - **Мониторинг доступности встроен.** TCP- и HTTP(S)-проверки на каждый хост с историей,
   полоса аптайма прямо в списке хостов.
+- **Полноценный CLI, а не только веб-морда.** `apctl status`, `apctl apply` и пара
+  `export`/`import` для конфигурации в git. Он ходит в тот же API, что и браузер, поэтому
+  скриптовые изменения проходят ту же валидацию, откат и аудит. См. [docs/cli.md](docs/cli.md).
 
 ## Скриншоты
 
@@ -100,7 +103,7 @@ frontend/    React 19 + Vite + Tailwind + shadcn/ui
 backend/     Rust: axum, sqlx/SQLite, генератор конфигов, ACME-хук, root-хелпер
 packaging/   метаданные .deb, systemd-юниты, правила polkit, install.sh
 e2e/         настоящий Angie + pebble, сквозной прогон выпуска сертификата
-docs/        установка, сертификаты, безопасность, диагностика
+docs/        установка, сертификаты, CLI, безопасность, диагностика
 ```
 
 Подробнее: [PLAN.md](PLAN.md) и [docs/research/](docs/research/).

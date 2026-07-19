@@ -43,7 +43,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::state::AppState;
 
@@ -158,6 +158,11 @@ async fn main() -> anyhow::Result<()> {
 
     if invoked_as_ctl() {
         let cli = CtlCli::parse();
+        // Before anything that needs a token or a reachable panel.
+        if let ctl::CtlCommand::Completions { shell } = cli.command {
+            ctl::print_completions(shell, &mut CtlCli::command());
+            return Ok(());
+        }
         let cfg = ctl_config(cli.config);
         return ctl::run(
             cli.command,
@@ -174,6 +179,10 @@ async fn main() -> anyhow::Result<()> {
     // server does, since --url/--token can supply everything it needs.
     let command = match cli.command {
         Some(Command::Ctl { opts, command }) => {
+            if let ctl::CtlCommand::Completions { shell } = command {
+                ctl::print_completions(shell, &mut Cli::command());
+                return Ok(());
+            }
             let cfg = ctl_config(cli.config);
             return ctl::run(command, cfg, opts.url, opts.token, opts.json).await;
         }

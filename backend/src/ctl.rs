@@ -45,6 +45,12 @@ pub enum CtlCommand {
         /// File to read, or `-` for stdin
         file: String,
     },
+    /// Print a shell completion script (eval it, or drop it in the shell's
+    /// completion directory)
+    Completions {
+        /// bash, zsh, fish, elvish or powershell
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -245,6 +251,15 @@ fn parse_upstream(raw: &str) -> anyhow::Result<(String, String, u16)> {
     Ok((scheme.to_string(), host, port))
 }
 
+/// Write a completion script for `cmd` to stdout. Lives here rather than in
+/// `main` so both entry points share it, but it is dispatched from `main`,
+/// which is where the clap `Command` for each spelling is defined — and it must
+/// run before any token lookup, since it talks to nothing.
+pub fn print_completions(shell: clap_complete::Shell, cmd: &mut clap::Command) {
+    let name = cmd.get_name().to_string();
+    clap_complete::generate(shell, cmd, name, &mut std::io::stdout());
+}
+
 // ----------------------------------------------------------------- commands
 
 pub async fn run(
@@ -277,6 +292,7 @@ pub async fn run(
         CtlCommand::Cert(CertCommand::Ls) => cert_ls(&client).await,
         CtlCommand::Export => export(&client).await,
         CtlCommand::Import { file } => import(&client, &file).await,
+        CtlCommand::Completions { .. } => unreachable!("handled in main"),
     }
 }
 
