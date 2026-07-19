@@ -53,6 +53,11 @@ strip = true
 
 # --- cargo-deb (packaging/ carries the referenced assets) ---
 [package.metadata.deb]
+# No Debian revision suffix: the artifact is named angie-panel_<version>_<arch>.deb,
+# which is exactly what install.sh's download URL and the docs assume. With
+# cargo-deb's default the file would be ..._<version>-1_<arch>.deb and the
+# documented one-liner install would 404.
+revision = ""
 maintainer = "Angie Panel contributors"
 depends = "angie (>= 1.11), dbus, polkitd, bash, curl"
 section = "admin"
