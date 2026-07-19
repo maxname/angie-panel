@@ -97,6 +97,13 @@ jobs:
       - name: Vendor acme.sh dnsapi plugins
         run: ./scripts/vendor-acme-dnsapi.sh packaging/acme.sh
 
+      # Man pages are rendered from the clap definitions rather than committed,
+      # so they cannot drift from the real flags. This needs a host-native build:
+      # the cross-compiled musl binary below cannot be executed on the runner.
+      - name: Generate man pages
+        working-directory: backend
+        run: cargo run --quiet -- man ../packaging/man
+
       - name: Build release binary (cargo-zigbuild)
         working-directory: backend
         run: cargo zigbuild --release --target ${{ matrix.target }}

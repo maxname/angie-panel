@@ -17,6 +17,7 @@ bcrypt = "0.15"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4.6.7"
+clap_mangen = "0.3.0"
 getrandom = "0.3"
 hex = "0.4"
 hickory-resolver = "0.24"
@@ -81,6 +82,12 @@ assets = [
     # with the full public-domain dataset before cargo-deb packages it.
     ["data/geoip-countries.csv", "usr/share/angie-panel/geoip-countries.csv", "644"],
     ["../packaging/tmpfiles/angie-panel.conf", "usr/lib/tmpfiles.d/", "644"],
+    # Man pages for both spellings of the binary. Not committed: generated from
+    # the clap definitions by `angie-panel man packaging/man` so they cannot
+    # drift from the actual flags. release.yml runs it with a host-native build,
+    # since the cross-compiled musl binary will not execute on the runner.
+    ["../packaging/man/angie-panel.1", "usr/share/man/man1/", "644"],
+    ["../packaging/man/apctl.1", "usr/share/man/man1/", "644"],
     # Vendored acme.sh core + the dnsapi plugins used by the DNS-01 provider hook
     # (GPLv3, redistributed unmodified). Not committed — release.yml runs
     # scripts/vendor-acme-dnsapi.sh to populate packaging/acme.sh/ before cargo-deb.

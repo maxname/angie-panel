@@ -39,7 +39,7 @@ mod users;
 mod integration_tests;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -79,6 +79,30 @@ enum Command {
         #[command(subcommand)]
         command: ctl::CtlCommand,
     },
+    /// Write angie-panel.1 and apctl.1 into DIR. Packaging-time only: the
+    /// release build runs this on the host, since the cross-compiled musl
+    /// binary cannot be executed on the CI runner.
+    #[command(hide = true)]
+    Man { dir: PathBuf },
+}
+
+/// Render both spellings' man pages. Generated rather than committed so they
+/// cannot drift from the clap definitions they document.
+fn write_man_pages(dir: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    for (name, cmd) in [
+        ("angie-panel.1", Cli::command()),
+        ("apctl.1", CtlCli::command()),
+    ] {
+        let path = dir.join(name);
+        let mut buf = Vec::new();
+        clap_mangen::Man::new(cmd)
+            .render(&mut buf)
+            .with_context(|| format!("rendering {name}"))?;
+        std::fs::write(&path, buf).with_context(|| format!("writing {}", path.display()))?;
+        println!("{}", path.display());
+    }
+    Ok(())
 }
 
 /// Shared by `angie-panel ctl` and the `apctl` entry point, so the two spellings
@@ -175,9 +199,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cli = Cli::parse();
-    // `ctl` is split out first: it must not require a config file the way the
-    // server does, since --url/--token can supply everything it needs.
+    // `ctl` and `man` are split out first: neither may require a config file the
+    // way the server does — --url/--token can supply everything the CLI needs,
+    // and man generation runs in a build sandbox with no config at all.
     let command = match cli.command {
+        Some(Command::Man { dir }) => return write_man_pages(&dir),
         Some(Command::Ctl { opts, command }) => {
             if let ctl::CtlCommand::Completions { shell } = command {
                 ctl::print_completions(shell, &mut Cli::command());
@@ -200,7 +226,7 @@ async fn main() -> anyhow::Result<()> {
             HelperMode::EnableStreams => helper::enable_streams(&cfg).await,
         },
         Command::ResetPassword => reset_password(cfg),
-        Command::Ctl { .. } => unreachable!("handled above"),
+        Command::Ctl { .. } | Command::Man { .. } => unreachable!("handled above"),
     }
 }
 
