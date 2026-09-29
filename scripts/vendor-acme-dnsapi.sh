@@ -17,7 +17,7 @@ ACME_SH_REF="${ACME_SH_REF:-3.1.0}"
 BASE="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_REF}"
 
 DEST="${1:-$(dirname "$0")/../packaging/acme.sh}"
-PLUGINS=(cf aws dgon gandi_livedns desec namecheap gd vultr linode_v4 porkbun regru)
+PLUGINS=(cf aws dgon gandi_livedns desec namecheap gd vultr linode_v4 porkbun regru pdns)
 
 mkdir -p "$DEST/dnsapi"
 echo "Vendoring acme.sh @ ${ACME_SH_REF} → $DEST"

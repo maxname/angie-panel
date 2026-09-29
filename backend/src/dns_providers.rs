@@ -119,6 +119,18 @@ pub static PROVIDERS: &[ProviderDef] = &[
             f!("REGRU_API_Password", "API password"),
         ],
     },
+    ProviderDef {
+        id: "pdns",
+        label: "PowerDNS",
+        plugin: "pdns",
+        // Self-hosted: the API URL and server id locate the operator's own
+        // PowerDNS instance. The plugin defaults PDNS_Ttl to 60 on its own.
+        fields: &[
+            f!("PDNS_Url", "API URL (e.g. http://ns.example.com:8081)"),
+            f!("PDNS_ServerId", "Server ID (usually localhost)"),
+            f!("PDNS_Token", "API key"),
+        ],
+    },
 ];
 
 /// Look up a provider by its stored id.
@@ -182,5 +194,14 @@ mod tests {
         let envs: Vec<_> = p.fields.iter().map(|f| f.env).collect();
         assert!(envs.contains(&"REGRU_API_Username"));
         assert!(envs.contains(&"REGRU_API_Password"));
+    }
+
+    #[test]
+    fn pdns_matches_acmesh_env_vars() {
+        // Locked to the acme.sh dns_pdns contract: all three are required there.
+        let p = get("pdns").unwrap();
+        assert_eq!(p.plugin, "pdns");
+        let envs: Vec<_> = p.fields.iter().map(|f| f.env).collect();
+        assert_eq!(envs, ["PDNS_Url", "PDNS_ServerId", "PDNS_Token"]);
     }
 }
