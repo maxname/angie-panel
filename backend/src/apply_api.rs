@@ -192,12 +192,14 @@ pub async fn history(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiRes
 // ----------------------------------------------------------------- settings
 
 /// Is this settings key a secret — never returned by the GET, never exported?
-/// The ACME hook token, every DNS provider credential (`dns_cred:*`), and the
+/// The ACME hook token, every DNS provider credential (`dns_cred:*`), CA EAB
+/// credentials (`acme_eab:*`), and the
 /// legacy reg.ru keys from before the multi-provider registry (redacted so an
 /// upgraded install never leaks stale credentials).
 pub fn is_secret_setting(key: &str) -> bool {
     key == settings::KEY_ACME_HOOK_TOKEN
         || crate::dns_providers::is_cred_key(key)
+        || crate::acme_cas::is_eab_key(key)
         || key == "regru_username"
         || key == "regru_password"
 }
@@ -245,6 +247,9 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     settings::KEY_IPV6_ENABLED,
     settings::KEY_RESOLVER_OVERRIDE,
     settings::KEY_ACME_EMAIL,
+    settings::KEY_ACME_DEFAULT_CA,
+    settings::KEY_ACME_SHARED_ACCOUNT,
+    settings::KEY_ACME_CUSTOM_DIRECTORY,
     settings::KEY_HEALTH_INTERVAL,
     settings::KEY_HEALTH_TIMEOUT,
     settings::KEY_HEALTH_RETENTION_DAYS,
@@ -274,6 +279,40 @@ pub async fn put_settings(
         }
         // Health defaults are plain positive integers. Reject 0 and junk here so
         // the scheduler never has to defend against a "0s interval" busy-loop.
+        if k == settings::KEY_ACME_DEFAULT_CA && crate::acme_cas::get(v).is_none() {
+            return Err(ApiError::bad_request(
+                "invalid_ca",
+                format!("'{v}' is not a supported certificate authority"),
+            ));
+        }
+        if k == settings::KEY_ACME_SHARED_ACCOUNT && !matches!(v.as_str(), "0" | "1") {
+            return Err(ApiError::bad_request(
+                "invalid_setting",
+                "acme_shared_account must be \"0\" or \"1\"",
+            ));
+        }
+        // Emitted verbatim as the acme_client URI. Clearing it is refused while a
+        // certificate still issues from it, or the next apply would fail.
+        if k == settings::KEY_ACME_CUSTOM_DIRECTORY {
+            if v.trim().is_empty() {
+                if repo::list_certs(&state.db)
+                    .await?
+                    .iter()
+                    .any(|c| c.ca == crate::acme_cas::CUSTOM_CA)
+                {
+                    return Err(ApiError::new(
+                        axum::http::StatusCode::CONFLICT,
+                        "in_use",
+                        "a certificate uses the custom ACME server; switch it to another CA first",
+                    ));
+                }
+            } else if !crate::acme_cas::is_valid_directory_url(v.trim()) {
+                return Err(ApiError::bad_request(
+                    "invalid_directory_url",
+                    "the ACME directory URL must be https:// with no spaces, quotes, braces or ';'",
+                ));
+            }
+        }
         if matches!(
             k.as_str(),
             settings::KEY_HEALTH_INTERVAL

@@ -345,6 +345,10 @@ export const en = {
       ssl: {
         certificate: 'Certificate',
         certificateNone: 'None (HTTP only)',
+        requestNew: 'Request a new certificate',
+        requestNewNote:
+          'On save, a certificate for this host’s domains is created ({{ca}}, the default in Settings). Issuance starts on the next Apply; HTTPS activates once it is issued.',
+        challenge: 'Validation method',
         loadFailed: 'Failed to load certificates',
         selectNote: 'Select a certificate to enable HTTPS.',
         activeNote:
@@ -532,8 +536,30 @@ export const en = {
     },
     acme: {
       title: 'ACME',
-      description: 'Default contact email for ACME certificate accounts.',
+      description: 'Defaults for certificate issuance: contact email, certificate authority, and the ACME account.',
       email: 'ACME account email',
+      defaultCa: 'Default certificate authority',
+      defaultCaHelp:
+        'Preselected for new certificates, including ones requested from a proxy host. Each certificate can still pick its own.',
+      customDirectory: 'Custom ACME server directory URL',
+      customDirectoryHelp:
+        'For the “Custom ACME server” authority — any RFC 8555 CA (Step CA, Actalis, an internal PKI…). Must be https://.',
+      sharedAccount: 'Use one ACME account for all certificates',
+      sharedAccountHelp:
+        'Every certificate registers through the same account key ({{path}}) instead of creating an account each. Avoids Let’s Encrypt’s limit of 10 new accounts per IP per 3 hours when you have many domains. Certificates stay separate.',
+    },
+    eab: {
+      title: 'Certificate authority credentials (EAB)',
+      description:
+        'ZeroSSL and Google Trust Services only issue to accounts bound to your CA account via External Account Binding. Get the key ID and HMAC key from the CA’s dashboard. They are only used when an ACME account is first registered.',
+      kid: 'EAB key ID',
+      hmac: 'EAB HMAC key',
+      configured: 'Configured',
+      notSet: 'Not set',
+      requiredMissing: 'Required — not set',
+      remove: 'Remove',
+      saved: '{{ca}} credentials saved',
+      removed: '{{ca}} credentials removed',
     },
     health: {
       title: 'Availability checks',
@@ -681,6 +707,12 @@ export const en = {
       providerNotConfigured:
         '“{{provider}}” has no credentials yet. Set them on the DNS Providers page, then this will just work.',
       keyType: 'Key type',
+      ca: 'Certificate authority',
+      caNeedsEab:
+        '{{ca}} requires EAB credentials. Add them in Settings → Certificate authority credentials first.',
+      caNeedsDirectory:
+        'Set the custom ACME server’s directory URL in Settings first.',
+      stagingUnavailable: '{{ca}} has no staging environment.',
       email: 'Contact email (optional)',
       emailPlaceholder: 'admin@example.com',
       staging: 'Use staging environment',

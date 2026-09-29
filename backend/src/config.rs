@@ -73,6 +73,12 @@ pub struct AngieConfig {
     /// plugins, used by the DNS-01 provider hook. Shipped by the package.
     #[serde(default = "default_acme_sh_dir")]
     pub acme_sh_dir: PathBuf,
+    /// ACME account key shared by every certificate when the "one ACME
+    /// account" setting is on. Angie's root master creates it on first load if
+    /// it is missing. It lives here, not in the database, because the panel
+    /// only chooses whether to use it — never where root writes a key.
+    #[serde(default = "default_acme_account_key")]
+    pub acme_account_key: PathBuf,
 }
 
 impl Default for AngieConfig {
@@ -87,12 +93,17 @@ impl Default for AngieConfig {
             acme_socket_dir: default_acme_socket_dir(),
             geoip_data: default_geoip_data(),
             acme_sh_dir: default_acme_sh_dir(),
+            acme_account_key: default_acme_account_key(),
         }
     }
 }
 
 fn default_acme_sh_dir() -> PathBuf {
     "/usr/share/angie-panel/acme.sh".into()
+}
+
+fn default_acme_account_key() -> PathBuf {
+    "/var/lib/angie/acme/angie-panel-account.key".into()
 }
 
 fn default_snippets_dir() -> PathBuf {

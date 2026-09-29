@@ -1308,6 +1308,8 @@ pub struct Certificate {
     /// ACME hook). `None` = Angie answers DNS itself (NS delegation).
     #[serde(default)]
     pub dns_provider: Option<String>,
+    /// Issuing CA id from the [`crate::acme_cas`] registry.
+    pub ca: String,
     pub created_at: i64,
 }
 
@@ -1327,6 +1329,9 @@ pub struct CertificateInput {
     pub staging: bool,
     #[serde(default)]
     pub dns_provider: Option<String>,
+    /// Issuing CA id; omitted = Let's Encrypt, as before CAs were selectable.
+    #[serde(default = "default_ca")]
+    pub ca: String,
 }
 
 /// A named DNS provider credential profile — one account of a provider type
@@ -1381,6 +1386,9 @@ fn default_challenge() -> Challenge {
 }
 fn default_key_type() -> KeyType {
     KeyType::Ecdsa
+}
+pub fn default_ca() -> String {
+    crate::acme_cas::DEFAULT_CA.to_string()
 }
 
 pub const MAX_CERT_NAME_LEN: usize = 32;
@@ -1442,6 +1450,21 @@ pub fn validate_cert_input(mut input: CertificateInput) -> Result<CertificateInp
     // existing profile is checked in the certs handler (needs the DB).
     if input.challenge != Challenge::Dns || input.dns_provider.as_deref() == Some("") {
         input.dns_provider = None;
+    }
+
+    // Whether EAB credentials / a custom directory are actually configured is
+    // checked in the certs handler (needs the DB); here only the shape.
+    let Some(ca) = crate::acme_cas::get(&input.ca) else {
+        return Err(bad(
+            "invalid_ca",
+            format!("'{}' is not a supported certificate authority", input.ca),
+        ));
+    };
+    if input.staging && ca.staging_directory.is_none() {
+        return Err(bad(
+            "staging_unsupported",
+            format!("{} has no staging environment", ca.label),
+        ));
     }
 
     if let Some(email) = &input.email {
@@ -2592,7 +2615,27 @@ mod tests {
             email: None,
             staging: false,
             dns_provider: None,
+            ca: default_ca(),
         }
+    }
+
+    #[test]
+    fn cert_ca_must_exist_and_support_staging() {
+        let mut c = cert_input("c1", &["example.com"], Challenge::Http);
+        c.ca = "nope".into();
+        assert_eq!(
+            validate_cert_input(c.clone()).unwrap_err().code,
+            "invalid_ca"
+        );
+        c.ca = "zerossl".into();
+        assert!(validate_cert_input(c.clone()).is_ok());
+        c.staging = true;
+        assert_eq!(
+            validate_cert_input(c.clone()).unwrap_err().code,
+            "staging_unsupported"
+        );
+        c.ca = "letsencrypt".into();
+        assert!(validate_cert_input(c).is_ok());
     }
 
     #[test]

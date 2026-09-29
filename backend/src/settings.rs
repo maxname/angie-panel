@@ -7,8 +7,8 @@ use std::sync::Arc;
 use crate::error::{ApiError, ApiResult};
 use crate::generator::{self, DefaultSite, EffectiveSettings, FileSet, GeneratorInput};
 use crate::model::{GeoMode, GeoPolicy};
-use crate::repo;
 use crate::state::AppState;
+use crate::{acme_cas, repo};
 
 // Settings keys (settings table).
 pub const KEY_DEFAULT_SITE: &str = "default_site"; // notfound|drop444|redirect|html
@@ -16,6 +16,13 @@ pub const KEY_DEFAULT_SITE_REDIRECT: &str = "default_site_redirect_url";
 pub const KEY_IPV6_ENABLED: &str = "ipv6_enabled"; // "1"/"0"
 pub const KEY_RESOLVER_OVERRIDE: &str = "resolver_override"; // space/comma list
 pub const KEY_ACME_EMAIL: &str = "acme_email";
+/// CA id new certificates start from (acme_cas registry).
+pub const KEY_ACME_DEFAULT_CA: &str = "acme_default_ca";
+/// "1" = every acme_client uses the shared account key from the root config,
+/// so N certificates register one ACME account instead of N.
+pub const KEY_ACME_SHARED_ACCOUNT: &str = "acme_shared_account";
+/// Directory URL for the `custom` CA.
+pub const KEY_ACME_CUSTOM_DIRECTORY: &str = "acme_custom_directory";
 pub const KEY_GEO_MODE: &str = "geo_mode"; // off|deny|allow
 pub const KEY_GEO_COUNTRIES: &str = "geo_countries"; // JSON array of ISO codes
 
@@ -237,6 +244,54 @@ pub fn load_geo_cidrs(path: &std::path::Path, policy: &GeoPolicy) -> Vec<String>
     cidrs
 }
 
+/// The custom CA's directory URL, if one is set.
+pub fn custom_directory(map: &std::collections::HashMap<String, String>) -> Option<String> {
+    map.get(KEY_ACME_CUSTOM_DIRECTORY)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// The ACME directory a certificate issues from: its CA's production URL, the
+/// staging URL when the flag is set (validation only allows it where one
+/// exists), or the configured custom URL.
+fn cert_directory(ca: &acme_cas::CaDef, staging: bool, custom: Option<&str>) -> ApiResult<String> {
+    if ca.id == acme_cas::CUSTOM_CA {
+        return custom.map(str::to_string).ok_or_else(|| {
+            ApiError::bad_request(
+                "custom_ca_unconfigured",
+                "a certificate uses the custom ACME server, but its directory URL is not set",
+            )
+        });
+    }
+    Ok(match (staging, ca.staging_directory) {
+        (true, Some(url)) => url.to_string(),
+        _ => ca.directory.to_string(),
+    })
+}
+
+/// A CA's stored EAB pair as `<kid>:<hmac>`, unsealed. None when either half is
+/// missing (or can't be opened — logged, then treated as unset so Angie shows
+/// the CA's own "EAB required" error rather than the apply failing).
+pub async fn eab_credentials(state: &AppState, ca: &str) -> Option<String> {
+    let secret = crate::secretbox::load_or_create_key(&state.cfg.data_dir).ok()?;
+    let mut parts = Vec::with_capacity(2);
+    for part in ["kid", "hmac"] {
+        let stored = repo::get_setting(&state.db, &acme_cas::eab_key(ca, part))
+            .await
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_empty())?;
+        match crate::secretbox::open(&secret, &stored) {
+            Ok(v) => parts.push(v),
+            Err(e) => {
+                tracing::error!(ca, error = %e, "cannot open stored EAB credentials — re-enter them");
+                return None;
+            }
+        }
+    }
+    Some(parts.join(":"))
+}
+
 /// Assemble the generator input from the current DB state.
 pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput> {
     let hosts = repo::list_hosts(&state.db).await?;
@@ -246,9 +301,32 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
     let geo = geo_policy(state).await?;
     let geo_cidrs = load_geo_cidrs(&state.cfg.angie.geoip_data, &geo);
 
-    let certificates = db_certs
-        .into_iter()
-        .map(|c| generator::Certificate {
+    let raw_settings = repo::all_settings(&state.db).await?;
+    let account_key = (raw_settings
+        .get(KEY_ACME_SHARED_ACCOUNT)
+        .map(String::as_str)
+        == Some("1"))
+    .then(|| state.cfg.angie.acme_account_key.display().to_string());
+    let custom = custom_directory(&raw_settings);
+    let mut eab_by_ca: std::collections::HashMap<&'static str, Option<String>> =
+        std::collections::HashMap::new();
+
+    let mut certificates = Vec::with_capacity(db_certs.len());
+    for c in db_certs {
+        // Validation keeps `ca` inside the registry; a row that somehow isn't
+        // falls back to the historical default rather than failing the apply.
+        let ca = acme_cas::get(&c.ca)
+            .unwrap_or_else(|| acme_cas::get(acme_cas::DEFAULT_CA).expect("default CA"));
+        let directory = cert_directory(ca, c.staging, custom.as_deref())?;
+        let eab = if ca.eab == acme_cas::Eab::None {
+            None
+        } else {
+            if !eab_by_ca.contains_key(ca.id) {
+                eab_by_ca.insert(ca.id, eab_credentials(state, ca.id).await);
+            }
+            eab_by_ca[ca.id].clone()
+        };
+        certificates.push(generator::Certificate {
             id: c.id,
             ready: ready.get(&c.name).copied().unwrap_or(false),
             name: c.name,
@@ -256,12 +334,14 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
             challenge: c.challenge.as_str().to_string(),
             key_type: c.key_type.as_str().to_string(),
             email: c.email,
-            staging: c.staging,
+            directory,
+            account_key: account_key.clone(),
+            eab,
             dns_provider: c.dns_provider,
             // Pause/enabled toggle is a follow-up UI action; default on.
             enabled: true,
-        })
-        .collect();
+        });
+    }
 
     // Access lists, with the bcrypt hashes needed to write the htpasswd files.
     let db_lists = repo::list_access_lists(&state.db).await?;

@@ -25,10 +25,19 @@ import { Input } from '@/components/ui/input'
 import { ChipsField } from '@/components/chips-field'
 import { DefaultSitePicker } from '@/components/default-site-picker'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import {
   api,
   ApiError,
+  type AcmeCa,
   type ImportResult,
   type SettingsResponse,
 } from '@/lib/api'
@@ -71,8 +80,139 @@ export function SettingsPage() {
       ) : (
         <SettingsForm data={settingsQuery.data} />
       )}
+      <CaCredentials />
       <BackupRestore />
     </div>
+  )
+}
+
+/** EAB credentials for the CAs that take them. Outside the settings form: each
+ *  pair is saved on its own, and the HMAC key is write-only. */
+function CaCredentials() {
+  const { t } = useTranslation()
+  const casQuery = useQuery({
+    queryKey: ['acme-cas'],
+    queryFn: () => api.listAcmeCas(),
+  })
+  const cas = (casQuery.data?.cas ?? []).filter((ca) => ca.eab !== 'none')
+  if (cas.length === 0) {
+    return null
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('settings.eab.title')}</CardTitle>
+        <CardDescription>{t('settings.eab.description')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {cas.map((ca) => (
+          <EabRow key={ca.id} ca={ca} />
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
+function EabRow({ ca }: { ca: AcmeCa }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [kid, setKid] = useState('')
+  const [hmac, setHmac] = useState('')
+
+  const done = (title: string) => {
+    void queryClient.invalidateQueries({ queryKey: ['acme-cas'] })
+    setKid('')
+    setHmac('')
+    toast({ variant: 'success', title })
+  }
+  const saveMutation = useMutation({
+    mutationFn: () => api.setAcmeEab(ca.id, { kid: kid.trim(), hmac: hmac.trim() }),
+    onSuccess: () => done(t('settings.eab.saved', { ca: ca.label })),
+  })
+  const removeMutation = useMutation({
+    mutationFn: () => api.deleteAcmeEab(ca.id),
+    onSuccess: () => done(t('settings.eab.removed', { ca: ca.label })),
+  })
+  const error = saveMutation.error ?? removeMutation.error
+  const busy = saveMutation.isPending || removeMutation.isPending
+
+  return (
+    <form
+      className="space-y-2 rounded-lg border p-3"
+      onSubmit={(event) => {
+        event.preventDefault()
+        saveMutation.mutate()
+      }}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">{ca.label}</span>
+        {ca.eab_configured ? (
+          <Badge variant="outline">{t('settings.eab.configured')}</Badge>
+        ) : (
+          <Badge variant={ca.eab === 'required' ? 'warning' : 'outline'}>
+            {ca.eab === 'required'
+              ? t('settings.eab.requiredMissing')
+              : t('settings.eab.notSet')}
+          </Badge>
+        )}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-1">
+          <Label htmlFor={`eab-kid-${ca.id}`} className="text-xs">
+            {t('settings.eab.kid')}
+          </Label>
+          <Input
+            id={`eab-kid-${ca.id}`}
+            autoComplete="off"
+            spellCheck={false}
+            value={kid}
+            onChange={(event) => setKid(event.target.value)}
+          />
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor={`eab-hmac-${ca.id}`} className="text-xs">
+            {t('settings.eab.hmac')}
+          </Label>
+          <Input
+            id={`eab-hmac-${ca.id}`}
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={ca.eab_configured ? '••••••••' : ''}
+            value={hmac}
+            onChange={(event) => setHmac(event.target.value)}
+          />
+        </div>
+      </div>
+      {error !== null && (
+        <p role="alert" className="text-sm text-destructive">
+          {error instanceof ApiError ? error.message : t('common.error')}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        {ca.eab_configured && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => removeMutation.mutate()}
+          >
+            {t('settings.eab.remove')}
+          </Button>
+        )}
+        <Button
+          type="submit"
+          size="sm"
+          disabled={busy || kid.trim() === '' || hmac.trim() === ''}
+        >
+          {saveMutation.isPending && (
+            <Loader2 className="animate-spin" aria-hidden="true" />
+          )}
+          {t('common.save')}
+        </Button>
+      </div>
+    </form>
   )
 }
 
@@ -300,6 +440,9 @@ function savedValues(raw: SettingsResponse['raw']) {
     // addresses, since that is what it is.
     resolvers: (raw.resolver_override ?? '').split(/[\s,]+/).filter(Boolean),
     acmeEmail: raw.acme_email ?? '',
+    acmeDefaultCa: raw.acme_default_ca ?? 'letsencrypt',
+    acmeSharedAccount: raw.acme_shared_account === '1',
+    acmeCustomDirectory: raw.acme_custom_directory ?? '',
   }
 }
 
@@ -317,6 +460,18 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
   const [ipv6Enabled, setIpv6Enabled] = useState<boolean>(saved.ipv6Enabled)
   const [resolvers, setResolvers] = useState<string[]>(saved.resolvers)
   const [acmeEmail, setAcmeEmail] = useState<string>(saved.acmeEmail)
+  const [acmeDefaultCa, setAcmeDefaultCa] = useState<string>(saved.acmeDefaultCa)
+  const [acmeSharedAccount, setAcmeSharedAccount] = useState<boolean>(
+    saved.acmeSharedAccount,
+  )
+  const [acmeCustomDirectory, setAcmeCustomDirectory] = useState<string>(
+    saved.acmeCustomDirectory,
+  )
+  // Shares the key with the CA credentials card and the certificate wizard.
+  const casQuery = useQuery({
+    queryKey: ['acme-cas'],
+    queryFn: () => api.listAcmeCas(),
+  })
   // Health defaults come from `effective` — the backend already resolves the
   // built-in fallback, so an install that never set them shows the real value
   // rather than a blank. Edited as strings, like the other numeric fields.
@@ -331,6 +486,9 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
       ipv6Enabled,
       resolvers,
       acmeEmail,
+      acmeDefaultCa,
+      acmeSharedAccount,
+      acmeCustomDirectory,
       healthInterval,
       healthTimeout,
       healthRetention,
@@ -347,6 +505,8 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
     mutationFn: (body: Record<string, string>) => api.updateSettings(body),
     onSuccess: (result) => {
       queryClient.setQueryData(['settings'], result)
+      // The CA list reports the default CA, shared account and custom URL.
+      void queryClient.invalidateQueries({ queryKey: ['acme-cas'] })
       toast({ variant: 'success', title: t('settings.saved') })
     },
   })
@@ -359,6 +519,9 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
       ipv6_enabled: ipv6Enabled ? '1' : '0',
       resolver_override: resolvers.join(' '),
       acme_email: acmeEmail,
+      acme_default_ca: acmeDefaultCa,
+      acme_shared_account: acmeSharedAccount ? '1' : '0',
+      acme_custom_directory: acmeCustomDirectory.trim(),
       health_interval_secs: healthInterval,
       health_timeout_secs: healthTimeout,
       health_retention_days: healthRetention,
@@ -471,7 +634,7 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
           <CardTitle>{t('settings.acme.title')}</CardTitle>
           <CardDescription>{t('settings.acme.description')}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <div className="grid gap-2 sm:max-w-md">
             <Label htmlFor="acme-email">{t('settings.acme.email')}</Label>
             <Input
@@ -484,6 +647,61 @@ function SettingsForm({ data }: { data: SettingsResponse }) {
               placeholder="admin@example.com"
               value={acmeEmail}
               onChange={(event) => setAcmeEmail(event.target.value)}
+            />
+          </div>
+          <div className="grid gap-2 sm:max-w-md">
+            <Label htmlFor="acme-default-ca">{t('settings.acme.defaultCa')}</Label>
+            <Select value={acmeDefaultCa} onValueChange={setAcmeDefaultCa}>
+              <SelectTrigger id="acme-default-ca">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(casQuery.data?.cas ?? [{ id: 'letsencrypt', label: "Let's Encrypt" }]).map(
+                  (ca) => (
+                    <SelectItem key={ca.id} value={ca.id}>
+                      {ca.label}
+                    </SelectItem>
+                  ),
+                )}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {t('settings.acme.defaultCaHelp')}
+            </p>
+          </div>
+          <div className="grid gap-2 sm:max-w-md">
+            <Label htmlFor="acme-custom-directory">
+              {t('settings.acme.customDirectory')}
+            </Label>
+            <Input
+              id="acme-custom-directory"
+              type="url"
+              inputMode="url"
+              spellCheck={false}
+              autoCapitalize="off"
+              placeholder="https://acme.example.com/directory"
+              value={acmeCustomDirectory}
+              onChange={(event) => setAcmeCustomDirectory(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('settings.acme.customDirectoryHelp')}
+            </p>
+          </div>
+          <div className="flex items-start justify-between gap-4 sm:max-w-md">
+            <div className="space-y-1">
+              <Label htmlFor="acme-shared-account">
+                {t('settings.acme.sharedAccount')}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t('settings.acme.sharedAccountHelp', {
+                  path: casQuery.data?.account_key_path ?? '',
+                })}
+              </p>
+            </div>
+            <Switch
+              id="acme-shared-account"
+              checked={acmeSharedAccount}
+              onCheckedChange={setAcmeSharedAccount}
             />
           </div>
         </CardContent>

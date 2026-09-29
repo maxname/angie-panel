@@ -961,6 +961,7 @@ struct CertRow {
     email: Option<String>,
     staging: i64,
     dns_provider: Option<String>,
+    ca: String,
     created_at: i64,
 }
 
@@ -990,13 +991,14 @@ impl CertRow {
             email: self.email,
             staging: self.staging != 0,
             dns_provider: self.dns_provider,
+            ca: self.ca,
             created_at: self.created_at,
         })
     }
 }
 
 const CERT_COLUMNS: &str =
-    "id, name, domains, challenge, key_type, email, staging, dns_provider, created_at";
+    "id, name, domains, challenge, key_type, email, staging, dns_provider, ca, created_at";
 
 pub async fn list_certs(db: &SqlitePool) -> anyhow::Result<Vec<Certificate>> {
     let rows: Vec<CertRow> = sqlx::query_as(&format!(
@@ -1043,7 +1045,7 @@ pub async fn cert_name_exists_except(
 pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::Result<i64> {
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO certificates (name, domains, challenge, key_type, email, staging, \
-         dns_provider, created_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+         dns_provider, ca, created_at) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
     )
     .bind(&input.name)
     .bind(domains_json(&input.domains))
@@ -1052,6 +1054,7 @@ pub async fn insert_cert(db: &SqlitePool, input: &CertificateInput) -> anyhow::R
     .bind(input.email.as_deref())
     .bind(input.staging as i64)
     .bind(input.dns_provider.as_deref())
+    .bind(&input.ca)
     .bind(now_epoch())
     .fetch_one(db)
     .await?;
@@ -1069,7 +1072,7 @@ pub async fn update_cert(
 ) -> anyhow::Result<bool> {
     let rows = sqlx::query(
         "UPDATE certificates SET name = ?, domains = ?, challenge = ?, key_type = ?, \
-         email = ?, staging = ?, dns_provider = ? WHERE id = ?",
+         email = ?, staging = ?, dns_provider = ?, ca = ? WHERE id = ?",
     )
     .bind(&input.name)
     .bind(domains_json(&input.domains))
@@ -1078,6 +1081,7 @@ pub async fn update_cert(
     .bind(input.email.as_deref())
     .bind(input.staging as i64)
     .bind(input.dns_provider.as_deref())
+    .bind(&input.ca)
     .bind(id)
     .execute(db)
     .await?;
@@ -1236,7 +1240,7 @@ pub async fn import_replace(
     for (id, c) in certs {
         sqlx::query(
             "INSERT INTO certificates (id, name, domains, challenge, key_type, email, staging, \
-             dns_provider, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+             dns_provider, ca, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(id)
         .bind(&c.name)
@@ -1246,6 +1250,7 @@ pub async fn import_replace(
         .bind(c.email.as_deref())
         .bind(c.staging as i64)
         .bind(c.dns_provider.as_deref())
+        .bind(&c.ca)
         .bind(now)
         .execute(&mut *tx)
         .await?;

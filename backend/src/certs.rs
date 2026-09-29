@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{self, Certificate};
-use crate::{repo, settings};
+use crate::{acme_cas, repo, settings};
 
 fn cert_json(c: &Certificate) -> Value {
     serde_json::to_value(c).unwrap_or(Value::Null)
@@ -61,24 +61,34 @@ pub async fn get_one(
 pub async fn create(
     _u: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(mut raw): Json<model::CertificateInput>,
+    Json(raw): Json<model::CertificateInput>,
 ) -> ApiResult<Json<Value>> {
+    let cert = create_cert(&state, raw).await?;
+    Ok(Json(cert_json(&cert)))
+}
+
+/// Validate and insert a certificate. Shared by the certificates endpoint and
+/// by host creation's "request a new certificate" option.
+pub async fn create_cert(
+    state: &AppState,
+    mut raw: model::CertificateInput,
+) -> ApiResult<Certificate> {
     // NPM-style: the name is optional. When blank, derive a unique identifier
     // from the first domain — it's only the acme_client id / $acme_cert_<name>,
     // never shown to end users.
     if raw.name.trim().is_empty() {
-        raw.name = generate_cert_name(&state, raw.domains.first().map(String::as_str)).await?;
+        raw.name = generate_cert_name(state, raw.domains.first().map(String::as_str)).await?;
     }
     let input = model::validate_cert_input(raw)?;
-    ensure_dns_provider_exists(&state, &input).await?;
+    ensure_dns_provider_exists(state, &input).await?;
+    ensure_ca_ready(state, &input).await?;
     // Name is the acme_client identifier and the $acme_cert_<name> variable —
     // globally unique.
     if repo::cert_name_exists(&state.db, &input.name).await? {
         return Err(name_taken(&input.name));
     }
     let id = repo::insert_cert(&state.db, &input).await?;
-    let cert = repo::get_cert(&state.db, id).await?.expect("just inserted");
-    Ok(Json(cert_json(&cert)))
+    Ok(repo::get_cert(&state.db, id).await?.expect("just inserted"))
 }
 
 /// Replace a certificate's definition in place. Editing keeps the same row id,
@@ -98,6 +108,7 @@ pub async fn update(
     }
     let input = model::validate_cert_input(raw)?;
     ensure_dns_provider_exists(&state, &input).await?;
+    ensure_ca_ready(&state, &input).await?;
     if repo::cert_name_exists_except(&state.db, &input.name, id).await? {
         return Err(name_taken(&input.name));
     }
@@ -122,6 +133,33 @@ async fn ensure_dns_provider_exists(
                 "the selected DNS provider profile does not exist",
             ));
         }
+    }
+    Ok(())
+}
+
+/// Refuse a certificate its CA can't issue yet: the custom CA needs its
+/// directory URL, and ZeroSSL/Google need EAB credentials — without them the
+/// cert would only fail later, inside Angie, as an opaque registration error.
+async fn ensure_ca_ready(state: &AppState, input: &model::CertificateInput) -> ApiResult<()> {
+    let ca = acme_cas::get(&input.ca).expect("validated");
+    if ca.id == acme_cas::CUSTOM_CA {
+        let map = repo::all_settings(&state.db).await?;
+        if settings::custom_directory(&map).is_none() {
+            return Err(ApiError::bad_request(
+                "custom_ca_unconfigured",
+                "set the custom ACME server's directory URL in Settings first",
+            ));
+        }
+    }
+    if ca.eab == acme_cas::Eab::Required && settings::eab_credentials(state, ca.id).await.is_none()
+    {
+        return Err(ApiError::bad_request(
+            "eab_required",
+            format!(
+                "{} requires EAB credentials; add them in Settings → Certificate authorities",
+                ca.label
+            ),
+        ));
     }
     Ok(())
 }
@@ -261,4 +299,120 @@ pub async fn precheck(
         "resolvers": eff.resolvers,
         "delegation_hints": hints,
     })))
+}
+
+// ------------------------------------------------ certificate authorities
+
+/// GET /api/acme/cas — the CA registry plus what is configured for each (EAB
+/// present, the custom directory URL), and the global ACME options.
+pub async fn list_cas(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let map = repo::all_settings(&state.db).await?;
+    let custom = settings::custom_directory(&map);
+    let mut cas = Vec::with_capacity(acme_cas::CAS.len());
+    for ca in acme_cas::CAS {
+        let eab_configured = ca.eab != acme_cas::Eab::None
+            && settings::eab_credentials(&state, ca.id).await.is_some();
+        let directory = if ca.id == acme_cas::CUSTOM_CA {
+            custom.clone()
+        } else {
+            Some(ca.directory.to_string())
+        };
+        cas.push(json!({
+            "id": ca.id,
+            "label": ca.label,
+            "directory": directory,
+            "staging": ca.staging_directory.is_some(),
+            "eab": ca.eab,
+            "eab_configured": eab_configured,
+        }));
+    }
+    let default_ca = map
+        .get(settings::KEY_ACME_DEFAULT_CA)
+        .filter(|v| acme_cas::get(v).is_some())
+        .cloned()
+        .unwrap_or_else(|| acme_cas::DEFAULT_CA.to_string());
+    Ok(Json(json!({
+        "cas": cas,
+        "default_ca": default_ca,
+        "shared_account": map.get(settings::KEY_ACME_SHARED_ACCOUNT).map(String::as_str) == Some("1"),
+        "account_key_path": state.cfg.angie.acme_account_key.display().to_string(),
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct EabBody {
+    kid: String,
+    hmac: String,
+}
+
+fn eab_ca(id: &str) -> ApiResult<&'static acme_cas::CaDef> {
+    match acme_cas::get(id) {
+        Some(ca) if ca.eab != acme_cas::Eab::None => Ok(ca),
+        Some(ca) => Err(ApiError::bad_request(
+            "eab_unsupported",
+            format!("{} does not use EAB", ca.label),
+        )),
+        None => Err(ApiError::not_found(format!(
+            "no certificate authority '{id}'"
+        ))),
+    }
+}
+
+/// PUT /api/acme/cas/{id}/eab — store a CA's EAB key id + HMAC key (write-only,
+/// sealed at rest like DNS provider credentials). EAB is only sent when an
+/// account is first registered, so changing it later affects new accounts only.
+pub async fn put_eab(
+    _u: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<EabBody>,
+) -> ApiResult<Json<Value>> {
+    let ca = eab_ca(&id)?;
+    let (kid, hmac) = (body.kid.trim(), body.hmac.trim());
+    if !acme_cas::is_valid_eab_part(kid) || !acme_cas::is_valid_eab_part(hmac) {
+        return Err(ApiError::bad_request(
+            "invalid_eab",
+            "EAB key id and HMAC key must be non-empty base64url strings (A–Z, a–z, 0–9, - and _)",
+        ));
+    }
+    let secret =
+        crate::secretbox::load_or_create_key(&state.cfg.data_dir).map_err(ApiError::internal)?;
+    for (part, value) in [("kid", kid), ("hmac", hmac)] {
+        let sealed = crate::secretbox::seal(&secret, value).map_err(ApiError::internal)?;
+        repo::set_setting(&state.db, &acme_cas::eab_key(ca.id, part), &sealed)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// DELETE /api/acme/cas/{id}/eab — forget a CA's EAB credentials. Refused while
+/// a certificate needs them, mirroring the DNS-profile rule.
+pub async fn delete_eab(
+    _u: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let ca = eab_ca(&id)?;
+    if ca.eab == acme_cas::Eab::Required
+        && repo::list_certs(&state.db)
+            .await?
+            .iter()
+            .any(|c| c.ca == ca.id)
+    {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "in_use",
+            format!(
+                "a certificate is issued by {}; switch it to another CA first",
+                ca.label
+            ),
+        ));
+    }
+    for part in ["kid", "hmac"] {
+        repo::set_setting(&state.db, &acme_cas::eab_key(ca.id, part), "")
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    Ok(Json(json!({ "ok": true })))
 }

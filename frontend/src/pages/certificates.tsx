@@ -50,6 +50,7 @@ import {
 import {
   api,
   ApiError,
+  type AcmeCa,
   type AcmeChallenge,
   type AcmeKeyType,
   type Cert,
@@ -173,6 +174,12 @@ interface CertRowProps {
 
 function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
   const { t, i18n } = useTranslation()
+  const casQuery = useQuery({
+    queryKey: ['acme-cas'],
+    queryFn: () => api.listAcmeCas(),
+  })
+  const caLabel =
+    casQuery.data?.cas.find((ca) => ca.id === cert.ca)?.label ?? cert.ca
   const created = new Intl.DateTimeFormat(i18n.language, {
     dateStyle: 'medium',
   }).format(new Date(cert.created_at * 1000))
@@ -191,15 +198,18 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
         {t(`certificates.keyType.${cert.key_type}`)}
       </TableCell>
       <TableCell>
-        {cert.staging ? (
-          <Badge variant="warning">
-            {t('certificates.environment.staging')}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground">
-            {t('certificates.environment.production')}
-          </span>
-        )}
+        <div className="flex flex-col items-start gap-0.5">
+          {cert.staging ? (
+            <Badge variant="warning">
+              {t('certificates.environment.staging')}
+            </Badge>
+          ) : (
+            <span className="text-muted-foreground">
+              {t('certificates.environment.production')}
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground">{caLabel}</span>
+        </div>
       </TableCell>
       <TableCell>
         <StatusPill status={cert.status} />
@@ -346,6 +356,8 @@ interface WizardState {
   /** For DNS-01: a provider id = automatic via that provider's API; null = Angie
    *  self-answers (NS delegation). */
   dns_provider: string | null
+  /** Issuing CA id; null on a new cert = the configured default CA. */
+  ca: string | null
 }
 
 const CHALLENGE_OPTIONS: { value: AcmeChallenge; labelKey: string }[] = [
@@ -359,6 +371,7 @@ interface WizardFieldErrors {
   domains?: string
   challenge?: string
   email?: string
+  ca?: string
   form?: string
 }
 
@@ -383,6 +396,7 @@ export function CertWizardForm({
           email: cert.email ?? '',
           staging: cert.staging,
           dns_provider: cert.dns_provider,
+          ca: cert.ca,
         }
       : {
           name: '',
@@ -392,6 +406,7 @@ export function CertWizardForm({
           email: '',
           staging: false,
           dns_provider: null,
+          ca: null,
         },
   )
   const profilesQuery = useQuery({
@@ -399,6 +414,17 @@ export function CertWizardForm({
     queryFn: () => api.listDnsCredentials(),
   })
   const profiles = profilesQuery.data?.credentials ?? []
+  const casQuery = useQuery({
+    queryKey: ['acme-cas'],
+    queryFn: () => api.listAcmeCas(),
+  })
+  const cas = casQuery.data?.cas ?? []
+  const effectiveCa = form.ca ?? casQuery.data?.default_ca ?? 'letsencrypt'
+  const selectedCa: AcmeCa | undefined = cas.find((ca) => ca.id === effectiveCa)
+  // Staging exists only where the CA offers one; until the list loads, trust
+  // the saved flag rather than silently dropping it.
+  const stagingAvailable = selectedCa?.staging ?? true
+  const effectiveStaging = form.staging && stagingAvailable
   const [domainDraft, setDomainDraft] = useState('')
   const [domainError, setDomainError] = useState<string | null>(null)
   const [clientErrors, setClientErrors] = useState<WizardFieldErrors>({})
@@ -463,6 +489,11 @@ export function CertWizardForm({
           return { challenge: message }
         case 'invalid_email':
           return { email: message }
+        case 'invalid_ca':
+        case 'eab_required':
+        case 'custom_ca_unconfigured':
+        case 'staging_unsupported':
+          return { ca: message }
         default:
           return { form: message }
       }
@@ -475,6 +506,7 @@ export function CertWizardForm({
     domains: clientErrors.domains ?? serverErrors.domains,
     challenge: serverErrors.challenge,
     email: serverErrors.email,
+    ca: serverErrors.ca,
     form: serverErrors.form,
   }
 
@@ -521,8 +553,9 @@ export function CertWizardForm({
       challenge: effectiveChallenge,
       key_type: form.key_type,
       email: form.email.trim() === '' ? null : form.email.trim(),
-      staging: form.staging,
+      staging: effectiveStaging,
       dns_provider: effectiveDnsProvider,
+      ca: effectiveCa,
     }
     saveMutation.mutate(input)
   }
@@ -757,6 +790,37 @@ export function CertWizardForm({
         </fieldset>
       )}
 
+      <div className="space-y-2">
+        <Label htmlFor="cert-ca">{t('certificates.wizard.ca')}</Label>
+        <Select value={effectiveCa} onValueChange={(value) => patch({ ca: value })}>
+          <SelectTrigger id="cert-ca">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(cas.length > 0 ? cas : [{ id: effectiveCa, label: effectiveCa }]).map((ca) => (
+              <SelectItem key={ca.id} value={ca.id}>
+                {ca.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {selectedCa?.eab === 'required' && !selectedCa.eab_configured && (
+          <p role="alert" className="text-sm text-warning">
+            {t('certificates.wizard.caNeedsEab', { ca: selectedCa.label })}
+          </p>
+        )}
+        {selectedCa?.id === 'custom' && selectedCa.directory === null && (
+          <p role="alert" className="text-sm text-warning">
+            {t('certificates.wizard.caNeedsDirectory')}
+          </p>
+        )}
+        {errors.ca !== undefined && (
+          <p role="alert" className="text-sm text-destructive">
+            {errors.ca}
+          </p>
+        )}
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="cert-key-type">{t('certificates.wizard.keyType')}</Label>
@@ -799,11 +863,19 @@ export function CertWizardForm({
           </Label>
           <Switch
             id="cert-staging"
-            checked={form.staging}
+            checked={effectiveStaging}
+            disabled={!stagingAvailable}
             onCheckedChange={(checked) => patch({ staging: checked })}
           />
         </div>
-        {form.staging && (
+        {!stagingAvailable && (
+          <p className="text-xs text-muted-foreground">
+            {t('certificates.wizard.stagingUnavailable', {
+              ca: selectedCa?.label ?? '',
+            })}
+          </p>
+        )}
+        {effectiveStaging && (
           <p className="text-xs text-destructive">
             {t('certificates.wizard.stagingNote')}
           </p>

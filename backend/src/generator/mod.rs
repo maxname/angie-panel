@@ -133,8 +133,13 @@ pub struct Certificate {
     /// "ecdsa" | "rsa".
     pub key_type: String,
     pub email: Option<String>,
-    /// Use the Let's Encrypt staging CA (untrusted, high rate limits).
-    pub staging: bool,
+    /// ACME directory URL of the issuing CA (already resolved from the CA id,
+    /// the staging flag, or the custom-CA setting).
+    pub directory: String,
+    /// Shared ACME account key file; None = Angie keeps a key per client.
+    pub account_key: Option<String>,
+    /// External Account Binding as `<kid>:<hmac>`, for CAs that require it.
+    pub eab: Option<String>,
     /// Pause renewal without deleting state (acme_client `enabled=off`).
     pub enabled: bool,
     /// True once Angie has issued the certificate at least once.
@@ -574,12 +579,6 @@ fn gen_acme(input: &GeneratorInput) -> String {
     certs.sort_by_key(|c| c.id);
 
     for cert in certs {
-        let directory = if cert.staging {
-            LE_STAGING_DIRECTORY
-        } else {
-            LE_PROD_DIRECTORY
-        };
-
         // acme_client <name> <uri> [params];
         let mut params = String::new();
         if cert.challenge != "http" {
@@ -591,11 +590,21 @@ fn gen_acme(input: &GeneratorInput) -> String {
         if let Some(email) = &cert.email {
             params.push_str(&format!(" email={email}"));
         }
+        if let Some(key) = &cert.account_key {
+            params.push_str(&format!(" account_key={key}"));
+        }
+        if let Some(eab) = &cert.eab {
+            params.push_str(&format!(" eab={eab}"));
+        }
         if !cert.enabled {
             // enabled=off keeps the cert usable but pauses renewal.
             params.push_str(" enabled=off");
         }
-        let _ = writeln!(out, "acme_client {} {}{};", cert.name, directory, params);
+        let _ = writeln!(
+            out,
+            "acme_client {} {}{};",
+            cert.name, cert.directory, params
+        );
 
         // Collector block — unix socket, never serves traffic.
         let sock = input

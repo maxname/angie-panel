@@ -55,6 +55,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(certs::get_one).put(certs::update).delete(certs::delete),
         )
         .route("/certificates/{id}/precheck", post(certs::precheck))
+        .route("/acme/cas", get(certs::list_cas))
+        .route(
+            "/acme/cas/{id}/eab",
+            axum::routing::put(certs::put_eab).delete(certs::delete_eab),
+        )
         .route(
             "/access-lists",
             get(access_lists::list).post(access_lists::create),
