@@ -19,6 +19,8 @@ fn snippets_dir() -> PathBuf {
     PathBuf::from("/usr/share/angie-panel/snippets")
 }
 
+const TEST_ACCOUNT_KEY: &str = "/var/lib/angie/acme/angie-panel-account.key";
+
 fn public_dir() -> PathBuf {
     PathBuf::from("/var/lib/angie-panel/public")
 }
@@ -132,7 +134,9 @@ fn ready_cert(id: i64, name: &str, domains: &[&str]) -> Certificate {
         challenge: "http".into(),
         key_type: "ecdsa".into(),
         email: None,
-        staging: false,
+        directory: LE_PROD_DIRECTORY.into(),
+        account_key: None,
+        eab: None,
         enabled: true,
         ready: true,
         dns_provider: None,
@@ -204,7 +208,7 @@ fn golden_10_acme_clients() {
     let http = ready_cert(1, "web", &["app.example.com", "www.example.com"]);
     let mut wild = ready_cert(2, "wild", &["*.example.com", "example.com"]);
     wild.challenge = "dns".into();
-    wild.staging = true;
+    wild.directory = LE_STAGING_DIRECTORY.into();
     wild.email = Some("admin@example.com".into());
     let mut paused = ready_cert(3, "legacy", &["old.example.com"]);
     paused.key_type = "rsa".into();
@@ -217,6 +221,38 @@ fn golden_10_acme_clients() {
     ))
     .unwrap();
     assert_golden("10-acme-clients.conf", &files["10-acme.conf"]);
+}
+
+#[test]
+fn acme_client_carries_ca_account_key_and_eab() {
+    // A non-LE CA with EAB, on the shared account key: all three land on the
+    // acme_client line, and the result stays lint-clean (account_key is pinned).
+    let mut cert = ready_cert(1, "web", &["app.example.com"]);
+    cert.directory = "https://acme.zerossl.com/v2/DV90".into();
+    cert.account_key = Some(TEST_ACCOUNT_KEY.into());
+    cert.eab = Some("kid_1:aGVsbG8".into());
+    let files = generate(&input(
+        vec![],
+        vec![cert],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    assert!(
+        files["10-acme.conf"].contains(&format!(
+            "acme_client web https://acme.zerossl.com/v2/DV90 \
+             account_key={TEST_ACCOUNT_KEY} eab=kid_1:aGVsbG8;"
+        )),
+        "{}",
+        files["10-acme.conf"]
+    );
+    let policy = lint::LintPolicy {
+        snippets_dir: snippets_dir(),
+        public_dir: public_dir(),
+        allow_advanced_snippets: true,
+        acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+    };
+    let violations = lint::check_fileset(&files, &policy);
+    assert!(violations.is_empty(), "{violations:#?}");
 }
 
 #[test]
@@ -260,6 +296,7 @@ fn golden_acme_dns_provider_hook() {
         snippets_dir: snippets_dir(),
         public_dir: public_dir(),
         allow_advanced_snippets: true,
+        acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
     };
     let violations = lint::check_fileset(&files, &policy);
     assert!(
@@ -1536,6 +1573,7 @@ fn full_fileset_is_lint_clean() {
             snippets_dir: snippets_dir(),
             public_dir: public_dir(),
             allow_advanced_snippets: true,
+            acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
         };
         let violations = lint::check_fileset(&files, &policy);
         assert!(
@@ -1574,7 +1612,7 @@ const E2E_FIXTURE_HEADER: &str = "\
 #
 # Two deltas from production, applied by that test and no others:
 #   * the ACME directory points at pebble — the generator takes it from the
-#     certificate's `staging` flag, so it is not reachable from a fixture;
+#     certificate's CA, so it is not reachable from a fixture;
 #   * retry_after_error=5s (Angie's default is 2h) so the harness converges
 #     when pebble isn't ready at Angie's first attempt.
 ";

@@ -148,6 +148,9 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     crate::settings::KEY_IPV6_ENABLED,
     crate::settings::KEY_RESOLVER_OVERRIDE,
     crate::settings::KEY_ACME_EMAIL,
+    crate::settings::KEY_ACME_DEFAULT_CA,
+    crate::settings::KEY_ACME_SHARED_ACCOUNT,
+    crate::settings::KEY_ACME_CUSTOM_DIRECTORY,
     // The geo policy is exported (it is not secret), so it must import back or
     // a backup with country blocking configured can't be restored.
     crate::settings::KEY_GEO_MODE,
@@ -479,6 +482,7 @@ pub async fn import(
         }
         settings.insert(k.clone(), val.clone());
     }
+    validate_acme_settings(&settings, &certs)?;
     // Validate the geo policy as a unit (mode + countries) and store its
     // normalized form, mirroring the /geo endpoint — an import must not smuggle
     // an unknown mode or a bad country list past validation.
@@ -597,4 +601,45 @@ fn bad_entry(kind: &str, index: usize, detail: &str) -> ApiError {
         "invalid_import",
         format!("{kind} #{index} in the import is invalid: {detail}"),
     )
+}
+
+/// The ACME settings reach the generated config (the custom directory is the
+/// `acme_client` URI), so an import gets the same checks as the settings PUT —
+/// plus: a certificate on the custom CA needs the backup to carry its URL.
+fn validate_acme_settings(
+    settings: &HashMap<String, String>,
+    certs: &[(i64, CertificateInput)],
+) -> ApiResult<()> {
+    let invalid = |msg: String| ApiError::bad_request("invalid_setting", msg);
+    if let Some(ca) = settings.get(crate::settings::KEY_ACME_DEFAULT_CA) {
+        if crate::acme_cas::get(ca).is_none() {
+            return Err(invalid(format!("unknown acme_default_ca in import: {ca}")));
+        }
+    }
+    if let Some(v) = settings.get(crate::settings::KEY_ACME_SHARED_ACCOUNT) {
+        if !matches!(v.as_str(), "0" | "1") {
+            return Err(invalid(format!(
+                "invalid acme_shared_account in import: {v}"
+            )));
+        }
+    }
+    let custom = crate::settings::custom_directory(settings);
+    if let Some(url) = &custom {
+        if !crate::acme_cas::is_valid_directory_url(url) {
+            return Err(invalid(format!(
+                "invalid acme_custom_directory in import: {url}"
+            )));
+        }
+    }
+    if custom.is_none()
+        && certs
+            .iter()
+            .any(|(_, c)| c.ca == crate::acme_cas::CUSTOM_CA)
+    {
+        return Err(invalid(
+            "a certificate uses the custom ACME server, but the import has no acme_custom_directory"
+                .into(),
+        ));
+    }
+    Ok(())
 }

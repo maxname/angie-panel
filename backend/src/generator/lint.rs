@@ -24,6 +24,8 @@ pub struct LintPolicy {
     pub snippets_dir: std::path::PathBuf,
     pub public_dir: std::path::PathBuf,
     pub allow_advanced_snippets: bool,
+    /// The only file an `acme_client … account_key=` may name (root config).
+    pub acme_account_key: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -156,6 +158,13 @@ fn check_file(name: &str, body: &str, policy: &LintPolicy, out: &mut Vec<LintVio
             "autoindex" => {
                 if args.split_whitespace().next() == Some("on") {
                     push(out, st.line, "autoindex on is forbidden".into());
+                }
+            }
+
+            // --- ACME account key: root reads (or creates) this file ---
+            "acme_client" => {
+                if let Some(v) = check_acme_client(args, policy) {
+                    push(out, st.line, v);
                 }
             }
 
@@ -320,6 +329,24 @@ fn check_root(directive: &str, args: &str, policy: &LintPolicy) -> Option<String
             "{directive} path {target:?} is outside the allowed public dir {}",
             policy.public_dir.display()
         ));
+    }
+    None
+}
+
+/// `account_key=` makes Angie's root master read a private key from — or, when
+/// it is missing, write a fresh one to — the named path. Pin it to the one
+/// file the root-owned config names, so a panel bug can't aim that at, say,
+/// another service's key.
+fn check_acme_client(args: &str, policy: &LintPolicy) -> Option<String> {
+    for param in args.split_whitespace() {
+        if let Some(path) = param.strip_prefix("account_key=") {
+            if Path::new(path) != policy.acme_account_key {
+                return Some(format!(
+                    "acme_client account_key must be {}, not {path:?}",
+                    policy.acme_account_key.display()
+                ));
+            }
+        }
     }
     None
 }

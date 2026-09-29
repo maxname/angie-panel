@@ -11,6 +11,7 @@ fn policy(allow_snippets: bool) -> LintPolicy {
         snippets_dir: PathBuf::from("/usr/share/angie-panel/snippets"),
         public_dir: PathBuf::from("/var/lib/angie-panel/public"),
         allow_advanced_snippets: allow_snippets,
+        acme_account_key: PathBuf::from("/var/lib/angie/acme/angie-panel-account.key"),
     }
 }
 
@@ -250,4 +251,18 @@ fn multi_file_violations_carry_filename() {
     let v = check_fileset(&files, &policy(true));
     assert_eq!(v.len(), 1);
     assert_eq!(v[0].file, "20-host-2-b.conf");
+}
+
+#[test]
+fn acme_account_key_is_pinned_to_the_configured_file() {
+    assert!(lint_one(
+        "acme_client a https://acme.example/dir \
+         account_key=/var/lib/angie/acme/angie-panel-account.key;"
+    )
+    .is_empty());
+    assert!(lint_one("acme_client a https://acme.example/dir;").is_empty());
+    assert_violates(
+        "acme_client a https://acme.example/dir account_key=/etc/ssl/private/other.key;",
+        "account_key must be",
+    );
 }

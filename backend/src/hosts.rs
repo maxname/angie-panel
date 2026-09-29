@@ -7,12 +7,17 @@ use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::AuthUser;
+use crate::certs;
 use crate::error::{ApiError, ApiResult};
-use crate::model::{self, ProxyHost, ProxyHostInput, UpstreamPolicy};
+use crate::model::{
+    self, CertificateInput, Challenge, KeyType, ProxyHost, ProxyHostInput, UpstreamPolicy,
+};
 use crate::repo::{self, HostKind};
+use crate::settings;
 use crate::state::AppState;
 
 fn upstream_policy(state: &AppState) -> UpstreamPolicy {
@@ -86,19 +91,105 @@ pub async fn get_one(
     Ok(Json(host_json(&host)))
 }
 
+/// Host create/update body: the host itself, plus an optional request to issue
+/// a new certificate for the host's domains in the same call.
+#[derive(Deserialize)]
+pub struct HostBody {
+    #[serde(flatten)]
+    host: ProxyHostInput,
+    #[serde(default)]
+    new_certificate: Option<NewCertificate>,
+}
+
+/// How to issue the certificate a host asks for. The domains are the host's;
+/// everything omitted falls back to the global ACME settings (default CA,
+/// contact email) or the certificate defaults.
+#[derive(Deserialize)]
+pub struct NewCertificate {
+    #[serde(default)]
+    challenge: Option<Challenge>,
+    #[serde(default)]
+    dns_provider: Option<String>,
+    #[serde(default)]
+    ca: Option<String>,
+    #[serde(default)]
+    key_type: Option<KeyType>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    staging: bool,
+}
+
+/// Validate the host, then — when asked — create its certificate and bind it.
+/// The certificate is created after every host check has passed, so a host
+/// the panel would reject never leaves an orphan certificate behind.
+async fn prepare(
+    state: &AppState,
+    body: HostBody,
+    exclude_id: Option<i64>,
+) -> ApiResult<(ProxyHostInput, Option<i64>)> {
+    let mut input = model::validate_host_input(
+        body.host,
+        state.cfg.allow_advanced_snippets,
+        &upstream_policy(state),
+    )?;
+    check_domain_uniqueness(state, &input, exclude_id).await?;
+    check_refs(state, &input).await?;
+    let Some(req) = body.new_certificate else {
+        return Ok((input, None));
+    };
+    if input.certificate_id.is_some() {
+        return Err(ApiError::bad_request(
+            "conflicting_certificate",
+            "pick an existing certificate or request a new one, not both",
+        ));
+    }
+    let map = repo::all_settings(&state.db).await?;
+    let cert = certs::create_cert(
+        state,
+        CertificateInput {
+            name: String::new(),
+            domains: input.domains.clone(),
+            challenge: req.challenge.unwrap_or(Challenge::Http),
+            key_type: req.key_type.unwrap_or(KeyType::Ecdsa),
+            email: req
+                .email
+                .or_else(|| map.get(settings::KEY_ACME_EMAIL).cloned()),
+            staging: req.staging,
+            dns_provider: req.dns_provider,
+            ca: req
+                .ca
+                .or_else(|| map.get(settings::KEY_ACME_DEFAULT_CA).cloned())
+                .unwrap_or_else(model::default_ca),
+        },
+    )
+    .await?;
+    input.certificate_id = Some(cert.id);
+    Ok((input, Some(cert.id)))
+}
+
+/// Undo a certificate created for a host whose own write then failed.
+async fn discard_cert(state: &AppState, created: Option<i64>) {
+    if let Some(cid) = created {
+        if let Err(e) = repo::delete_cert(&state.db, cid).await {
+            tracing::warn!(cert = cid, error = %e, "could not remove certificate of a failed host write");
+        }
+    }
+}
+
 pub async fn create(
     _u: AuthUser,
     State(state): State<Arc<AppState>>,
-    Json(raw): Json<ProxyHostInput>,
+    Json(body): Json<HostBody>,
 ) -> ApiResult<Json<Value>> {
-    let input = model::validate_host_input(
-        raw,
-        state.cfg.allow_advanced_snippets,
-        &upstream_policy(&state),
-    )?;
-    check_domain_uniqueness(&state, &input, None).await?;
-    check_refs(&state, &input).await?;
-    let id = repo::insert_host(&state.db, &input).await?;
+    let (input, created) = prepare(&state, body, None).await?;
+    let id = match repo::insert_host(&state.db, &input).await {
+        Ok(id) => id,
+        Err(e) => {
+            discard_cert(&state, created).await;
+            return Err(e.into());
+        }
+    };
     let host = repo::get_host(&state.db, id).await?.expect("just inserted");
     Ok(Json(host_json(&host)))
 }
@@ -107,17 +198,22 @@ pub async fn update(
     _u: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
-    Json(raw): Json<ProxyHostInput>,
+    Json(body): Json<HostBody>,
 ) -> ApiResult<Json<Value>> {
-    let input = model::validate_host_input(
-        raw,
-        state.cfg.allow_advanced_snippets,
-        &upstream_policy(&state),
-    )?;
-    check_domain_uniqueness(&state, &input, Some(id)).await?;
-    check_refs(&state, &input).await?;
-    if !repo::update_host(&state.db, id, &input).await? {
+    if repo::get_host(&state.db, id).await?.is_none() {
         return Err(ApiError::not_found(format!("no host #{id}")));
+    }
+    let (input, created) = prepare(&state, body, Some(id)).await?;
+    match repo::update_host(&state.db, id, &input).await {
+        Ok(true) => {}
+        Ok(false) => {
+            discard_cert(&state, created).await;
+            return Err(ApiError::not_found(format!("no host #{id}")));
+        }
+        Err(e) => {
+            discard_cert(&state, created).await;
+            return Err(e.into());
+        }
     }
     let host = repo::get_host(&state.db, id).await?.expect("just updated");
     Ok(Json(host_json(&host)))

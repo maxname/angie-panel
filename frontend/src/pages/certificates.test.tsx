@@ -24,9 +24,34 @@ const unknownCert: Cert = {
   email: null,
   staging: false,
   dns_provider: null,
+  ca: 'letsencrypt',
   created_at: 1751700000,
   // Angie status API unreachable → the whole status object is null.
   status: null,
+}
+
+const acmeCas = {
+  default_ca: 'letsencrypt',
+  shared_account: false,
+  account_key_path: '/var/lib/angie/acme/angie-panel-account.key',
+  cas: [
+    {
+      id: 'letsencrypt',
+      label: "Let's Encrypt",
+      directory: 'https://acme-v02.api.letsencrypt.org/directory',
+      staging: true,
+      eab: 'none',
+      eab_configured: false,
+    },
+    {
+      id: 'zerossl',
+      label: 'ZeroSSL',
+      directory: 'https://acme.zerossl.com/v2/DV90',
+      staging: false,
+      eab: 'required',
+      eab_configured: false,
+    },
+  ],
 }
 
 const validCert: Cert = {
@@ -38,6 +63,7 @@ const validCert: Cert = {
   email: 'admin@example.com',
   staging: true,
   dns_provider: null,
+  ca: 'letsencrypt',
   created_at: 1751700000,
   status: { state: 'valid', certificate: 'valid' },
 }
@@ -74,11 +100,13 @@ function renderWizard() {
 
 describe('certificates page', () => {
   it('renders the table from a mocked fetch, deriving the status pill', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse({ certificates: [unknownCert, validCert] }),
-      )
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(
+        url === '/api/acme/cas'
+          ? jsonResponse(acmeCas)
+          : jsonResponse({ certificates: [unknownCert, validCert] }),
+      ),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     renderPage()
@@ -93,6 +121,8 @@ describe('certificates page', () => {
     expect(screen.getByText('STAGING')).toBeInTheDocument()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/certificates', expect.anything())
+    // Each row names its CA.
+    expect(await screen.findAllByText("Let's Encrypt")).toHaveLength(2)
   })
 })
 
@@ -168,12 +198,16 @@ describe('certificate wizard', () => {
       email: 'admin@example.com',
       staging: false,
       dns_provider: null,
+      ca: 'letsencrypt',
       created_at: 1751700000,
       status: null,
     }
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === '/api/dns-credentials') {
         return Promise.resolve(jsonResponse({ credentials: [] }))
+      }
+      if (url === '/api/acme/cas') {
+        return Promise.resolve(jsonResponse(acmeCas))
       }
       if (url === '/api/certificates/7' && init?.method === 'PUT') {
         // Echo back the edited cert (still http → wizard just closes).
@@ -215,6 +249,50 @@ describe('certificate wizard', () => {
       name: 'live_site_v2',
       domains: ['example.com', 'www.example.com'],
       challenge: 'http',
+    })
+  })
+
+  it('picks a CA — warns when it lacks EAB, drops staging it lacks, and sends it', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/dns-credentials') {
+        return Promise.resolve(jsonResponse({ credentials: [] }))
+      }
+      if (url === '/api/acme/cas') {
+        return Promise.resolve(jsonResponse(acmeCas))
+      }
+      if (url === '/api/certificates' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ ...unknownCert, ca: 'zerossl' }))
+      }
+      return Promise.reject(new Error(`unexpected ${init?.method ?? 'GET'} ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWizard()
+
+    await user.type(screen.getByLabelText('Domains'), 'shop.example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    // Staging is on offer for Let's Encrypt (the default)…
+    const staging = screen.getByRole('switch', { name: /staging/i })
+    await vi.waitFor(() => expect(staging).toBeEnabled())
+    await user.click(staging)
+
+    // …but not for ZeroSSL, which also needs EAB credentials first.
+    await user.click(screen.getByRole('combobox', { name: 'Certificate authority' }))
+    await user.click(await screen.findByRole('option', { name: 'ZeroSSL' }))
+    expect(screen.getByText(/ZeroSSL requires EAB credentials/)).toBeInTheDocument()
+    expect(staging).toBeDisabled()
+    expect(staging).not.toBeChecked()
+
+    await user.click(screen.getByRole('button', { name: 'Create certificate' }))
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([, init]) => init?.method === 'POST'),
+      ).toBe(true),
+    )
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(JSON.parse((post?.[1] as RequestInit).body as string)).toMatchObject({
+      ca: 'zerossl',
+      staging: false,
     })
   })
 })

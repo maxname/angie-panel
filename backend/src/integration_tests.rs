@@ -87,6 +87,12 @@ async fn body_json(res: axum::response::Response) -> Value {
 
 /// Build state with an already-created admin and return (app, session cookie).
 async fn authed_app(dir: &std::path::Path) -> (axum::Router, String) {
+    let (app, cookie, _) = authed_app_with_state(dir).await;
+    (app, cookie)
+}
+
+/// [`authed_app`], also handing back the state (to inspect generated config).
+async fn authed_app_with_state(dir: &std::path::Path) -> (axum::Router, String, Arc<AppState>) {
     let http_d = dir.join("http.d");
     std::fs::create_dir_all(&http_d).unwrap();
     // status_api_url points at a dead port so tests never depend on a real
@@ -101,7 +107,7 @@ async fn authed_app(dir: &std::path::Path) -> (axum::Router, String) {
     let pool = db::connect(dir).await.unwrap();
     let state = Arc::new(AppState::new(cfg, dir.join("test.toml"), pool));
     let token = auth::write_setup_token(dir).unwrap();
-    let app = api::router(state);
+    let app = api::router(state.clone());
     let res = app
         .clone()
         .oneshot(request(
@@ -122,7 +128,7 @@ async fn authed_app(dir: &std::path::Path) -> (axum::Router, String) {
         .next()
         .unwrap()
         .to_string();
-    (app, cookie)
+    (app, cookie, state)
 }
 
 #[tokio::test]
@@ -2347,4 +2353,305 @@ async fn local_cli_token_bootstraps_and_authenticates() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+/// One JSON round-trip through the router: (status, body). Empty bodies → Null.
+async fn call(
+    app: &axum::Router,
+    cookie: &str,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let res = app
+        .clone()
+        .oneshot(request(method, uri, body, Some(cookie)))
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn host_create_can_request_a_certificate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/settings",
+        Some(json!({"acme_email": "ops@example.com"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    let host = |extra: Value| {
+        let mut h = json!({
+            "domains": ["app.example.com", "www.example.com"],
+            "forward_scheme": "http",
+            "forward_host": "10.0.0.5",
+            "forward_port": 8080,
+        });
+        h.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        h
+    };
+
+    // The certificate covers the host's domains and inherits the global email.
+    let (st, created) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(host(json!({"new_certificate": {"challenge": "alpn"}}))),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{created}");
+    let cid = created["certificate_id"]
+        .as_i64()
+        .expect("bound to the new cert");
+    let (_, cert) = call(
+        &app,
+        &cookie,
+        Method::GET,
+        &format!("/api/certificates/{cid}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        cert["domains"],
+        json!(["app.example.com", "www.example.com"])
+    );
+    assert_eq!(cert["challenge"], json!("alpn"));
+    assert_eq!(cert["email"], json!("ops@example.com"));
+    assert_eq!(cert["ca"], json!("letsencrypt"));
+
+    // Existing cert AND a new one is ambiguous.
+    let (st, err) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(host(json!({
+            "domains": ["other.example.com"],
+            "certificate_id": cid,
+            "new_certificate": {},
+        }))),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"]["code"], json!("conflicting_certificate"));
+
+    // A certificate the panel rejects leaves neither a host nor a cert behind.
+    let (st, err) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(host(json!({
+            "domains": ["*.wild.example.com"],
+            "new_certificate": {"challenge": "http"},
+        }))),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"]["code"], json!("wildcard_needs_dns"));
+    let (_, hosts) = call(&app, &cookie, Method::GET, "/api/hosts", None).await;
+    assert_eq!(hosts["hosts"].as_array().unwrap().len(), 1);
+    let (_, certs) = call(&app, &cookie, Method::GET, "/api/certificates", None).await;
+    assert_eq!(certs["certificates"].as_array().unwrap().len(), 1);
+
+    // Editing a host can request one too (here: after detaching the first).
+    let hid = created["id"].as_i64().unwrap();
+    let (st, updated) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        &format!("/api/hosts/{hid}"),
+        Some(host(json!({"new_certificate": {}}))),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{updated}");
+    assert_ne!(updated["certificate_id"], json!(cid));
+}
+
+#[tokio::test]
+async fn certificate_authorities_eab_and_shared_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie, state) = authed_app_with_state(dir.path()).await;
+    let cert = |ca: &str, domain: &str| json!({"domains": [domain], "challenge": "http", "ca": ca});
+
+    let (st, cas) = call(&app, &cookie, Method::GET, "/api/acme/cas", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(cas["default_ca"], json!("letsencrypt"));
+    assert_eq!(cas["shared_account"], json!(false));
+    let ids: Vec<_> = cas["cas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            json!("letsencrypt"),
+            json!("zerossl"),
+            json!("google"),
+            json!("custom")
+        ]
+    );
+
+    // ZeroSSL needs EAB before a certificate can use it.
+    let (st, err) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/certificates",
+        Some(cert("zerossl", "z.example.com")),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"]["code"], json!("eab_required"));
+    let (st, err) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/acme/cas/zerossl/eab",
+        Some(json!({"kid": "kid 1", "hmac": "x;y"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"]["code"], json!("invalid_eab"));
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/acme/cas/letsencrypt/eab",
+        Some(json!({"kid": "k", "hmac": "h"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/acme/cas/zerossl/eab",
+        Some(json!({"kid": "kid_1", "hmac": "aGVsbG8"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, cas) = call(&app, &cookie, Method::GET, "/api/acme/cas", None).await;
+    assert_eq!(cas["cas"][1]["eab_configured"], json!(true));
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/certificates",
+        Some(cert("zerossl", "z.example.com")),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    // The HMAC key is sealed at rest and never comes back through settings.
+    let (_, settings) = call(&app, &cookie, Method::GET, "/api/settings", None).await;
+    assert!(!settings["raw"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .any(|k| k.starts_with("acme_eab:")));
+    let stored = crate::repo::get_setting(&state.db, "acme_eab:zerossl:hmac")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(crate::secretbox::is_sealed(&stored));
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::DELETE,
+        "/api/acme/cas/zerossl/eab",
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT, "in use by the zerossl cert");
+
+    // The custom CA needs its URL first, then can't lose it while in use.
+    let (st, err) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/certificates",
+        Some(cert("custom", "c.example.com")),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"]["code"], json!("custom_ca_unconfigured"));
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/settings",
+        Some(json!({"acme_custom_directory": "https://ca.example/dir;evil"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/settings",
+        Some(json!({
+            "acme_custom_directory": "https://ca.internal.example/acme/directory",
+            "acme_shared_account": "1",
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/certificates",
+        Some(cert("custom", "c.example.com")),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/settings",
+        Some(json!({"acme_custom_directory": ""})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    let (st, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        "/api/settings",
+        Some(json!({"acme_default_ca": "nope"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // Generated config: each CA's directory, EAB on ZeroSSL only, and the one
+    // shared account key on every client — and the linter accepts it.
+    let files = crate::settings::build_fileset(&state).await.unwrap();
+    let acme = &files["10-acme.conf"];
+    let key = state.cfg.angie.acme_account_key.display().to_string();
+    assert!(acme.contains(&format!(
+        "acme_client z_example_com https://acme.zerossl.com/v2/DV90 account_key={key} eab=kid_1:aGVsbG8;"
+    )), "{acme}");
+    assert!(
+        acme.contains(&format!(
+        "acme_client c_example_com https://ca.internal.example/acme/directory account_key={key};"
+    )),
+        "{acme}"
+    );
 }

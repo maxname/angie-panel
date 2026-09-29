@@ -66,6 +66,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   api,
   ApiError,
+  type AcmeChallenge,
   type BalanceMethod,
   type CustomHeader,
   type ForwardScheme,
@@ -108,6 +109,12 @@ interface FormState {
   hsts_subdomains: boolean
   trust_forwarded_proto: boolean
   certificate_id: number | null
+  /** Request a new certificate for the host's domains on save (instead of
+   *  picking an existing one). */
+  new_cert: boolean
+  new_cert_challenge: AcmeChallenge
+  /** DNS-01 only: credential-profile id, or null = Angie answers itself. */
+  new_cert_dns_provider: string | null
   access_list_id: number | null
   locations: LocationDraft[]
   advanced_snippet: string
@@ -235,6 +242,9 @@ function initialState(host: Host | null): FormState {
       hsts_subdomains: false,
       trust_forwarded_proto: false,
       certificate_id: null,
+      new_cert: false,
+      new_cert_challenge: 'http',
+      new_cert_dns_provider: null,
       access_list_id: null,
       locations: [],
       advanced_snippet: '',
@@ -305,6 +315,9 @@ function initialState(host: Host | null): FormState {
     hsts_subdomains: host.hsts_subdomains,
     trust_forwarded_proto: host.trust_forwarded_proto,
     certificate_id: host.certificate_id,
+    new_cert: false,
+    new_cert_challenge: 'http',
+    new_cert_dns_provider: null,
     access_list_id: host.access_list_id,
     locations: host.locations.map((location) => ({
       path: location.path,
@@ -474,6 +487,20 @@ export function HostEditorForm({
     queryFn: () => api.listCertificates(),
   })
   const certificates = certsQuery.data?.certificates ?? []
+  // For "request a new certificate": the CA it will come from (the default)
+  // and the DNS provider profiles DNS-01 can use.
+  const casQuery = useQuery({
+    queryKey: ['acme-cas'],
+    queryFn: () => api.listAcmeCas(),
+  })
+  const defaultCa = casQuery.data?.cas.find(
+    (ca) => ca.id === casQuery.data?.default_ca,
+  )
+  const dnsProfilesQuery = useQuery({
+    queryKey: ['dns-credentials'],
+    queryFn: () => api.listDnsCredentials(),
+  })
+  const dnsProfiles = dnsProfilesQuery.data?.credentials ?? []
 
   // Shares the ['access-lists'] key so lists created on that page appear here.
   const accessListsQuery = useQuery({
@@ -489,6 +516,12 @@ export function HostEditorForm({
 
   const patch = (partial: Partial<FormState>) =>
     setForm((prev) => ({ ...prev, ...partial }))
+
+  // A wildcard domain can only be validated over DNS-01.
+  const hostHasWildcard = form.domains.some((domain) => domain.startsWith('*.'))
+  const newCertChallenge: AcmeChallenge = hostHasWildcard
+    ? 'dns'
+    : form.new_cert_challenge
 
   // Track whether the form diverges from its initial state so the dialog can
   // warn before an accidental close (Escape / overlay / ✕) discards edits.
@@ -518,6 +551,7 @@ export function HostEditorForm({
       host === null ? api.createHost(input) : api.updateHost(host.id, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['hosts'] })
+      void queryClient.invalidateQueries({ queryKey: ['certificates'] })
       toast({
         title: t('hosts.unappliedTitle'),
         description: t('hosts.unappliedBody'),
@@ -628,7 +662,14 @@ export function HostEditorForm({
       hsts: form.hsts,
       hsts_subdomains: form.hsts_subdomains,
       trust_forwarded_proto: form.trust_forwarded_proto,
-      certificate_id: form.certificate_id,
+      certificate_id: form.new_cert ? null : form.certificate_id,
+      new_certificate: form.new_cert
+        ? {
+            challenge: newCertChallenge,
+            dns_provider:
+              newCertChallenge === 'dns' ? form.new_cert_dns_provider : null,
+          }
+        : undefined,
       access_list_id: form.access_list_id,
       locations,
       advanced_snippet:
@@ -942,11 +983,19 @@ export function HostEditorForm({
             </Label>
             <Select
               value={
-                form.certificate_id === null ? 'none' : String(form.certificate_id)
+                form.new_cert
+                  ? 'new'
+                  : form.certificate_id === null
+                    ? 'none'
+                    : String(form.certificate_id)
               }
               onValueChange={(value) =>
                 patch({
-                  certificate_id: value === 'none' ? null : Number.parseInt(value, 10),
+                  new_cert: value === 'new',
+                  certificate_id:
+                    value === 'none' || value === 'new'
+                      ? null
+                      : Number.parseInt(value, 10),
                 })
               }
             >
@@ -956,6 +1005,9 @@ export function HostEditorForm({
               <SelectContent>
                 <SelectItem value="none">
                   {t('hosts.editor.ssl.certificateNone')}
+                </SelectItem>
+                <SelectItem value="new">
+                  {t('hosts.editor.ssl.requestNew')}
                 </SelectItem>
                 {certificates.map((cert) => (
                   <SelectItem key={cert.id} value={String(cert.id)}>
@@ -970,11 +1022,78 @@ export function HostEditorForm({
               </p>
             )}
             <p className="text-sm text-muted-foreground">
-              {form.certificate_id === null
-                ? t('hosts.editor.ssl.selectNote')
-                : t('hosts.editor.ssl.activeNote')}
+              {form.new_cert
+                ? t('hosts.editor.ssl.requestNewNote', {
+                    ca: defaultCa?.label ?? "Let's Encrypt",
+                  })
+                : form.certificate_id === null
+                  ? t('hosts.editor.ssl.selectNote')
+                  : t('hosts.editor.ssl.activeNote')}
             </p>
           </div>
+          {form.new_cert && (
+            <div className="grid gap-4 rounded-lg border p-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="host-new-cert-challenge">
+                  {t('hosts.editor.ssl.challenge')}
+                </Label>
+                <Select
+                  value={newCertChallenge}
+                  disabled={hostHasWildcard}
+                  onValueChange={(value) =>
+                    patch({ new_cert_challenge: value as AcmeChallenge })
+                  }
+                >
+                  <SelectTrigger id="host-new-cert-challenge">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="http">
+                      {t('certificates.wizard.challengeHttp')}
+                    </SelectItem>
+                    <SelectItem value="alpn">
+                      {t('certificates.wizard.challengeAlpn')}
+                    </SelectItem>
+                    <SelectItem value="dns">
+                      {t('certificates.wizard.challengeDns')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {hostHasWildcard && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('certificates.wizard.wildcardNote')}
+                  </p>
+                )}
+              </div>
+              {newCertChallenge === 'dns' && (
+                <div className="space-y-2">
+                  <Label htmlFor="host-new-cert-dns">
+                    {t('certificates.wizard.dnsMethod')}
+                  </Label>
+                  <Select
+                    value={form.new_cert_dns_provider ?? 'self'}
+                    onValueChange={(value) =>
+                      patch({ new_cert_dns_provider: value === 'self' ? null : value })
+                    }
+                  >
+                    <SelectTrigger id="host-new-cert-dns">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="self">
+                        {t('certificates.wizard.dnsMethodSelf')}
+                      </SelectItem>
+                      {dnsProfiles.map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name} — {p.provider_label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+          )}
           <div className="space-y-3 rounded-lg border p-3">
             <ToggleRow
               id="host-force-ssl"

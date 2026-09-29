@@ -588,3 +588,89 @@ describe('host editor rate limiting', () => {
     })
   })
 })
+
+describe('host editor — request a new certificate', () => {
+  it('sends new_certificate instead of certificate_id, forcing DNS-01 for a wildcard', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/dns-credentials') {
+        return Promise.resolve(
+          jsonResponse({
+            credentials: [
+              {
+                id: 3,
+                provider: 'pdns',
+                provider_label: 'PowerDNS',
+                name: 'home',
+                configured: true,
+              },
+            ],
+          }),
+        )
+      }
+      if (input === '/api/acme/cas') {
+        return Promise.resolve(
+          jsonResponse({
+            default_ca: 'zerossl',
+            shared_account: true,
+            account_key_path: '/var/lib/angie/acme/angie-panel-account.key',
+            cas: [
+              {
+                id: 'zerossl',
+                label: 'ZeroSSL',
+                directory: 'https://acme.zerossl.com/v2/DV90',
+                staging: false,
+                eab: 'required',
+                eab_configured: true,
+              },
+            ],
+          }),
+        )
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await user.type(screen.getByLabelText('Domain names'), '*.example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.type(screen.getByLabelText('Forward host'), '10.0.0.5')
+    await user.click(screen.getByRole('tab', { name: 'SSL' }))
+    await user.click(screen.getByRole('combobox', { name: 'Certificate' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Request a new certificate' }),
+    )
+
+    // The note names the default CA; the wildcard pins the challenge to DNS-01.
+    expect(await screen.findByText(/ZeroSSL, the default/)).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Validation method' })).toBeDisabled()
+    await user.click(
+      screen.getByRole('combobox', { name: 'How to answer the DNS challenge' }),
+    )
+    await user.click(await screen.findByRole('option', { name: 'home — PowerDNS' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    expect(body.certificate_id).toBeNull()
+    expect(body.new_certificate).toEqual({ challenge: 'dns', dns_provider: '3' })
+  })
+})

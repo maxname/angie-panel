@@ -329,6 +329,19 @@ export interface HostInput {
   error_pages?: ErrorPages
   proxy_tuning?: ProxyTuning
   enabled?: boolean
+  /** Issue a new certificate for this host's domains in the same request
+   *  (instead of `certificate_id`). Omitted fields fall back to the global
+   *  ACME settings. */
+  new_certificate?: NewCertificateRequest
+}
+
+export interface NewCertificateRequest {
+  challenge?: AcmeChallenge
+  dns_provider?: string | null
+  ca?: string
+  key_type?: AcmeKeyType
+  email?: string | null
+  staging?: boolean
 }
 
 /** Redirection hosts may keep the incoming scheme ("auto") or force one. */
@@ -609,6 +622,8 @@ export interface Cert {
   /** For a DNS-01 cert: provider id that fulfils the challenge (null = Angie
    *  answers DNS itself via NS delegation). */
   dns_provider: string | null
+  /** Issuing CA id (see AcmeCa). */
+  ca: string
   /** Unix timestamp, seconds. */
   created_at: number
   status: AcmeStatus | null
@@ -623,6 +638,27 @@ export interface CertInput {
   email?: string | null
   staging?: boolean
   dns_provider?: string | null
+  ca?: string
+}
+
+/** A certificate authority from the registry, with what is configured for it. */
+export interface AcmeCa {
+  id: string
+  label: string
+  /** Directory URL; for the custom CA, null until one is set. */
+  directory: string | null
+  /** The per-certificate staging flag is only offered where this is true. */
+  staging: boolean
+  eab: 'none' | 'required' | 'optional'
+  eab_configured: boolean
+}
+
+export interface AcmeCasResponse {
+  cas: AcmeCa[]
+  default_ca: string
+  shared_account: boolean
+  /** Where the shared account key lives (set in the panel's root config). */
+  account_key_path: string
 }
 
 export interface DelegationHint {
@@ -1077,6 +1113,15 @@ export const api = {
 
   precheckCertificate: (id: number) =>
     request<CertPrecheck>('POST', `/api/certificates/${id}/precheck`),
+
+  listAcmeCas: () => request<AcmeCasResponse>('GET', '/api/acme/cas'),
+
+  /** Write-only: the HMAC key never comes back, only `eab_configured`. */
+  setAcmeEab: (ca: string, body: { kid: string; hmac: string }) =>
+    request<OkResponse>('PUT', `/api/acme/cas/${ca}/eab`, body),
+
+  deleteAcmeEab: (ca: string) =>
+    request<OkResponse>('DELETE', `/api/acme/cas/${ca}/eab`),
 
   listAccessLists: () =>
     request<{ access_lists: AccessList[] }>('GET', '/api/access-lists'),

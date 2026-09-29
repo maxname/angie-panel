@@ -80,6 +80,7 @@ pub fn lint_policy(cfg: &PanelConfig) -> LintPolicy {
         snippets_dir: cfg.angie.snippets_dir.clone(),
         public_dir: cfg.public_dir(),
         allow_advanced_snippets: cfg.allow_advanced_snippets,
+        acme_account_key: cfg.angie.acme_account_key.clone(),
     }
 }
 
