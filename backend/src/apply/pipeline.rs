@@ -188,7 +188,7 @@ async fn swap_and_reload(
     stream_d: &Path,
     manage_stream: bool,
     snapshot: &Snapshot,
-) -> Result<(), Failure> {
+) -> Result<(), Box<Failure>> {
     // (d) Atomic sync into the live http.d (+ stream.d when managed).
     let synced = sync_into_live(staged_http, http_d).and_then(|_| {
         if manage_stream {
@@ -278,7 +278,8 @@ async fn verify_reload(runner: &dyn Runner, before: Option<u64>) -> bool {
 
 // ------------------------------------------------------------------- rollback
 
-/// Collected failure state to fold into the report.
+/// Collected failure state to fold into the report. Boxed wherever it is an
+/// `Err`: it carries whole stderr/log tails, so it is far larger than `Ok(())`.
 struct Failure {
     result: ApplyResult,
     summary: String,
@@ -296,16 +297,16 @@ async fn rollback(
     summary: String,
     stderr: String,
     file_errors: Vec<FileError>,
-) -> Failure {
+) -> Box<Failure> {
     let rb = do_rollback(ctx, snapshot).await;
-    Failure {
+    Box::new(Failure {
         result,
         summary,
         stderr,
         error_log_tail: String::new(),
         file_errors,
         rollback: rb,
-    }
+    })
 }
 
 async fn rollback_with_log(
@@ -314,16 +315,16 @@ async fn rollback_with_log(
     result: ApplyResult,
     summary: String,
     error_log_tail: String,
-) -> Failure {
+) -> Box<Failure> {
     let rb = do_rollback(ctx, snapshot).await;
-    Failure {
+    Box::new(Failure {
         result,
         summary,
         stderr: String::new(),
         error_log_tail,
         file_errors: Vec::new(),
         rollback: rb,
-    }
+    })
 }
 
 /// Restore the live http.d to `snapshot`, then reload so Angie serves the known
