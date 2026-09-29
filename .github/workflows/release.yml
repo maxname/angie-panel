@@ -67,9 +67,13 @@ jobs:
           name: frontend-dist
           path: frontend/dist
 
+      # dtolnay bootstraps rustup where the image has none (windows-11-arm);
+      # the version actually used is the one pinned in rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install pinned Rust
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
 
       # Zig provides the cross C toolchain for cargo-zigbuild (musl targets).
       # Pinned to a version known to work with cargo-zigbuild; bump deliberately.
@@ -176,9 +180,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # dtolnay bootstraps rustup where the image has none (windows-11-arm);
+      # the version actually used is the one pinned in rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install pinned Rust
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:

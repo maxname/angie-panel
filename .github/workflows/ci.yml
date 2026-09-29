@@ -74,9 +74,9 @@ jobs:
           name: frontend-dist
           path: frontend/dist
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Version and components come from rust-toolchain.toml.
+      - name: Install Rust
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -117,9 +117,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
+      # Version comes from rust-toolchain.toml; the target is this job's own.
+      - name: Install Rust
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-pc-windows-gnu
 
       - uses: Swatinem/rust-cache@v2
         with:
