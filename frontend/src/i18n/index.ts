@@ -3,7 +3,7 @@ import { initReactI18next } from 'react-i18next'
 
 export const LANGUAGE_STORAGE_KEY = 'angie-panel-lang'
 
-export const SUPPORTED_LANGUAGES = ['en', 'ru'] as const
+export const SUPPORTED_LANGUAGES = ['en', 'ru', 'zh'] as const
 export type Language = (typeof SUPPORTED_LANGUAGES)[number]
 
 /**
@@ -17,6 +17,7 @@ export type Language = (typeof SUPPORTED_LANGUAGES)[number]
 export const LANGUAGE_NAMES: Record<Language, string> = {
   en: 'English',
   ru: 'Русский',
+  zh: '中文',
 }
 
 function isSupported(value: string | null | undefined): value is Language {
@@ -47,6 +48,7 @@ export function pickLanguage(
 const catalogues: Record<Language, () => Promise<Record<string, unknown>>> = {
   en: () => import('./en').then((m) => m.en),
   ru: () => import('./ru').then((m) => m.ru),
+  zh: () => import('./zh').then((m) => m.zh),
 }
 
 function storedLanguage(): string | null {
