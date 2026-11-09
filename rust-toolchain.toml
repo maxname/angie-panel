@@ -1,0 +1,7 @@
+# The Rust version CI, releases and local builds use. Pinned so a new stable
+# (and the clippy lints it brings) arrives as a deliberate bump in a commit,
+# not as a red main on an unrelated push. Bump `channel` on purpose.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

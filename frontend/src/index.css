@@ -1,0 +1,231 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+/* Routing Console identity: Space Grotesk (display) + IBM Plex Sans (UI) +
+   IBM Plex Mono (data). Bundled — no CDN, so LAN-offline installs still work. */
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource-variable/ibm-plex-sans";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --shadow-panel: var(--panel-shadow);
+    --inset-shadow-field: var(--field-inset);
+    --background-image-header-sheen: var(--header-sheen);
+    --shadow-control: var(--control-shadow);
+    --font-sans: 'IBM Plex Sans Variable', system-ui, sans-serif;
+    --font-heading: 'Space Grotesk Variable', var(--font-sans);
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* ============================================================================
+   Indigo on warm paper. Every neutral is derived in OKLCH from one anchor —
+   #F9F4F1, the sidebar — by moving lightness alone (L .970, C .0067, H 53°),
+   so the greys are one family rather than a set of separately-chosen hues.
+   Dark keeps the hue and lifts chroma a little, or the warmth disappears into
+   black. Indigo stays the single brand accent: a cool accent on warm paper is
+   the contrast doing the work, not two warm colours fighting.
+   ========================================================================== */
+:root {
+    color-scheme: light;
+    --background: #FDF8F5;
+    --foreground: #28211D;
+    --card: #FFFCF9;
+    --card-foreground: #28211D;
+    --popover: #FFFCF9;
+    --popover-foreground: #28211D;
+    --primary: #6D28D9;
+    --primary-foreground: #FFFFFF;
+    --secondary: #EFEAE7;
+    --secondary-foreground: #3B3430;
+    --muted: #F2EDEA;
+    --muted-foreground: #706762;
+    --accent: #EFEAE7;
+    --accent-foreground: #3B3430;
+    /* Never a solid fill — every use is a tint with this as the text
+       (button, badge, alert), so it's picked for readability on that tint:
+       4.99:1, where #C4413A managed 4.38 and failed AA outright. */
+    --destructive: #B33832;
+    /* Status colours. Like --destructive, each is a single token per theme,
+       used tinted (bg-success/10 text-success) rather than as a solid fill —
+       so a component needs no dark: variant to stay legible. */
+    /* Depth, kept to the minimum that reads as depth. The shadow is slate,
+       not black: pure black over a cool grey goes muddy. */
+    --panel-shadow: 0 1px 2px -1px rgb(40 33 29 / 0.09), 0 2px 6px -2px rgb(40 33 29 / 0.06);
+    --control-shadow: 0 1px 2px 0 rgb(40 33 29 / 0.12);
+    /* A recess has two edges, not one: the rim above casts into it, and the
+       floor bounces light back onto the rim below. Only the top shadow and it
+       reads as a stain rather than a hollow.
+       The bounce is blurred wider than the shadow that caused it (3px vs 2px)
+       — bounced light is diffuse. At 0 blur it was a drawn line, not light.
+       25%, not 90%: at 90% the bottom edge came out at luminance .990 against
+       the card's .977 — brighter than the surface it is supposedly reflecting
+       off, which is why it read as a white stripe. 25% lifts the rim by about
+       as much as the 7% ink above darkens it: a bevel, symmetric. */
+    /* The header shows the paper itself, and paper is already near-white —
+       there is no room to lighten its top, so the light theme makes the bottom
+       sink instead. Dark has the opposite problem and does the opposite. Same
+       result either way: the top edge reads lighter than the bottom.
+       ΔL ~.027, which is over twice the paper-to-sidebar step and still reads
+       as less: that step is a hard edge, and edges are what the eye picks up,
+       not distances. A ramp over 56px needs the extra to register at all — at
+       .012 (the step's worth) it was invisible. Level with dark's .027, so the
+       two themes shade by the same amount. */
+    --header-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0) 40%, rgb(40 33 29 / 0.04));
+    --field-inset: inset 0 1px 2px rgb(40 33 29 / 0.05), inset 0 -2px 3px rgb(255 255 255 / 0.2);
+    /* Light at the top fading out — never a dark wash at the bottom. Dark
+       text on a tint loses contrast as the tint darkens, and the destructive
+       alert has none to spare (3.72:1 as it stands, see --destructive). */
+    --surface-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0.07), rgb(255 255 255 / 0));
+    --success: #065F46;
+    /* H 85°, not the amber 46° it was: at 46 the warning sat 19° from the
+       destructive red and read as "red, but weaker" — ΔE 7.6 between the two
+       texts. This is 14.7, at the same lightness, so the contrast is unchanged
+       (5.78 on its own tint). It also matches dark's #FBBF24, which was
+       already yellow at 84° — the two themes disagreed about what a warning
+       looks like. The tints stay indistinguishable either way: at 10% alpha
+       there isn't enough colour to carry a hue. */
+    --warning: #735600;
+    --info: #1D4ED8;
+    --border: #E3DEDC;
+    --input: #D6D1CE;
+    --ring: #6D28D9;
+    --chart-1: #6D28D9;
+    --chart-2: #2C8C86;
+    --chart-3: #2FA757;
+    --chart-4: #C08A16;
+    --chart-5: #7E726A;
+    --radius: 0.625rem;
+    --sidebar: #F9F4F1;
+    --sidebar-foreground: #28211D;
+    --sidebar-primary: #6D28D9;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #EAE5E2;
+    --sidebar-accent-foreground: #3B3430;
+    --sidebar-border: #E8E3E0;
+    --sidebar-ring: #6D28D9;
+}
+
+.dark {
+    color-scheme: dark;
+    --background: #140F0C;
+    --foreground: #ECE6E3;
+    --card: #221D19;
+    --card-foreground: #ECE6E3;
+    --popover: #292320;
+    --popover-foreground: #ECE6E3;
+    --primary: #7C3AED;
+    --primary-foreground: #FFFFFF;
+    --secondary: #322B27;
+    --secondary-foreground: #ECE6E3;
+    --muted: #2A2420;
+    --muted-foreground: #A59D98;
+    --accent: #322B27;
+    --accent-foreground: #ECE6E3;
+    --destructive: #FA897D;   /* 4.94:1 on its own tint; #E15A50 gave 3.57 */
+    /* A shadow can't separate two dark surfaces, so dark mode does the work
+       with a hairline of light along the top edge — the same trick a physical
+       bevel plays — and leans on a deeper cast below. */
+    --panel-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.40), 0 4px 12px -4px rgb(0 0 0 / 0.30),
+        inset 0 1px 0 rgb(255 255 255 / 0.04);
+    --control-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.07);
+    --header-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0.026), rgb(255 255 255 / 0) 60%);
+    /* 0.028, tuned by the lift it produces rather than by the number: the same
+       alpha of white is worth ~8x more here than on paper — 200-odd channel
+       steps sit between #292420 and white, and 12 between #F7F3F0 and it. So
+       "0.2 light / 0.05 dark" read as dark being quieter and was 8x louder.
+       ΔL .024: .044 (loud) and .012 (invisible) bracket it. */
+    --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.22), inset 0 -2px 3px rgb(255 255 255 / 0.028);
+    /* 4%, not 5%: light text on the destructive tint has the least room
+       (5.16:1), and the extra point would leave the top edge at 4.60 — over
+       the line, but not by enough to spend on a gradient nobody can see. */
+    --surface-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0.04), rgb(255 255 255 / 0));
+    --success: #34D399;
+    --warning: #FBBF24;
+    --info: #93C5FD;
+    --border: #3B3430;
+    --input: #463F3B;
+    --ring: #8B5CF6;
+    --chart-1: #8B5CF6;
+    --chart-2: #57C4B4;
+    --chart-3: #49C46B;
+    --chart-4: #E4B443;
+    --chart-5: #A3958D;
+    --sidebar: #1B1613;
+    --sidebar-foreground: #ECE6E3;
+    --sidebar-primary: #7C3AED;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #322B27;
+    --sidebar-accent-foreground: #ECE6E3;
+    --sidebar-border: #332C28;
+    --sidebar-ring: #8B5CF6;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+/* Respect the user's reduced-motion preference: neutralize transitions and
+   animations (spinners, dialog/toast motion, hover transitions) for people with
+   vestibular sensitivity. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

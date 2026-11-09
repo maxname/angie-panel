@@ -1,0 +1,83 @@
+# /etc/angie-panel.toml — configuration of the angie-panel service.
+#
+# This file is a dpkg conffile: your edits survive package upgrades.
+# It is owned by root and only read by the panel. Settings that affect
+# privileges live here ON PURPOSE — they cannot be changed from the web UI,
+# so a compromised web session cannot escalate through them.
+#
+# Apply changes with:  systemctl restart angie-panel
+
+# IP address the panel binds to.
+# The packaged default is loopback for safety; install.sh replaces it with
+# the LAN address you pick during installation.
+# Do NOT set a WAN-facing address or "0.0.0.0": the recommended way to reach
+# the panel remotely is to publish it through Angie itself (proxy host with
+# a certificate and an IP allowlist).
+bind_addr = "127.0.0.1"
+
+# TCP port of the web UI / API.
+port = 8080
+
+# Data directory: SQLite database, staging configs, backup snapshots,
+# apply reports, setup token. Must stay consistent with the systemd unit
+# (ReadWritePaths=) and the package's postinst. You normally never change it.
+data_dir = "/var/lib/angie-panel"
+
+# Host-header allowlist (protection against DNS rebinding).
+# Empty list = derive the allowed hosts from bind_addr.
+# Add entries if you publish the panel behind a proxy host, e.g.:
+#   allowed_hosts = ["panel.example.lan"]
+allowed_hosts = []
+
+# Allow the "Advanced snippet" fields in the UI.
+# Snippets end up in Angie configuration executed by the root master
+# process, i.e. they are ROOT-EQUIVALENT. That is why this switch lives in
+# this root-owned file and not in the panel's database. Even when enabled,
+# snippets still pass the root helper's directive allowlist.
+allow_advanced_snippets = false
+
+# Allow proxying to loopback / link-local upstreams (127.0.0.0/8, ::1,
+# 169.254/16, fe80::/10). Disabled by default: such targets can expose the
+# panel itself or Angie's status API (an SSRF risk). Enable only if you
+# knowingly proxy to a service on this same machine.
+allow_loopback_upstreams = false
+
+# Add the `Secure` attribute to the session cookie so browsers never send it
+# over plain HTTP. Leave off for the default LAN-over-HTTP access; set to true
+# whenever the panel is reachable over HTTPS (published through Angie, or any
+# TLS front) so the admin session token can't leak over a downgraded request.
+# secure_cookies = true
+
+[angie]
+# Path to the Angie binary (used for `angie -t` and version/module checks).
+bin = "/usr/sbin/angie"
+
+# Directory where the root helper syncs the generated vhost files.
+# Must match the `include` in the packaged angie.conf.
+http_d_dir = "/etc/angie/http.d"
+
+# Base URL of Angie's status API — the panel's read-only monitoring source
+# (host/upstream zones, ACME client states, loaded config files).
+status_api_url = "http://127.0.0.1:8100/status"
+
+# Path to the packaged main config. The panel derives its staging config
+# from it (include rewritten to staging) for pre-flight validation.
+angie_conf = "/etc/angie/angie.conf"
+
+# Directory of read-only shared snippet files (block-exploits.conf,
+# cache-assets.conf) shipped with the package and included by absolute path
+# from generated vhosts. Package-owned, so upgrades refresh them.
+snippets_dir = "/usr/share/angie-panel/snippets"
+
+# Directory for the ACME collector unix sockets (one per certificate).
+# Angie's root master creates the sockets here on reload; the directory is
+# created by /usr/lib/tmpfiles.d/angie-panel.conf. A runtime tmpfs path.
+acme_socket_dir = "/run/angie-panel"
+
+# ACME account key shared by every certificate when "Use one ACME account for
+# all certificates" is switched on in Settings. Angie's root master reads it,
+# or creates it on first load if it is missing. The path lives here, not in
+# the database: the web UI can only choose whether to use it, never where root
+# writes a key. The root helper refuses any other account_key= in generated
+# config.
+# acme_account_key = "/var/lib/angie/acme/angie-panel-account.key"

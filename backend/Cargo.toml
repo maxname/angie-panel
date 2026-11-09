@@ -1,0 +1,147 @@
+# The panel is the workspace root; `apctl` is a member rather than a second
+# [[bin]] here so the CLI links none of the server's dependencies — that is what
+# lets it build for macOS and Windows, where SQLite, systemd and D-Bus have no
+# business being.
+[workspace]
+members = ["apctl"]
+# Without this, a plain `cargo build` here builds only the root package, and
+# apctl comes along as a *library* dependency — its binary is never produced.
+# The .deb asset would then be missing and `cargo test`/`clippy` would skip the
+# CLI's own targets, both silently.
+default-members = [".", "apctl"]
+
+[workspace.package]
+version = "0.2.3"
+
+[package]
+name = "angie-panel"
+version.workspace = true
+edition = "2021"
+description = "Web configurator for the Angie reverse proxy (nginx-proxy-manager analog, native systemd service)"
+license = "MIT"
+authors = ["Angie Panel contributors"]
+
+[dependencies]
+# The CLI, so `angie-panel ctl` and the standalone `apctl` can never drift.
+apctl = { path = "apctl" }
+anyhow = "1"
+argon2 = "0.5"
+askama = "0.16.0"
+async-trait = "0.1"
+axum = "0.8"
+axum-extra = { version = "0.10", features = ["cookie"] }
+bcrypt = "0.15"
+chacha20poly1305 = "0.10"
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.3"
+hex = "0.4"
+hickory-resolver = "0.24"
+idna = "1"
+mime_guess = "2"
+# rustls, not native-tls: the release build is static musl, where linking
+# OpenSSL is a fight. webpki-roots bundles the CA set into the binary so a
+# health check does not depend on the host's ca-certificates being present.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rust-embed = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+similar = "2"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+subtle = "2"
+thiserror = "2"
+time = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "signal", "sync", "time", "net"] }
+toml = "0.8"
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tempfile = "3"
+http-body-util = "0.1"
+
+[profile.release]
+lto = true
+strip = true
+
+# --- cargo-deb (packaging/ carries the referenced assets) ---
+[package.metadata.deb]
+# No Debian revision suffix: the artifact is named angie-panel_<version>_<arch>.deb,
+# which is exactly what install.sh's download URL and the docs assume. With
+# cargo-deb's default the file would be ..._<version>-1_<arch>.deb and the
+# documented one-liner install would 404.
+revision = ""
+maintainer = "Angie Panel contributors"
+depends = "angie (>= 1.11), dbus, polkitd, bash, curl"
+section = "admin"
+priority = "optional"
+conf-files = ["/etc/angie-panel.toml"]
+maintainer-scripts = "../packaging/debian"
+# No `systemd-units` key on purpose. It expects cargo-deb to locate and install
+# the unit files itself; we ship them through `assets` below, so the setting was
+# inert — it generated no enable, no restart-on-upgrade and no stop-on-removal,
+# while reading as though it had. packaging/debian/{postinst,prerm,postrm} do
+# that work explicitly instead.
+assets = [
+    ["target/release/angie-panel", "usr/bin/", "755"],
+    # A real second binary, not a symlink: apctl is its own crate now, and at a
+    # few MB it costs far less than the argv[0] indirection it replaces.
+    ["target/release/apctl", "usr/bin/", "755"],
+    ["../packaging/angie-panel.toml", "etc/angie-panel.toml", "644"],
+    ["../packaging/systemd/angie-panel.service", "lib/systemd/system/", "644"],
+    ["../packaging/systemd/angie-panel-configtest.service", "lib/systemd/system/", "644"],
+    ["../packaging/systemd/angie-panel-apply.service", "lib/systemd/system/", "644"],
+    ["../packaging/systemd/angie-panel-enable-streams.service", "lib/systemd/system/", "644"],
+    ["../packaging/polkit/10-angie-panel.rules", "usr/share/polkit-1/rules.d/", "644"],
+    ["../packaging/snippets/block-exploits.conf", "usr/share/angie-panel/snippets/", "644"],
+    ["../packaging/snippets/cache-assets.conf", "usr/share/angie-panel/snippets/", "644"],
+    # Country -> CIDR dataset for geo blocking. The committed file is a small
+    # dev fixture; release.yml runs scripts/build-geoip-data.sh to replace it
+    # with the full public-domain dataset before cargo-deb packages it.
+    ["data/geoip-countries.csv", "usr/share/angie-panel/geoip-countries.csv", "644"],
+    ["../packaging/tmpfiles/angie-panel.conf", "usr/lib/tmpfiles.d/", "644"],
+    # Man pages for both binaries. Not committed: generated from the clap
+    # definitions by `angie-panel man packaging/man` so they cannot drift from
+    # the actual flags. release.yml runs it with a host-native build, since the
+    # cross-compiled musl binary will not execute on the runner.
+    ["../packaging/man/angie-panel.1", "usr/share/man/man1/", "644"],
+    ["../packaging/man/apctl.1", "usr/share/man/man1/", "644"],
+    # Shell completions, generated the same way and for the same reason. The
+    # paths are the ones bash-completion, zsh and fish look in by default, so
+    # `apctl <tab>` works in a fresh login shell with no dotfile edits.
+    [
+        "../packaging/completions/apctl.bash",
+        "usr/share/bash-completion/completions/apctl",
+        "644",
+    ],
+    [
+        "../packaging/completions/_apctl",
+        "usr/share/zsh/vendor-completions/_apctl",
+        "644",
+    ],
+    [
+        "../packaging/completions/apctl.fish",
+        "usr/share/fish/vendor_completions.d/apctl.fish",
+        "644",
+    ],
+    [
+        "../packaging/completions/angie-panel.bash",
+        "usr/share/bash-completion/completions/angie-panel",
+        "644",
+    ],
+    [
+        "../packaging/completions/_angie-panel",
+        "usr/share/zsh/vendor-completions/_angie-panel",
+        "644",
+    ],
+    # Vendored acme.sh core + the dnsapi plugins used by the DNS-01 provider hook
+    # (GPLv3, redistributed unmodified). Not committed — release.yml runs
+    # scripts/vendor-acme-dnsapi.sh to populate packaging/acme.sh/ before cargo-deb.
+    ["../packaging/acme.sh/acme.sh", "usr/share/angie-panel/acme.sh/acme.sh", "755"],
+    ["../packaging/acme.sh/dnsapi/*.sh", "usr/share/angie-panel/acme.sh/dnsapi/", "644"],
+    ["../packaging/acme.sh/VENDOR.txt", "usr/share/angie-panel/acme.sh/VENDOR.txt", "644"],
+]

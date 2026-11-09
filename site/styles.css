@@ -1,0 +1,166 @@
+/* Design tokens lifted from the panel itself (frontend/src/index.css) so the
+   site reads as the same product rather than a template that happens to link
+   to it. Warm paper derived from #F9F4F1; indigo accent. */
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('fonts/space-grotesk-latin-wght-normal.woff2') format('woff2-variations');
+  font-weight: 300 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('fonts/ibm-plex-sans-latin-wght-normal.woff2') format('woff2-variations');
+  font-weight: 100 700;
+  font-display: swap;
+}
+
+:root {
+  --bg: #fdf8f5;
+  --surface: #fffcf9;
+  --surface-2: #f9f4f1;
+  --fg: #28211d;
+  --fg-muted: #706762;
+  --border: #e3dedc;
+  --accent: #6d28d9;
+  --accent-fg: #ffffff;
+  --success: #065f46;
+  --success-bg: rgb(6 95 70 / 0.1);
+  --shadow: 0 1px 2px -1px rgb(40 33 29 / 0.09), 0 2px 6px -2px rgb(40 33 29 / 0.06);
+  --shadow-lg: 0 4px 12px -4px rgb(40 33 29 / 0.12), 0 12px 32px -12px rgb(40 33 29 / 0.14);
+  --radius: 12px;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --heading: 'Space Grotesk', var(--sans);
+  --mono: ui-monospace, 'SF Mono', 'IBM Plex Mono', Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #140f0c;
+    --surface: #221d19;
+    --surface-2: #1b1613;
+    --fg: #ece6e3;
+    --fg-muted: #a59d98;
+    --border: #3b3430;
+    --accent: #7c3aed;
+    --success: #34d399;
+    --success-bg: rgb(52 211 153 / 0.15);
+    --shadow: 0 1px 2px 0 rgb(0 0 0 / 0.4), 0 4px 12px -4px rgb(0 0 0 / 0.3);
+    --shadow-lg: 0 8px 24px -8px rgb(0 0 0 / 0.5), 0 20px 48px -20px rgb(0 0 0 / 0.4);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { font-family: var(--heading); line-height: 1.15; letter-spacing: -0.02em; margin: 0; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+/* ---------------------------------------------------------------- header */
+header {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.nav { display: flex; align-items: center; gap: 20px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--heading); font-weight: 600; font-size: 17px; color: var(--fg); }
+.brand img { width: 26px; height: 26px; }
+.nav .spacer { margin-left: auto; }
+.nav a:not(.brand) { color: var(--fg-muted); font-size: 15px; }
+.nav a:not(.brand):hover { color: var(--fg); text-decoration: none; }
+
+/* ------------------------------------------------------------------ hero */
+.hero { padding: 72px 0 8px; text-align: center; }
+.hero h1 { font-size: clamp(38px, 6vw, 60px); font-weight: 600; }
+.hero .tagline { font-size: clamp(18px, 2.4vw, 21px); color: var(--fg-muted); max-width: 640px; margin: 18px auto 0; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 22px 0 0; }
+.pill {
+  font-size: 13px; padding: 4px 11px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--fg-muted);
+}
+.pill.ok { background: var(--success-bg); border-color: transparent; color: var(--success); font-weight: 500; }
+
+.cta { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin: 28px 0 0; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 20px; border-radius: 10px; font-weight: 500; font-size: 15px;
+  border: 1px solid transparent; transition: transform .12s ease, box-shadow .12s ease;
+}
+.btn:hover { text-decoration: none; transform: translateY(-1px); }
+.btn-primary { background: var(--accent); color: var(--accent-fg); box-shadow: var(--shadow); }
+.btn-ghost { background: var(--surface); color: var(--fg); border-color: var(--border); }
+
+.shot {
+  margin: 44px auto 0; max-width: 1000px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); overflow: hidden; background: var(--surface);
+}
+.shot img { display: block; width: 100%; height: auto; }
+
+/* -------------------------------------------------------------- sections */
+section { padding: 76px 0; }
+section > .wrap > h2 { font-size: clamp(26px, 3.4vw, 34px); font-weight: 600; }
+.lede { color: var(--fg-muted); max-width: 660px; margin: 14px 0 0; }
+
+.grid { display: grid; gap: 18px; margin-top: 36px; }
+/* Column widths are chosen so the card counts divide evenly at 1080px: the four
+   "why" cards land 2x2, the six feature cards 3x2. Wider minimums would leave a
+   ragged last row. */
+.grid-2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+.grid-3 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow);
+}
+.card h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+.card p { margin: 0; color: var(--fg-muted); font-size: 15px; }
+.card .tag { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); font-weight: 600; }
+
+/* ------------------------------------------------------------------ code */
+.code {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px; font-family: var(--mono); font-size: 14px;
+  overflow-x: auto; white-space: pre; color: var(--fg);
+}
+.code .c { color: var(--fg-muted); }
+
+/* ----------------------------------------------------------- screenshots */
+.shots { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); margin-top: 36px; }
+.shots figure { margin: 0; }
+.shots img {
+  width: 100%; height: auto; display: block;
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+}
+.shots figcaption { font-size: 14px; color: var(--fg-muted); margin-top: 10px; }
+
+/* ---------------------------------------------------------------- footer */
+footer { border-top: 1px solid var(--border); padding: 40px 0 56px; color: var(--fg-muted); font-size: 15px; }
+.footer-row { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; }
+.footer-row .spacer { margin-left: auto; }
+
+.note {
+  border-left: 3px solid var(--accent); background: var(--surface);
+  padding: 14px 18px; border-radius: 0 10px 10px 0; color: var(--fg-muted); font-size: 15px;
+}
+
+@media (max-width: 640px) {
+  section { padding: 56px 0; }
+  .hero { padding: 48px 0 0; }
+  .nav a.hide-sm { display: none; }
+}

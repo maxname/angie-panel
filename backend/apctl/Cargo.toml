@@ -1,0 +1,31 @@
+[package]
+name = "apctl"
+version.workspace = true
+edition = "2021"
+description = "Operator CLI for the Angie panel"
+license = "MIT"
+authors = ["Angie Panel contributors"]
+
+# Deliberately thin. The CLI is an HTTP client: no SQLite, no embedded
+# frontend, no D-Bus, nothing Linux-specific — which is what lets it build for
+# macOS and Windows, and keeps it a few MB instead of the panel's ~15.
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4.6.7"
+clap_mangen = "0.3.0"
+# rustls, not native-tls: no OpenSSL to find on any of the six target triples,
+# and webpki-roots bundles the CA set so a fresh Windows box needs no setup.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "charset",
+    "http2",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+toml = "0.8"
+
+# No [profile.release] here on purpose: Cargo only honours profiles at the
+# workspace root, so the panel's lto/strip settings cover this crate too.

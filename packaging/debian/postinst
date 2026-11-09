@@ -1,0 +1,98 @@
+#!/bin/sh
+# postinst for angie-panel (used by cargo-deb).
+#
+# cargo-deb splices its unit and tmpfiles handling in at the debhelper token
+# near the bottom. Never spell that token out anywhere else in this file,
+# comments included: EVERY occurrence is substituted, so a mention in prose gets
+# the generated block dropped into the middle of the sentence and leaves the
+# tail of it running as a command. That is not hypothetical — this very line
+# used to name the token, and installs ended up executing "token below — ..."
+# and printing `postinst: 13: token: not found`. It only stayed harmless
+# because the stray line landed above the `set -e` below.
+#
+# Service management is done here by hand rather than left to cargo-deb's
+# `systemd-units` setting. That setting expects cargo-deb to find and install the
+# unit files itself; we ship them as plain assets, so it silently did nothing —
+# no enable, no restart on upgrade, no stop on removal. The upgrade case was the
+# damaging one: dpkg replaced the binary while the old process kept running, so
+# `--version` and `systemctl is-active` both looked upgraded while the running
+# code was not, and a pending schema migration never ran. Found on a live box
+# upgrading 0.1.0 -> 0.2.2; containers cannot show it, having no systemd.
+set -e
+
+UNIT=angie-panel.service
+
+case "$1" in
+    configure)
+        # Dedicated unprivileged service account. --group creates a matching
+        # system group; home is the data dir but we create it ourselves below
+        # to control ownership and mode exactly.
+        if ! getent passwd angie-panel >/dev/null; then
+            adduser --system --group \
+                --home /var/lib/angie-panel --no-create-home \
+                --shell /usr/sbin/nologin \
+                --gecos "angie-panel service" \
+                angie-panel
+        fi
+
+        # Data dir is private to the panel (DB, staging, backups, setup
+        # token). install -d also fixes owner/mode on upgrades.
+        install -d -o angie-panel -g angie-panel -m 0700 /var/lib/angie-panel
+        # public/ holds the HTML default-site content served by Angie
+        # workers, hence world-readable.
+        install -d -o angie-panel -g angie-panel -m 0755 /var/lib/angie-panel/public
+
+        # Edge cache directory for the "Cache assets" feature. Owned by the
+        # Angie worker user so the root master can write cache entries; the
+        # keys_zone is declared in the generated 00-panel.conf. Best-effort:
+        # the owner exists only once Angie is installed.
+        if getent passwd angie >/dev/null; then
+            install -d -o angie -g angie -m 0750 /var/cache/angie-panel-assets
+        else
+            install -d -m 0750 /var/cache/angie-panel-assets
+        fi
+
+        # Enable the panel so it survives a reboot. Only the main unit: the
+        # three oneshots are started on demand over D-Bus and must never be
+        # enabled. This runs even without a booted systemd (it only writes
+        # symlinks), so it works in a chroot or an image build.
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper unmask "$UNIT" >/dev/null || true
+            if deb-systemd-helper --quiet was-enabled "$UNIT"; then
+                deb-systemd-helper enable "$UNIT" >/dev/null || true
+            else
+                # Respect an operator who deliberately disabled it.
+                deb-systemd-helper update-state "$UNIT" >/dev/null || true
+            fi
+        fi
+
+        # The rest needs a running systemd.
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+            # $2 is the previously configured version: set on upgrade, empty on
+            # first install. Deliberately no start on a fresh install — the
+            # operator picks the bind address first, and install.sh starts it.
+            if [ -n "$2" ]; then
+                # try-restart, not restart: pick up the new binary if the
+                # service is running, but never start one that was stopped.
+                if [ -x /usr/bin/deb-systemd-invoke ]; then
+                    deb-systemd-invoke try-restart "$UNIT" >/dev/null || true
+                else
+                    systemctl try-restart "$UNIT" >/dev/null || true
+                fi
+            fi
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

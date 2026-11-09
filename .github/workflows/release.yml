@@ -1,0 +1,455 @@
+# Release: on v* tags, build the frontend, cross-compile static musl binaries for
+# arm64 + x86_64 with cargo-zigbuild, package them with cargo-deb, and publish a
+# GitHub release with the .deb files, install.sh and SHA256 checksums.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Keep in sync with the frontend job in ci.yml.
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+
+      # pnpm version is read from the "packageManager" field of frontend/package.json.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+  build-deb:
+    name: Build .deb (${{ matrix.target }})
+    needs: frontend
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v6
+
+      # rust-embed picks up ../frontend/dist at compile time — the release binary
+      # must embed the real frontend build, so this comes before any cargo step.
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      # dtolnay bootstraps rustup where the image has none (windows-11-arm);
+      # the version actually used is the one pinned in rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      # Zig provides the cross C toolchain for cargo-zigbuild (musl targets).
+      # Pinned to a version known to work with cargo-zigbuild; bump deliberately.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: ${{ matrix.target }}
+
+      - name: Install cargo-zigbuild and cargo-deb
+        run: cargo install --locked cargo-zigbuild cargo-deb
+
+      # Replace the committed dev fixture with the full public-domain country
+      # dataset so the .deb ships real geo data. Best-effort: on a download
+      # failure the fixture ships and geo blocking is simply narrow (never broken).
+      - name: Build GeoIP dataset
+        run: ./scripts/build-geoip-data.sh backend/data/geoip-countries.csv || echo "geoip build failed; shipping fixture"
+
+      # Vendor acme.sh core + the supported dnsapi plugins so the .deb ships the
+      # DNS-01 provider hook's runtime. Pinned tag; fails the build if unavailable
+      # (unlike geoip, the provider hook is non-functional without these).
+      - name: Vendor acme.sh dnsapi plugins
+        run: ./scripts/vendor-acme-dnsapi.sh packaging/acme.sh
+
+      # Man pages are rendered from the clap definitions rather than committed,
+      # so they cannot drift from the real flags. This needs a host-native build:
+      # the cross-compiled musl binary below cannot be executed on the runner.
+      # Man pages and completions are rendered from the clap definitions rather
+      # than committed, so they cannot drift from the real flags. Needs a
+      # host-native build: the cross-compiled musl binary below cannot execute
+      # on the runner.
+      - name: Generate man pages and shell completions
+        working-directory: backend
+        run: |
+          mkdir -p ../packaging/completions
+          cargo run --quiet -p angie-panel -- man ../packaging/man
+          cargo run --quiet -p apctl -- man ../packaging/man
+          for shell in bash zsh fish; do
+            cargo run --quiet -p apctl -- completions "$shell" \
+              > "../packaging/completions/apctl.$shell"
+          done
+          cargo run --quiet -p angie-panel -- ctl completions bash \
+            > ../packaging/completions/angie-panel.bash
+          cargo run --quiet -p angie-panel -- ctl completions zsh \
+            > ../packaging/completions/angie-panel.zsh
+          # zsh wants the file named _<command>, not <command>.zsh.
+          mv ../packaging/completions/apctl.zsh ../packaging/completions/_apctl
+          mv ../packaging/completions/angie-panel.zsh ../packaging/completions/_angie-panel
+
+      - name: Build release binary (cargo-zigbuild)
+        working-directory: backend
+        run: cargo zigbuild --release --target ${{ matrix.target }}
+
+      # --no-build: reuse the zigbuild-produced binary from target/<target>/release/
+      #   (a plain `cargo deb` build would use the default linker and fail on cross-musl).
+      # --no-strip: cargo-deb would otherwise invoke the host `strip`, which cannot
+      #   handle aarch64 binaries; strip via the release profile in Cargo.toml instead.
+      - name: Package .deb (cargo-deb)
+        working-directory: backend
+        run: cargo deb --target ${{ matrix.target }} --no-build --no-strip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb-${{ matrix.target }}
+          path: backend/target/${{ matrix.target }}/debian/*.deb
+          if-no-files-found: error
+
+  # Standalone apctl for operators who drive the panel from a workstation.
+  # It is its own crate depending on nothing of the server's, so this job needs
+  # neither the frontend artifact nor any of the .deb machinery — and it builds
+  # for platforms the panel itself never could (the panel is systemd + polkit +
+  # D-Bus by nature).
+  build-cli:
+    name: Build apctl (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    # Job-level so the macOS signing step's `if:` can test whether a certificate
+    # is configured (secrets cannot be referenced directly in `if:`).
+    env:
+      APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+      APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+    strategy:
+      # One unavailable runner or toolchain must not sink the other five.
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: static musl, so one binary per arch runs on any distro.
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, zig: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, zig: true }
+          # macOS runners are arm64; the x86_64 slice is a plain cross-compile.
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: .exe }
+          # Native arm64 Windows runner: cross-compiling this target needs the
+          # ARM64 MSVC C toolchain for `ring`, which the x86_64 image does not
+          # reliably carry.
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, ext: .exe }
+    steps:
+      - uses: actions/checkout@v6
+
+      # dtolnay bootstraps rustup where the image has none (windows-11-arm);
+      # the version actually used is the one pinned in rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: cli-${{ matrix.target }}
+
+      # Zig supplies the cross C toolchain that `ring` needs for musl.
+      - uses: mlugg/setup-zig@v2
+        if: matrix.zig
+        with:
+          version: 0.14.1
+      - name: Install cargo-zigbuild
+        if: matrix.zig
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Build
+        working-directory: backend
+        shell: bash
+        run: |
+          if [ "${{ matrix.zig }}" = "true" ]; then
+            cargo zigbuild -p apctl --release --target ${{ matrix.target }}
+          else
+            cargo build -p apctl --release --target ${{ matrix.target }}
+          fi
+
+      # Sanity check: the thing we are about to publish must at least run and
+      # report the version we tagged. Skipped when cross-compiling, where the
+      # artifact cannot execute on the runner.
+      - name: Smoke-test the binary
+        if: matrix.target != 'x86_64-apple-darwin' && matrix.target != 'aarch64-unknown-linux-musl'
+        working-directory: backend
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/apctl${{ matrix.ext }} --version
+
+      # Sign and notarize the macOS slices, so a browser-downloaded archive does
+      # not hit Gatekeeper. Must run before packaging: notarization is recorded
+      # against the signed binary's cdhash, so the tar.gz has to contain exactly
+      # the file that was submitted.
+      #
+      # No stapling — Apple's notarization ticket can only be attached to a
+      # .app, .pkg or .dmg, never a bare executable. Gatekeeper therefore checks
+      # this one online, which is the accepted trade for keeping every platform
+      # on the same plain archive.
+      #
+      # Skipped when no certificate is configured, so forks and unsigned builds
+      # still produce a release.
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_BASE64 != ''
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/apctl"
+
+          # Throwaway keychain: never touch the runner's default, and take the
+          # secrets off disk again in the cleanup step below.
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          # Let codesign use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+                     | awk '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$identity" ]; then
+            echo "::error::no Developer ID Application identity in the imported certificate"
+            exit 1
+          fi
+
+          # Hardened runtime and a secure timestamp are both required for
+          # notarization to be accepted.
+          codesign --force --timestamp --options runtime \
+                   --sign "$identity" "$bin"
+          codesign --verify --strict --verbose=2 "$bin"
+
+          # notarytool takes an archive, not a Mach-O file. No --keepParent:
+          # for a bare executable that would bury it under the build directory's
+          # name instead of leaving it at the archive root.
+          ditto -c -k "$bin" "$RUNNER_TEMP/apctl.zip"
+          echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/key.p8"
+          result=$(xcrun notarytool submit "$RUNNER_TEMP/apctl.zip" \
+                     --key "$RUNNER_TEMP/key.p8" \
+                     --key-id "$APPLE_API_KEY_ID" \
+                     --issuer "$APPLE_API_ISSUER_ID" \
+                     --team-id "$APPLE_TEAM_ID" \
+                     --wait --output-format json)
+          echo "$result"
+          status=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+          if [ "$status" != "Accepted" ]; then
+            # Fail loudly: shipping a rejected binary would be worse than not
+            # signing at all, since users would be told it is verified.
+            id=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+            xcrun notarytool log "$id" --key "$RUNNER_TEMP/key.p8" \
+              --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            echo "::error::notarization was not accepted (status: $status)"
+            exit 1
+          fi
+
+          # Informational: without a stapled ticket this depends on the runner
+          # reaching Apple, so it must not gate the release on its own.
+          spctl --assess --type exec -vv "$bin" || true
+
+      - name: Remove signing material
+        if: always() && runner.os == 'macOS'
+        run: |
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/key.p8" "$RUNNER_TEMP/apctl.zip"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="apctl-${version}-${{ matrix.target }}"
+          mkdir -p "staging/$name"
+          cp "backend/target/${{ matrix.target }}/release/apctl${{ matrix.ext }}" "staging/$name/"
+          cp LICENSE docs/cli.md "staging/$name/"
+          cd staging
+          if [ -n "${{ matrix.ext }}" ]; then
+            # Windows: zip, so it unpacks with a double-click and no tar.
+            7z a -tzip "../$name.zip" "$name" >/dev/null
+          else
+            tar czf "../$name.tar.gz" "$name"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            apctl-*.tar.gz
+            apctl-*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [build-deb, build-cli]
+    runs-on: ubuntu-latest
+    # Job-level env so the sign step's `if:` can read whether a key is set
+    # (secrets cannot be referenced directly in `if:` conditions).
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+      # Needed for packaging/install.sh.
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "{deb,cli}-*"
+          merge-multiple: true
+          path: dist
+
+      - name: Add install.sh and generate checksums
+        run: |
+          cp packaging/install.sh dist/
+          # Pin the installer to this release's version so the documented
+          # `releases/latest/download/install.sh` flow downloads the matching
+          # .deb (GITHUB_REF_NAME is the tag, e.g. v0.1.0).
+          sed -i "s/__PANEL_VERSION__/${GITHUB_REF_NAME#v}/g" dist/install.sh
+          if grep -q __PANEL_VERSION__ dist/install.sh; then
+            echo "install.sh version substitution failed" >&2
+            exit 1
+          fi
+          cd dist
+          # nullglob: a CLI target whose runner was unavailable must leave the
+          # checksum list short, not insert a literal "apctl-*.zip" entry.
+          shopt -s nullglob
+          sha256sum -- *.deb apctl-*.tar.gz apctl-*.zip install.sh > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # GPG-sign the artifacts (detached ASCII .asc for each .deb, install.sh,
+      # and SHA256SUMS.txt) when a signing key is configured. Gated on the
+      # secret so forks / unconfigured repos still cut an (unsigned) release
+      # instead of failing. Set repo secrets GPG_PRIVATE_KEY (ASCII-armored)
+      # and optionally GPG_PASSPHRASE to enable authenticated releases.
+      - name: GPG-sign artifacts
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          shopt -s nullglob
+          for f in dist/*.deb dist/apctl-*.tar.gz dist/apctl-*.zip \
+                   dist/install.sh dist/SHA256SUMS.txt; do
+            gpg --batch --yes --pinentry-mode loopback \
+                --passphrase "${GPG_PASSPHRASE:-}" \
+                --local-user "$keyid" \
+                --armor --detach-sign --output "$f.asc" "$f"
+          done
+          gpg --armor --export "$keyid" > dist/angie-panel-signing-key.asc
+          ls -l dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  # Update the Homebrew tap so `brew install maxname/tap/apctl` gets this
+  # version. Separate repo, so it needs a token with contents:write there —
+  # HOMEBREW_TAP_TOKEN (a fine-grained PAT). Gated on it like the signing steps:
+  # without the token the release still publishes, the tap just isn't bumped.
+  update-tap:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # The checksums are already computed and signed in the release; read them
+      # back rather than recomputing, so the formula pins exactly what shipped.
+      - name: Fetch release checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt
+
+      - name: Render the formula
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sha() {
+            awk -v f="$1" '$2 == f || $2 == "*" f {print $1; exit}' SHA256SUMS.txt
+          }
+          d_arm=$(sha "apctl-$version-aarch64-apple-darwin.tar.gz")
+          d_x86=$(sha "apctl-$version-x86_64-apple-darwin.tar.gz")
+          l_arm=$(sha "apctl-$version-aarch64-unknown-linux-musl.tar.gz")
+          l_x86=$(sha "apctl-$version-x86_64-unknown-linux-musl.tar.gz")
+          # A missing checksum would render a formula pinned to nothing; refuse.
+          for v in "$d_arm" "$d_x86" "$l_arm" "$l_x86"; do
+            [ -n "$v" ] || { echo "::error::missing an apctl checksum for $version"; exit 1; }
+          done
+          sed -e "s/__VERSION__/$version/g" \
+              -e "s/__SHA_DARWIN_ARM64__/$d_arm/" \
+              -e "s/__SHA_DARWIN_X86__/$d_x86/" \
+              -e "s/__SHA_LINUX_ARM64__/$l_arm/" \
+              -e "s/__SHA_LINUX_X86__/$l_x86/" \
+              packaging/homebrew/apctl.rb.tmpl > apctl.rb
+          test "$(grep -c '__' apctl.rb)" = 0  # every placeholder filled
+
+      - name: Push to the tap
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/maxname/homebrew-tap.git" tap
+          cp apctl.rb tap/Formula/apctl.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/apctl.rb
+          # No-op if the formula is unchanged (e.g. a re-run of the same tag).
+          if git diff --cached --quiet; then
+            echo "formula already current, nothing to push"
+          else
+            git commit -m "apctl $version"
+            git push
+          fi

@@ -1,0 +1,149 @@
+use std::sync::Arc;
+
+use axum::middleware;
+use axum::routing::{get, post};
+use axum::Router;
+
+use crate::state::AppState;
+use crate::{
+    access_lists, acme_hook, apply_api, assets, audit, auth, bans, certs, dashboard, export_import,
+    geo, hosts, other_hosts, security, sni_routers, streams, system, tokens, users,
+};
+
+pub fn router(state: Arc<AppState>) -> Router {
+    let api = Router::new()
+        .route("/auth/state", get(auth::auth_state))
+        // Called by Angie's acme_hook during DNS-01 issuance (token-gated;
+        // exempt from CSRF/role via security::is_acme_hook). GET and POST since
+        // the ACME module's internal subrequest method isn't contractual.
+        .route("/acme/hook", get(acme_hook::hook).post(acme_hook::hook))
+        .route("/dns-providers", get(acme_hook::list_providers))
+        .route(
+            "/dns-credentials",
+            get(acme_hook::list_credentials).post(acme_hook::create_credential),
+        )
+        .route(
+            "/dns-credentials/{id}",
+            axum::routing::put(acme_hook::update_credential).delete(acme_hook::delete_credential),
+        )
+        .route("/auth/setup", post(auth::setup))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/me", get(auth::me))
+        .route("/users", get(users::list).post(users::create))
+        .route("/users/me/password", post(users::change_own_password))
+        .route("/users/{id}", axum::routing::delete(users::delete))
+        .route("/users/{id}/role", axum::routing::put(users::update_role))
+        .route("/tokens", get(tokens::list).post(tokens::create))
+        .route("/tokens/{id}", axum::routing::delete(tokens::delete))
+        .route("/system/status", get(system::get_status))
+        .route(
+            "/system/configtest",
+            get(system::last_configtest).post(system::run_configtest),
+        )
+        .route("/hosts", get(hosts::list).post(hosts::create))
+        .route(
+            "/hosts/{id}",
+            get(hosts::get_one).put(hosts::update).delete(hosts::delete),
+        )
+        .route("/hosts/{id}/health", get(hosts::health))
+        .route("/hosts/{id}/enable", post(hosts::enable))
+        .route("/hosts/{id}/disable", post(hosts::disable))
+        .route("/certificates", get(certs::list).post(certs::create))
+        .route(
+            "/certificates/{id}",
+            get(certs::get_one).put(certs::update).delete(certs::delete),
+        )
+        .route("/certificates/{id}/precheck", post(certs::precheck))
+        .route("/acme/cas", get(certs::list_cas))
+        .route(
+            "/acme/cas/{id}/eab",
+            axum::routing::put(certs::put_eab).delete(certs::delete_eab),
+        )
+        .route(
+            "/access-lists",
+            get(access_lists::list).post(access_lists::create),
+        )
+        .route(
+            "/access-lists/{id}",
+            get(access_lists::get_one)
+                .put(access_lists::update)
+                .delete(access_lists::delete),
+        )
+        .route(
+            "/redirect-hosts",
+            get(other_hosts::list_redirects).post(other_hosts::create_redirect),
+        )
+        .route(
+            "/redirect-hosts/{id}",
+            get(other_hosts::get_redirect)
+                .put(other_hosts::update_redirect)
+                .delete(other_hosts::delete_redirect),
+        )
+        .route(
+            "/redirect-hosts/{id}/enable",
+            post(other_hosts::enable_redirect),
+        )
+        .route(
+            "/redirect-hosts/{id}/disable",
+            post(other_hosts::disable_redirect),
+        )
+        .route(
+            "/dead-hosts",
+            get(other_hosts::list_dead).post(other_hosts::create_dead),
+        )
+        .route(
+            "/dead-hosts/{id}",
+            get(other_hosts::get_dead)
+                .put(other_hosts::update_dead)
+                .delete(other_hosts::delete_dead),
+        )
+        .route("/dead-hosts/{id}/enable", post(other_hosts::enable_dead))
+        .route("/dead-hosts/{id}/disable", post(other_hosts::disable_dead))
+        .route("/streams", get(streams::list).post(streams::create))
+        .route(
+            "/streams/{id}",
+            get(streams::get_one)
+                .put(streams::update)
+                .delete(streams::delete),
+        )
+        .route("/streams/{id}/enable", post(streams::enable))
+        .route("/streams/{id}/disable", post(streams::disable))
+        .route("/streams/enable-context", post(streams::enable_context))
+        .route(
+            "/sni-routers",
+            get(sni_routers::list).post(sni_routers::create),
+        )
+        .route(
+            "/sni-routers/{id}",
+            get(sni_routers::get_one)
+                .put(sni_routers::update)
+                .delete(sni_routers::delete),
+        )
+        .route("/sni-routers/{id}/enable", post(sni_routers::enable))
+        .route("/sni-routers/{id}/disable", post(sni_routers::disable))
+        .route("/bans", get(bans::list).post(bans::create))
+        .route("/bans/{id}", axum::routing::delete(bans::delete))
+        .route("/geo", get(geo::get).put(geo::put))
+        .route("/audit", get(audit::list))
+        .route("/apply/preview", get(apply_api::preview))
+        .route("/apply", post(apply_api::apply_now))
+        .route("/apply/history", get(apply_api::history))
+        .route(
+            "/settings",
+            get(apply_api::get_settings).put(apply_api::put_settings),
+        )
+        .route("/dashboard", get(dashboard::get_dashboard))
+        .route("/export", get(export_import::export))
+        .route("/import", post(export_import::import))
+        .fallback(security::api_not_found);
+
+    Router::new()
+        .nest("/api", api)
+        .fallback(get(assets::static_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security::security_layer,
+        ))
+        .with_state(state)
+}

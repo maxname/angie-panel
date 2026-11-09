@@ -1,0 +1,372 @@
+//! Apply/preview/settings HTTP handlers. The panel builds the fileset from the
+//! DB, previews the diff, and (on apply) stages it and triggers the root helper
+//! unit over D-Bus — mirroring `system::run_configtest`. The helper does the
+//! privileged transaction; the panel reads back `apply-result.json`.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::State;
+use axum::Json;
+use serde_json::{json, Value};
+use tokio::process::Command;
+
+use crate::auth::AuthUser;
+use crate::db::now_epoch;
+use crate::error::{ApiError, ApiResult};
+use crate::state::AppState;
+use crate::{apply, repo, settings, systemd};
+
+pub const APPLY_UNIT: &str = "angie-panel-apply.service";
+
+// ------------------------------------------------------------------ preview
+
+pub async fn preview(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let fileset = settings::build_fileset(&state).await?;
+    let diff = apply::preview(&state.cfg, &fileset).map_err(ApiError::internal)?;
+    let revision = repo::hosts_revision(&state.db).await?;
+    Ok(Json(json!({
+        "db_revision": revision,
+        "diff": serde_json::to_value(&diff).unwrap_or(Value::Null),
+    })))
+}
+
+// -------------------------------------------------------------------- apply
+
+pub async fn apply_now(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let report = perform_apply(&state, ApplyTrigger::Manual).await?;
+    Ok(Json(serde_json::to_value(&report).unwrap_or(Value::Null)))
+}
+
+/// Who initiated an apply — recorded in history so the UI can distinguish a
+/// user click from the reconciler auto-activating HTTPS after issuance.
+#[derive(Clone, Copy)]
+pub enum ApplyTrigger {
+    Manual,
+    /// Auto-apply after a certificate became ready (M3 reconciler). Carries the
+    /// DB revision the reconciler validated as "already live / no pending user
+    /// edits" so `perform_apply` can re-check it under the apply lock and refuse
+    /// to auto-push a user edit that landed in the TOCTOU window.
+    AutoCertReady {
+        expected_revision: i64,
+    },
+}
+
+/// The full apply path shared by the HTTP handler and the background
+/// reconciler: acquire the lock, stage, run the helper, record history, and
+/// (on success) remember the DB revision that is now live.
+pub async fn perform_apply(
+    state: &Arc<AppState>,
+    trigger: ApplyTrigger,
+) -> ApiResult<apply::ApplyReport> {
+    // Serialize applies (PLAN.md §2.2): a second concurrent apply is rejected.
+    let _guard = state.apply_lock.try_lock().map_err(|_| {
+        ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "apply_in_progress",
+            "an apply is already running",
+        )
+    })?;
+
+    let revision = repo::hosts_revision(&state.db).await?;
+
+    // TOCTOU guard: the reconciler checked "no pending user edits" WITHOUT the
+    // lock. Now that we hold it, re-verify the revision hasn't moved — otherwise
+    // a user edit slipped in between that check and here, and auto-applying it
+    // would push un-reviewed changes. The next manual apply will pick them up.
+    if let ApplyTrigger::AutoCertReady { expected_revision } = trigger {
+        if revision != expected_revision {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "revision_changed",
+                "a user edit landed after the reconciler's check; skipping auto-apply",
+            ));
+        }
+    }
+
+    let fileset = settings::build_fileset(state).await?;
+
+    apply::write_staging(&fileset, &state.cfg.data_dir, &state.cfg.angie)
+        .map_err(ApiError::internal)?;
+
+    let started = now_epoch();
+    let report = trigger_helper(state, started).await?;
+
+    // Store the canonical snake_case result token so the UI badge matches (it
+    // compares against "ok"/"validation_failed"/… exactly). Manual vs auto is
+    // logged by the reconciler; it must not corrupt this column's value.
+    let result_label = report.result.as_str();
+    let report_json = serde_json::to_string(&report).unwrap_or_default();
+    repo::record_apply(&state.db, revision, result_label, &report_json).await?;
+
+    // Remember the revision that is now live so the reconciler can tell
+    // "cert became ready" (external) from "user has pending edits" (internal).
+    if report.result.is_ok() {
+        let _ = repo::set_setting(
+            &state.db,
+            settings::KEY_LAST_APPLIED_REVISION,
+            &revision.to_string(),
+        )
+        .await;
+    }
+
+    Ok(report)
+}
+
+/// Start the apply unit via D-Bus (polkit-gated); fall back to a direct helper
+/// spawn in dev. Returns the apply report the helper wrote.
+async fn trigger_helper(state: &Arc<AppState>, started: i64) -> ApiResult<apply::ApplyReport> {
+    match systemd::start_unit(APPLY_UNIT).await {
+        Ok(()) => {
+            *state.polkit_ok.lock().unwrap() = Some(true);
+            wait_for_apply_report(state, started).await
+        }
+        Err(systemd::SystemdError::Denied(detail)) => {
+            *state.polkit_ok.lock().unwrap() = Some(false);
+            Err(ApiError::forbidden(
+                "polkit_denied",
+                format!("polkit refused to start {APPLY_UNIT}: {detail}"),
+            ))
+        }
+        Err(systemd::SystemdError::Unavailable(detail)) => {
+            tracing::debug!(%detail, "systemd unavailable, running apply helper directly");
+            let exe = std::env::current_exe().map_err(ApiError::internal)?;
+            let out = Command::new(exe)
+                .args(["helper", "apply", "--config"])
+                .arg(&state.cfg_path)
+                .env("ANGIE_PANEL_RAN_VIA", "direct")
+                .output()
+                .await
+                .map_err(ApiError::internal)?;
+            if !out.status.success() {
+                return Err(ApiError::internal(format!(
+                    "apply helper failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                )));
+            }
+            apply::read_report(&state.cfg.data_dir)
+                .filter(|r| r.timestamp >= started)
+                .ok_or_else(|| ApiError::internal("helper produced no apply report"))
+        }
+    }
+}
+
+async fn wait_for_apply_report(
+    state: &Arc<AppState>,
+    started: i64,
+) -> ApiResult<apply::ApplyReport> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+    loop {
+        if let Some(r) = apply::read_report(&state.cfg.data_dir) {
+            if r.timestamp >= started {
+                return Ok(r);
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ApiError::internal(
+                "timed out waiting for the apply report (check `journalctl -u angie-panel-apply`)",
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+// ------------------------------------------------------------------ history
+
+pub async fn history(_u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let entries = repo::list_apply_history(&state.db, 50).await?;
+    let arr: Vec<Value> = entries
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "timestamp": e.timestamp,
+                "result": e.result,
+                "report": serde_json::from_str::<Value>(&e.report).unwrap_or(Value::Null),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "history": arr })))
+}
+
+// ----------------------------------------------------------------- settings
+
+/// Is this settings key a secret — never returned by the GET, never exported?
+/// The ACME hook token, every DNS provider credential (`dns_cred:*`), CA EAB
+/// credentials (`acme_eab:*`), and the
+/// legacy reg.ru keys from before the multi-provider registry (redacted so an
+/// upgraded install never leaks stale credentials).
+pub fn is_secret_setting(key: &str) -> bool {
+    key == settings::KEY_ACME_HOOK_TOKEN
+        || crate::dns_providers::is_cred_key(key)
+        || crate::acme_cas::is_eab_key(key)
+        || key == "regru_username"
+        || key == "regru_password"
+}
+
+pub async fn get_settings(
+    _u: AuthUser,
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<Value>> {
+    let mut map = repo::all_settings(&state.db).await?;
+    // Redact secrets (hook token + DNS provider creds). "Configured" state for
+    // providers is surfaced separately via GET /api/dns-providers.
+    map.retain(|k, _| !is_secret_setting(k));
+    let eff = settings::effective_settings(&state).await?;
+    Ok(Json(json!({
+        "raw": map,
+        "effective": {
+            "default_site": format!("{:?}", eff.default_site),
+            "ipv6_enabled": eff.ipv6_enabled,
+            "resolvers": eff.resolvers,
+            "health_interval_secs": map
+                .get(settings::KEY_HEALTH_INTERVAL)
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(crate::health::DEFAULT_INTERVAL_SECS),
+            "health_timeout_secs": map
+                .get(settings::KEY_HEALTH_TIMEOUT)
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(crate::health::DEFAULT_TIMEOUT_SECS),
+            "health_retention_days": map
+                .get(settings::KEY_HEALTH_RETENTION_DAYS)
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(crate::health::DEFAULT_RETENTION_DAYS),
+        }
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SettingsUpdate {
+    #[serde(flatten)]
+    values: std::collections::HashMap<String, String>,
+}
+
+const ALLOWED_SETTING_KEYS: &[&str] = &[
+    settings::KEY_DEFAULT_SITE,
+    settings::KEY_DEFAULT_SITE_REDIRECT,
+    settings::KEY_IPV6_ENABLED,
+    settings::KEY_RESOLVER_OVERRIDE,
+    settings::KEY_ACME_EMAIL,
+    settings::KEY_ACME_DEFAULT_CA,
+    settings::KEY_ACME_SHARED_ACCOUNT,
+    settings::KEY_ACME_CUSTOM_DIRECTORY,
+    settings::KEY_HEALTH_INTERVAL,
+    settings::KEY_HEALTH_TIMEOUT,
+    settings::KEY_HEALTH_RETENTION_DAYS,
+];
+
+pub async fn put_settings(
+    _u: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Json(update): Json<SettingsUpdate>,
+) -> ApiResult<Json<Value>> {
+    for (k, v) in &update.values {
+        if !ALLOWED_SETTING_KEYS.contains(&k.as_str()) {
+            return Err(ApiError::bad_request(
+                "unknown_setting",
+                format!("unknown setting key: {k}"),
+            ));
+        }
+        // Validate a redirect URL so it cannot break the generated directive.
+        if k == settings::KEY_DEFAULT_SITE_REDIRECT && !v.is_empty() {
+            validate_redirect_url(v)?;
+        }
+        // The resolver override is split on space/comma and emitted verbatim into
+        // `resolver <list> valid=300s ipv6=off;` — require each token be an IP so
+        // it can't inject directives or a bogus address into the generated conf.
+        if k == settings::KEY_RESOLVER_OVERRIDE && !v.trim().is_empty() {
+            validate_resolver_override(v)?;
+        }
+        // Health defaults are plain positive integers. Reject 0 and junk here so
+        // the scheduler never has to defend against a "0s interval" busy-loop.
+        if k == settings::KEY_ACME_DEFAULT_CA && crate::acme_cas::get(v).is_none() {
+            return Err(ApiError::bad_request(
+                "invalid_ca",
+                format!("'{v}' is not a supported certificate authority"),
+            ));
+        }
+        if k == settings::KEY_ACME_SHARED_ACCOUNT && !matches!(v.as_str(), "0" | "1") {
+            return Err(ApiError::bad_request(
+                "invalid_setting",
+                "acme_shared_account must be \"0\" or \"1\"",
+            ));
+        }
+        // Emitted verbatim as the acme_client URI. Clearing it is refused while a
+        // certificate still issues from it, or the next apply would fail.
+        if k == settings::KEY_ACME_CUSTOM_DIRECTORY {
+            if v.trim().is_empty() {
+                if repo::list_certs(&state.db)
+                    .await?
+                    .iter()
+                    .any(|c| c.ca == crate::acme_cas::CUSTOM_CA)
+                {
+                    return Err(ApiError::new(
+                        axum::http::StatusCode::CONFLICT,
+                        "in_use",
+                        "a certificate uses the custom ACME server; switch it to another CA first",
+                    ));
+                }
+            } else if !crate::acme_cas::is_valid_directory_url(v.trim()) {
+                return Err(ApiError::bad_request(
+                    "invalid_directory_url",
+                    "the ACME directory URL must be https:// with no spaces, quotes, braces or ';'",
+                ));
+            }
+        }
+        if matches!(
+            k.as_str(),
+            settings::KEY_HEALTH_INTERVAL
+                | settings::KEY_HEALTH_TIMEOUT
+                | settings::KEY_HEALTH_RETENTION_DAYS
+        ) {
+            validate_positive_int(k, v)?;
+        }
+        repo::set_setting(&state.db, k, v).await?;
+    }
+    get_settings(_u, State(state)).await
+}
+
+fn validate_resolver_override(v: &str) -> ApiResult<()> {
+    let mut count = 0;
+    for tok in v.split([' ', ',']).filter(|s| !s.is_empty()) {
+        if tok.parse::<std::net::IpAddr>().is_err() {
+            return Err(ApiError::bad_request(
+                "invalid_resolver",
+                format!(
+                    "resolver override must be space/comma-separated IPs; '{tok}' is not an IP"
+                ),
+            ));
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Err(ApiError::bad_request(
+            "invalid_resolver",
+            "resolver override must list at least one IP",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_positive_int(key: &str, v: &str) -> ApiResult<()> {
+    match v.parse::<u32>() {
+        Ok(n) if n > 0 => Ok(()),
+        _ => Err(ApiError::bad_request(
+            "invalid_setting",
+            format!("{key} must be a positive whole number of seconds/days"),
+        )),
+    }
+}
+
+fn validate_redirect_url(url: &str) -> ApiResult<()> {
+    let ok = (url.starts_with("http://") || url.starts_with("https://"))
+        && url.len() <= 2000
+        && !url.contains(|c: char| c.is_whitespace() || matches!(c, ';' | '{' | '}' | '"' | '\''));
+    if !ok {
+        return Err(ApiError::bad_request(
+            "invalid_redirect_url",
+            "redirect URL must be http(s):// and contain no spaces/quotes/braces",
+        ));
+    }
+    Ok(())
+}

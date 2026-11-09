@@ -1,0 +1,45 @@
+#!/bin/sh
+# prerm for angie-panel (used by cargo-deb).
+# Stopping the units on remove/upgrade is handled by the snippets cargo-deb
+# inserts at the debhelper token near the bottom. Do not spell that token out
+# here, not even in a comment — see postinst for what that costs.
+# Nothing package-specific to do here.
+set -e
+
+case "$1" in
+    remove)
+        # Disable here, in prerm, NOT in postrm: deb-systemd-helper works out
+        # which symlinks to drop by reading the unit's [Install] section, and by
+        # the time postrm runs dpkg has already deleted the unit file — leaving
+        # the .wants symlink dangling. prerm still has the unit on disk.
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper disable angie-panel.service >/dev/null || true
+        fi
+
+        # Stop on removal only. NOT on upgrade: there the service is left
+        # running and postinst try-restarts it into the new binary, so an
+        # upgrade costs one restart instead of a stop-gap of downtime.
+        if [ -d /run/systemd/system ]; then
+            if [ -x /usr/bin/deb-systemd-invoke ]; then
+                deb-systemd-invoke stop angie-panel.service >/dev/null || true
+            else
+                systemctl stop angie-panel.service >/dev/null || true
+            fi
+        fi
+        ;;
+
+    upgrade|deconfigure)
+        ;;
+
+    failed-upgrade)
+        ;;
+
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
