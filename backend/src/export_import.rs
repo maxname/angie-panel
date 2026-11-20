@@ -1,8 +1,8 @@
 //! Config export / import (M4) — the top NPM feature request (backup/export
 //! from the UI, open since 2018). Export dumps the FULL config — every host
 //! type (proxy / redirect / 404 / stream), certificates, access lists, shared
-//! upstream pools, and settings — as one JSON document; import replaces it
-//! transactionally.
+//! upstream pools, templates, and settings — as one JSON document; import
+//! replaces it transactionally.
 //!
 //! SECURITY: imported JSON is UNTRUSTED (it is a config-injection vector — the
 //! security review flagged this explicitly). Every entry is run through the
@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use crate::model::{
     self, AccessListClientInput, AccessListInput, AccessListUserInput, CertificateInput,
     DeadHostInput, Directive, ProxyHostInput, RedirectHostInput, Satisfy, StreamInput,
-    UpstreamPolicy, UpstreamPoolInput,
+    TemplateInput, UpstreamPolicy, UpstreamPoolInput,
 };
 use crate::repo::{self, AclImportRow, AclUserHash};
 use crate::{auth::AuthUser, error::ApiError, error::ApiResult, state::AppState};
@@ -40,6 +40,7 @@ struct Export {
     certificates: Vec<Value>,
     access_lists: Vec<Value>,
     upstream_pools: Vec<Value>,
+    templates: Vec<Value>,
     hosts: Vec<Value>,
     redirect_hosts: Vec<Value>,
     dead_hosts: Vec<Value>,
@@ -67,6 +68,7 @@ pub async fn export(u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResul
     let hosts = repo::list_hosts(&state.db).await?;
     let certs = repo::list_certs(&state.db).await?;
     let upstream_pools = repo::list_upstream_pools(&state.db).await?;
+    let templates = repo::list_templates(&state.db).await?;
     let redirects = repo::list_redirects(&state.db).await?;
     let deads = repo::list_dead(&state.db).await?;
     let streams = repo::list_streams(&state.db).await?;
@@ -108,6 +110,7 @@ pub async fn export(u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResul
         certificates: to_values(&certs),
         access_lists,
         upstream_pools: to_values(&upstream_pools),
+        templates: to_values(&templates),
         hosts: to_values(&hosts),
         redirect_hosts: to_values(&redirects),
         dead_hosts: to_values(&deads),
@@ -132,6 +135,8 @@ pub struct ImportDoc {
     // that references one, so an empty list restores them faithfully.
     #[serde(default)]
     upstream_pools: Vec<Value>,
+    #[serde(default)]
+    templates: Vec<Value>,
     #[serde(default)]
     hosts: Vec<Value>,
     #[serde(default)]
@@ -492,6 +497,48 @@ pub async fn import(
         }
     }
 
+    // --- templates (validated like the CRUD API; ids preserved). A template is
+    // a preset: a reference it holds to a row this document does not contain is
+    // cleared rather than failing the whole restore — what deleting that row
+    // would have done to it. ---
+    let mut templates: Vec<(i64, TemplateInput)> = Vec::new();
+    let mut template_ids = std::collections::HashSet::new();
+    let mut template_names = std::collections::HashSet::new();
+    for (i, v) in doc.templates.iter().enumerate() {
+        let id = extract_id(v).ok_or_else(|| bad_entry("template", i, "missing numeric id"))?;
+        let input: TemplateInput = serde_json::from_value(v.clone())
+            .map_err(|e| bad_entry("template", i, &e.to_string()))?;
+        let mut input =
+            model::validate_template_input(input, state.cfg.allow_advanced_snippets, &policy)?;
+        if !template_ids.insert(id) {
+            return Err(bad_entry("template", i, "duplicate id"));
+        }
+        if !template_names.insert((input.kind, input.name.clone())) {
+            return Err(bad_entry("template", i, "duplicate name"));
+        }
+        let refs = model::template_refs(&input.config);
+        let known = |ids: &std::collections::HashSet<i64>, id: Option<i64>| {
+            id.is_none_or(|id| ids.contains(&id))
+        };
+        if !known(&cert_ids, refs.certificate_id) {
+            model::clear_template_ref(&mut input.config, model::TemplateRef::Certificate);
+        }
+        if !known(&acl_ids, refs.access_list_id) {
+            model::clear_template_ref(&mut input.config, model::TemplateRef::AccessList);
+        }
+        if !known(&pool_ids, refs.upstream_pool_id) {
+            model::clear_template_ref(&mut input.config, model::TemplateRef::UpstreamPool);
+        }
+        let profile_known = refs
+            .dns_provider
+            .as_ref()
+            .is_none_or(|p| p.parse::<i64>().is_ok_and(|n| dns_cred_ids.contains(&n)));
+        if !profile_known {
+            model::clear_template_ref(&mut input.config, model::TemplateRef::DnsCredential);
+        }
+        templates.push((id, input));
+    }
+
     // --- bans (validated like the CRUD API; dedup by address) ---
     let mut bans: Vec<(i64, model::BanInput)> = Vec::new();
     let mut ban_ids = std::collections::HashSet::new();
@@ -564,6 +611,7 @@ pub async fn import(
         &certs,
         &acls,
         &upstream_pools,
+        &templates,
         &hosts,
         &redirects,
         &deads,
@@ -581,6 +629,7 @@ pub async fn import(
             "certificates": certs.len(),
             "access_lists": acls.len(),
             "upstream_pools": upstream_pools.len(),
+            "templates": templates.len(),
             "hosts": hosts.len(),
             "redirect_hosts": redirects.len(),
             "dead_hosts": deads.len(),

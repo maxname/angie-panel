@@ -78,9 +78,13 @@ import {
   type HealthCheck,
   type Host,
   type HostInput,
+  type HostTemplate,
+  type HostTemplateConfig,
+  type NewCertificateRequest,
   type UpstreamPool,
 } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { omit } from '@/lib/utils'
 
 interface LocationDraft {
   path: string
@@ -100,6 +104,9 @@ interface ServerDraft {
 }
 
 interface FormState {
+  /** The template's own name. Only used while editing a template, where it
+   *  takes the place of the domains. */
+  template_name: string
   domains: string[]
   forward_scheme: ForwardScheme
   forward_host: string
@@ -120,6 +127,10 @@ interface FormState {
   new_cert_challenge: AcmeChallenge
   /** DNS-01 only: credential-profile id, or null = Angie answers itself. */
   new_cert_dns_provider: string | null
+  /** Certificate-request options this form has no controls for (CA, key type,
+   *  email, staging). A template made through the API can set them; they ride
+   *  along untouched rather than being dropped by a round trip through here. */
+  new_cert_extra: NewCertificateRequest
   access_list_id: number | null
   locations: LocationDraft[]
   advanced_snippet: string
@@ -237,6 +248,7 @@ function initialState(host: Host | null): FormState {
 
   if (host === null) {
     return {
+      template_name: '',
       domains: [],
       forward_scheme: 'http',
       forward_host: '',
@@ -254,6 +266,7 @@ function initialState(host: Host | null): FormState {
       new_cert: false,
       new_cert_challenge: 'http',
       new_cert_dns_provider: null,
+      new_cert_extra: {},
       access_list_id: null,
       locations: [],
       advanced_snippet: '',
@@ -311,6 +324,7 @@ function initialState(host: Host | null): FormState {
   const up = host.upstream
   const pt = host.proxy_tuning
   return {
+    template_name: '',
     domains: [...host.domains],
     forward_scheme: host.forward_scheme,
     forward_host: host.forward_host,
@@ -330,6 +344,7 @@ function initialState(host: Host | null): FormState {
     new_cert: false,
     new_cert_challenge: 'http',
     new_cert_dns_provider: null,
+    new_cert_extra: {},
     access_list_id: host.access_list_id,
     locations: host.locations.map((location) => ({
       path: location.path,
@@ -397,11 +412,70 @@ function initialState(host: Host | null): FormState {
   }
 }
 
+/** The form a template's settings open as. A template's settings are a
+ *  host's minus its domains, so they map through the same function a host
+ *  does; what a host has no field for — "request a certificate for the new
+ *  host" — is laid on top. */
+function formFromTemplate(config: HostTemplateConfig): FormState {
+  const base = initialState({
+    ...config,
+    id: 0,
+    domains: [],
+    enabled: true,
+    created_at: 0,
+    updated_at: 0,
+  })
+  const request = config.new_certificate
+  if (request === null) {
+    return base
+  }
+  return {
+    ...base,
+    certificate_id: null,
+    new_cert: true,
+    new_cert_challenge: request.challenge ?? 'http',
+    new_cert_dns_provider: request.dns_provider,
+    new_cert_extra: {
+      ...(request.ca !== null && { ca: request.ca }),
+      ...(request.key_type !== null && { key_type: request.key_type }),
+      ...(request.email !== null && { email: request.email }),
+      ...(request.staging && { staging: true }),
+    },
+  }
+}
+
+/** The form a new template opens as when it is made from an existing host:
+ *  that host's settings, without its domains — and without its certificate.
+ *  A certificate belongs to the names it was issued for; carried into a
+ *  template it would be attached to every host made from it, whatever their
+ *  domain. Asking for a certificate per host is the safe reading of "like
+ *  this host", and the SSL section is there to say otherwise (a wildcard). */
+function formFromHost(host: Host): FormState {
+  return {
+    ...initialState(host),
+    domains: [],
+    certificate_id: null,
+    new_cert: host.certificate_id !== null,
+  }
+}
+
+/** Editing a template instead of a host. */
+export interface HostTemplateEdit {
+  /** The template being edited, or null when creating a new one. */
+  template: HostTemplate | null
+  /** For a new template: the host whose settings it starts from. */
+  seed?: Host | null
+}
+
 interface HostEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** The host being edited, or null when creating a new one. */
   host: Host | null
+  /** For a new host: the template whose settings it starts from. */
+  fromTemplate?: HostTemplate | null
+  /** Edit a template rather than a host; `host` is then ignored. */
+  templateEdit?: HostTemplateEdit
 }
 
 /** The editor's sections, in sidebar order. `key` is both the tab value and the
@@ -426,8 +500,11 @@ export function HostEditorDialog({
   open,
   onOpenChange,
   host,
+  fromTemplate = null,
+  templateEdit,
 }: HostEditorDialogProps) {
   const { t } = useTranslation()
+  const titles = editorTitles(host, templateEdit)
   // Fed by the form; guards accidental closes (Escape / overlay / ✕ / Cancel)
   // when there are unsaved edits.
   const dirtyRef = useRef(false)
@@ -451,17 +528,21 @@ export function HostEditorDialog({
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-3xl">
         {/* Accessible title for the dialog; the visible one is in the form. */}
         <DialogHeader className="sr-only">
-          <DialogTitle>
-            {host === null
-              ? t('hosts.editor.createTitle')
-              : t('hosts.editor.editTitle')}
-          </DialogTitle>
-          <DialogDescription>{t('hosts.editor.description')}</DialogDescription>
+          <DialogTitle>{t(titles.title)}</DialogTitle>
+          <DialogDescription>{t(titles.description)}</DialogDescription>
         </DialogHeader>
-        {/* Remount the form whenever the target host changes so state resets. */}
+        {/* Remount the form whenever what it works on changes — another host,
+            another template to start from or to edit — so state resets. */}
         <HostEditorForm
-          key={host?.id ?? 'new'}
+          key={[
+            host?.id ?? 'new',
+            fromTemplate?.id ?? '',
+            templateEdit?.template?.id ?? (templateEdit ? 'new' : ''),
+            templateEdit?.seed?.id ?? '',
+          ].join(':')}
           host={host}
+          fromTemplate={fromTemplate}
+          templateEdit={templateEdit}
           onDirtyChange={handleDirtyChange}
           onCancel={() => guardedClose(false)}
           onDone={() => {
@@ -475,8 +556,30 @@ export function HostEditorDialog({
   )
 }
 
+/** Heading and blurb of the editor, by what it is working on. */
+function editorTitles(
+  host: Host | null,
+  templateEdit: HostTemplateEdit | undefined,
+): { title: string; description: string } {
+  if (templateEdit !== undefined) {
+    return {
+      title:
+        templateEdit.template === null
+          ? 'templates.editor.hostCreateTitle'
+          : 'templates.editor.hostEditTitle',
+      description: 'templates.editor.hostDescription',
+    }
+  }
+  return {
+    title: host === null ? 'hosts.editor.createTitle' : 'hosts.editor.editTitle',
+    description: 'hosts.editor.description',
+  }
+}
+
 interface HostEditorFormProps {
   host: Host | null
+  fromTemplate?: HostTemplate | null
+  templateEdit?: HostTemplateEdit
   onDone: () => void
   /** Called when the "close" action (Cancel) is requested; the parent decides
    *  whether to confirm discarding unsaved changes. */
@@ -487,12 +590,20 @@ interface HostEditorFormProps {
 
 export function HostEditorForm({
   host,
+  fromTemplate = null,
+  templateEdit,
   onDone,
   onCancel,
   onDirtyChange,
 }: HostEditorFormProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  // Editing a template uses this same form: its settings ARE a host's, so
+  // every section applies. What differs is the identity — a name instead of
+  // domains — an optional forward target, and where Save sends it.
+  const isTemplate = templateEdit !== undefined
+  const editedTemplate = templateEdit?.template ?? null
+  const titles = editorTitles(host, templateEdit)
 
   // Kept fresh via the shared ['certificates'] key so newly created certs appear.
   const certsQuery = useQuery({
@@ -540,7 +651,21 @@ export function HostEditorForm({
       : listed
   }, [listedPools, createdPool])
 
-  const [initialForm] = useState(() => initialState(host))
+  const [initialForm] = useState<FormState>(() => {
+    if (templateEdit !== undefined) {
+      if (templateEdit.template !== null) {
+        return {
+          ...formFromTemplate(templateEdit.template.config),
+          template_name: templateEdit.template.name,
+        }
+      }
+      return templateEdit.seed ? formFromHost(templateEdit.seed) : initialState(null)
+    }
+    // A new host can start from a template; an existing one is what it is.
+    return host === null && fromTemplate !== null
+      ? formFromTemplate(fromTemplate.config)
+      : initialState(host)
+  })
   const [form, setForm] = useState<FormState>(initialForm)
   const [formError, setFormError] = useState<string | null>(null)
   const [tab, setTab] = useState('details')
@@ -577,22 +702,42 @@ export function HostEditorForm({
   // definition, and its Save is what tells you which fields are missing.
   // Deliberately not folded into isDirty: that one guards the close warning,
   // and an untouched new host must not ask whether to discard anything.
-  const canSave = isDirty || host === null
+  const creating = isTemplate ? editedTemplate === null : host === null
+  const canSave = isDirty || creating
 
   useEffect(() => {
     onDirtyChange?.(isDirty)
   }, [isDirty, onDirtyChange])
 
   const mutation = useMutation({
-    mutationFn: (input: HostInput) =>
-      host === null ? api.createHost(input) : api.updateHost(host.id, input),
+    mutationFn: (input: HostInput): Promise<unknown> => {
+      if (isTemplate) {
+        // The same payload a host would send, minus what a template does not
+        // carry: the server validates it by the same rules.
+        const body = {
+          kind: 'proxy_host' as const,
+          name: form.template_name.trim(),
+          config: omit(input, 'domains', 'enabled'),
+        }
+        return editedTemplate === null
+          ? api.createTemplate(body)
+          : api.updateTemplate(editedTemplate.id, body)
+      }
+      return host === null ? api.createHost(input) : api.updateHost(host.id, input)
+    },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['hosts'] })
-      void queryClient.invalidateQueries({ queryKey: ['certificates'] })
-      toast({
-        title: t('hosts.unappliedTitle'),
-        description: t('hosts.unappliedBody'),
-      })
+      if (isTemplate) {
+        // Nothing to apply: a template changes no generated config.
+        void queryClient.invalidateQueries({ queryKey: ['templates'] })
+        toast({ title: t('templates.editor.savedToast') })
+      } else {
+        void queryClient.invalidateQueries({ queryKey: ['hosts'] })
+        void queryClient.invalidateQueries({ queryKey: ['certificates'] })
+        toast({
+          title: t('hosts.unappliedTitle'),
+          description: t('hosts.unappliedBody'),
+        })
+      }
       onDone()
     },
   })
@@ -624,7 +769,12 @@ export function HostEditorForm({
       }
     }
 
-    if (form.domains.length === 0) {
+    if (isTemplate) {
+      if (form.template_name.trim() === '') {
+        fail('details', t('templates.editor.noName'), 'host-template-name')
+        return
+      }
+    } else if (form.domains.length === 0) {
       fail('details', t('hosts.editor.noDomains'), 'host-domain-input')
       return
     }
@@ -632,7 +782,8 @@ export function HostEditorForm({
     // carries the servers.
     const port = Number.parseInt(form.forward_port, 10)
     if (!usesPool) {
-      if (form.forward_host.trim() === '') {
+      // A template may leave the host open, to be filled in for each host.
+      if (form.forward_host.trim() === '' && !isTemplate) {
         fail('details', t('hosts.editor.noForwardHost'), 'host-forward-host')
         return
       }
@@ -709,6 +860,7 @@ export function HostEditorForm({
       certificate_id: form.new_cert ? null : form.certificate_id,
       new_certificate: form.new_cert
         ? {
+            ...form.new_cert_extra,
             challenge: newCertChallenge,
             dns_provider:
               newCertChallenge === 'dns' ? form.new_cert_dns_provider : null,
@@ -889,12 +1041,10 @@ export function HostEditorForm({
           <div className="flex h-[70vh] max-h-[560px] min-w-0 flex-1 flex-col">
             <div className="px-6 pt-6 pb-4">
               <h2 className="font-heading text-base leading-none font-medium">
-                {host === null
-                  ? t('hosts.editor.createTitle')
-                  : t('hosts.editor.editTitle')}
+                {t(titles.title)}
               </h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                {t('hosts.editor.description')}
+                {t(titles.description)}
               </p>
             </div>
             {/* The sidebar is gone below md, so the sections need another way
@@ -917,12 +1067,32 @@ export function HostEditorForm({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
         <TabsContent value="details" className="space-y-4">
-          {/* Keeps the id: submitting with no domains focuses it (see fail()). */}
-          <DomainChipsField
-            id="host-domain-input"
-            domains={form.domains}
-            onChange={(domains) => patch({ domains })}
-          />
+          {isTemplate ? (
+            // A template has a name where a host has domains: the domains are
+            // the one thing every host made from it brings itself.
+            <div className="space-y-2">
+              <Label htmlFor="host-template-name">
+                {t('templates.editor.name')}
+              </Label>
+              <Input
+                id="host-template-name"
+                value={form.template_name}
+                autoComplete="off"
+                placeholder={t('templates.editor.hostNamePlaceholder')}
+                onChange={(event) => patch({ template_name: event.target.value })}
+              />
+              <p className="text-sm text-muted-foreground">
+                {t('templates.editor.hostNameHelp')}
+              </p>
+            </div>
+          ) : (
+            // Keeps the id: submitting with no domains focuses it (see fail()).
+            <DomainChipsField
+              id="host-domain-input"
+              domains={form.domains}
+              onChange={(domains) => patch({ domains })}
+            />
+          )}
 
           <div className="grid gap-4 sm:grid-cols-[8rem_1fr_7rem]">
             <div className="space-y-2">
@@ -993,6 +1163,11 @@ export function HostEditorForm({
               </>
             )}
           </div>
+          {isTemplate && !usesPool && (
+            <p className="text-sm text-muted-foreground">
+              {t('templates.editor.targetHelp')}
+            </p>
+          )}
 
           <div className="space-y-3 rounded-lg border p-3">
             <ToggleRow

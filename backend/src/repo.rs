@@ -1100,7 +1100,11 @@ pub async fn delete_cert(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
         .bind(id)
         .execute(db)
         .await?;
-    Ok(rows.rows_affected() > 0)
+    let deleted = rows.rows_affected() > 0;
+    if deleted {
+        clear_template_refs(db, TemplateRef::Certificate, id).await?;
+    }
+    Ok(deleted)
 }
 
 // ------------------------------------------------- DNS credential profiles
@@ -1182,7 +1186,11 @@ pub async fn delete_dns_credential(db: &SqlitePool, id: i64) -> anyhow::Result<b
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(rows.rows_affected() > 0)
+    let deleted = rows.rows_affected() > 0;
+    if deleted {
+        clear_template_refs(db, TemplateRef::DnsCredential, id).await?;
+    }
+    Ok(deleted)
 }
 
 /// Whether any certificate references this credential profile (by its id).
@@ -1204,6 +1212,7 @@ pub async fn import_replace(
     certs: &[(i64, CertificateInput)],
     access_lists: &[AclImportRow],
     upstream_pools: &[(i64, UpstreamPoolInput)],
+    templates: &[(i64, TemplateInput)],
     hosts: &[(i64, ProxyHostInput)],
     redirects: &[(i64, RedirectHostInput)],
     deads: &[(i64, DeadHostInput)],
@@ -1221,6 +1230,7 @@ pub async fn import_replace(
     for table in [
         "proxy_hosts",
         "upstream_pools",
+        "templates",
         "redirect_hosts",
         "dead_hosts",
         "streams",
@@ -1322,6 +1332,21 @@ pub async fn import_replace(
         .bind(p.method.as_str())
         .bind(p.max_fails as i64)
         .bind(p.fail_timeout_secs as i64)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for (id, t) in templates {
+        sqlx::query(
+            "INSERT INTO templates (id, kind, name, config, created_at, updated_at) \
+             VALUES (?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(t.kind.as_str())
+        .bind(&t.name)
+        .bind(t.config.to_string())
         .bind(now)
         .bind(now)
         .execute(&mut *tx)
@@ -1721,7 +1746,11 @@ pub async fn delete_access_list(db: &SqlitePool, id: i64) -> anyhow::Result<bool
         .bind(id)
         .execute(db)
         .await?;
-    Ok(rows.rows_affected() > 0)
+    let deleted = rows.rows_affected() > 0;
+    if deleted {
+        clear_template_refs(db, TemplateRef::AccessList, id).await?;
+    }
+    Ok(deleted)
 }
 
 /// Hosts (id + first domain) referencing this access list.
@@ -1857,7 +1886,11 @@ pub async fn delete_upstream_pool(db: &SqlitePool, id: i64) -> anyhow::Result<bo
         .bind(id)
         .execute(db)
         .await?;
-    Ok(rows.rows_affected() > 0)
+    let deleted = rows.rows_affected() > 0;
+    if deleted {
+        clear_template_refs(db, TemplateRef::UpstreamPool, id).await?;
+    }
+    Ok(deleted)
 }
 
 /// Hosts (id + first domain) that proxy to this pool.
@@ -1871,6 +1904,140 @@ pub async fn hosts_using_upstream_pool(
         .filter(|h| h.upstream_pool_id == Some(pool_id))
         .map(|h| (h.id, h.domains.first().cloned().unwrap_or_default()))
         .collect())
+}
+
+// --------------------------------------------------------------- templates
+
+use crate::model::{
+    clear_template_ref, template_refs, Template, TemplateInput, TemplateKind, TemplateRef,
+};
+
+#[derive(sqlx::FromRow)]
+struct TemplateRow {
+    id: i64,
+    kind: String,
+    name: String,
+    config: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl TemplateRow {
+    fn into_model(self) -> anyhow::Result<Template> {
+        Ok(Template {
+            id: self.id,
+            kind: TemplateKind::from_db(&self.kind)
+                .with_context(|| format!("unknown template kind {:?}", self.kind))?,
+            name: self.name,
+            config: serde_json::from_str(&self.config).context("template config json")?,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+const TEMPLATE_COLUMNS: &str = "id, kind, name, config, created_at, updated_at";
+
+pub async fn list_templates(db: &SqlitePool) -> anyhow::Result<Vec<Template>> {
+    let rows: Vec<TemplateRow> = sqlx::query_as(&format!(
+        "SELECT {TEMPLATE_COLUMNS} FROM templates ORDER BY id"
+    ))
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(TemplateRow::into_model).collect()
+}
+
+pub async fn get_template(db: &SqlitePool, id: i64) -> anyhow::Result<Option<Template>> {
+    let row: Option<TemplateRow> = sqlx::query_as(&format!(
+        "SELECT {TEMPLATE_COLUMNS} FROM templates WHERE id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    row.map(TemplateRow::into_model).transpose()
+}
+
+/// Whether another template of this kind already carries this name (`except`
+/// skips the template being renamed onto itself).
+pub async fn template_name_taken(
+    db: &SqlitePool,
+    kind: TemplateKind,
+    name: &str,
+    except: Option<i64>,
+) -> anyhow::Result<bool> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM templates WHERE kind = ? AND name = ? AND id IS NOT ?",
+    )
+    .bind(kind.as_str())
+    .bind(name)
+    .bind(except)
+    .fetch_one(db)
+    .await?;
+    Ok(n > 0)
+}
+
+pub async fn insert_template(db: &SqlitePool, i: &TemplateInput) -> anyhow::Result<i64> {
+    let now = now_epoch();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO templates (kind, name, config, created_at, updated_at) \
+         VALUES (?,?,?,?,?) RETURNING id",
+    )
+    .bind(i.kind.as_str())
+    .bind(&i.name)
+    .bind(i.config.to_string())
+    .bind(now)
+    .bind(now)
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+/// Update a template's name and settings. Its kind is fixed at creation — the
+/// caller rejects a change — so it is not written here.
+pub async fn update_template(db: &SqlitePool, id: i64, i: &TemplateInput) -> anyhow::Result<bool> {
+    let rows = sqlx::query("UPDATE templates SET name=?, config=?, updated_at=? WHERE id=?")
+        .bind(&i.name)
+        .bind(i.config.to_string())
+        .bind(now_epoch())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+pub async fn delete_template(db: &SqlitePool, id: i64) -> anyhow::Result<bool> {
+    let rows = sqlx::query("DELETE FROM templates WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(rows.rows_affected() > 0)
+}
+
+/// Clear every template's reference to a row that has just been deleted — the
+/// `ON DELETE SET NULL` a foreign key would give, were the reference a column
+/// rather than a field of the settings JSON.
+///
+/// It has to be cleared, not left to fail when the template is used: SQLite
+/// hands a deleted row's id out again, so a reference left behind would one
+/// day point, silently, at whatever certificate or pool came next.
+///
+/// A template is a preset and never blocks the delete; it just loses that one
+/// default (see `model::clear_template_ref`).
+async fn clear_template_refs(db: &SqlitePool, what: TemplateRef, id: i64) -> anyhow::Result<()> {
+    for template in list_templates(db).await? {
+        if !template_refs(&template.config).points_at(what, id) {
+            continue;
+        }
+        let mut config = template.config;
+        clear_template_ref(&mut config, what);
+        sqlx::query("UPDATE templates SET config = ?, updated_at = ? WHERE id = ?")
+            .bind(config.to_string())
+            .bind(now_epoch())
+            .bind(template.id)
+            .execute(db)
+            .await?;
+    }
+    Ok(())
 }
 
 // -------------------------------------------------------------- settings

@@ -14,7 +14,8 @@ use crate::auth::AuthUser;
 use crate::certs;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    self, CertificateInput, Challenge, KeyType, ProxyHost, ProxyHostInput, UpstreamPolicy,
+    self, CertificateInput, Challenge, KeyType, NewCertificate, ProxyHost, ProxyHostInput,
+    UpstreamPolicy,
 };
 use crate::repo::{self, HostKind};
 use crate::settings;
@@ -105,25 +106,6 @@ pub struct HostBody {
     host: ProxyHostInput,
     #[serde(default)]
     new_certificate: Option<NewCertificate>,
-}
-
-/// How to issue the certificate a host asks for. The domains are the host's;
-/// everything omitted falls back to the global ACME settings (default CA,
-/// contact email) or the certificate defaults.
-#[derive(Deserialize)]
-pub struct NewCertificate {
-    #[serde(default)]
-    challenge: Option<Challenge>,
-    #[serde(default)]
-    dns_provider: Option<String>,
-    #[serde(default)]
-    ca: Option<String>,
-    #[serde(default)]
-    key_type: Option<KeyType>,
-    #[serde(default)]
-    email: Option<String>,
-    #[serde(default)]
-    staging: bool,
 }
 
 /// Validate the host, then — when asked — create its certificate and bind it.

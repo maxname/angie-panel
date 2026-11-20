@@ -78,6 +78,31 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Every request answered with the same body — each with a Response of its
+ *  own, since a body can be read only once and the page makes several
+ *  requests (hosts, certificates, pools, templates) in no promised order. */
+function answerAll(body: unknown) {
+  return vi.fn(() => Promise.resolve(jsonResponse(body)))
+}
+
+/** The page's lists answered by address (so an editor opened from the page
+ *  gets well-formed answers too); anything else fails the request. */
+function listsApi(overrides: Record<string, unknown> = {}) {
+  const lists: Record<string, unknown> = {
+    '/api/hosts': { hosts: [sampleHost] },
+    '/api/certificates': { certificates: [] },
+    '/api/access-lists': { access_lists: [] },
+    '/api/upstream-pools': { upstream_pools: [] },
+    '/api/templates': { templates: [] },
+    ...overrides,
+  }
+  return vi.fn((input: string) =>
+    input in lists
+      ? Promise.resolve(jsonResponse(lists[input]))
+      : Promise.reject(new Error(`unexpected fetch ${input}`)),
+  )
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -94,11 +119,9 @@ describe('proxy hosts page', () => {
     // Insertion order from the API is deliberately not alphabetical, so a table
     // that ignored the sort would still show zeta first and pass nothing.
     const rows = ['zeta.example.com', 'alpha.example.com', 'host9.example.com', 'host10.example.com']
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        hosts: rows.map((d, i) => ({ ...sampleHost, id: i + 1, domains: [d] })),
-      }),
-    )
+    const fetchMock = answerAll({
+      hosts: rows.map((d, i) => ({ ...sampleHost, id: i + 1, domains: [d] })),
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     renderPage()
@@ -131,9 +154,7 @@ describe('proxy hosts page', () => {
   })
 
   it('renders the hosts table from a mocked fetch', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ hosts: [sampleHost] }))
+    const fetchMock = answerAll({ hosts: [sampleHost] })
     vi.stubGlobal('fetch', fetchMock)
 
     renderPage()
@@ -233,8 +254,74 @@ describe('proxy hosts page', () => {
     expect(screen.queryByRole('toolbar')).toBeNull()
   })
 
+  it('offers the proxy host templates next to Add, and starts a host from the one picked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      listsApi({
+        '/api/templates': {
+          templates: [
+            {
+              id: 1,
+              kind: 'proxy_host',
+              name: 'Web app',
+              // A host's settings without its domains — here, the sample's.
+              config: { ...sampleHost, forward_host: '10.9.9.9', new_certificate: null },
+            },
+            // Not a kind this page can create: must not be offered.
+            { id: 2, kind: 'stream', name: 'Database', config: {} },
+          ],
+        },
+      }),
+    )
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByText('example.com')
+
+    await user.click(screen.getByRole('button', { name: 'From template' }))
+    expect(await screen.findByRole('menuitem', { name: 'Web app' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Database' })).toBeNull()
+
+    await user.click(screen.getByRole('menuitem', { name: 'Web app' }))
+    // The ordinary "new host" editor — not a template editor — already
+    // carrying the template's settings, with the domains still to add.
+    const dialog = await screen.findByRole('dialog', { name: 'New proxy host' })
+    expect(within(dialog).getByLabelText('Forward host')).toHaveValue('10.9.9.9')
+    expect(within(dialog).getByLabelText('Websockets support')).toBeChecked()
+    expect(within(dialog).getByLabelText('Domain names')).toHaveValue('')
+  })
+
+  it('says where templates come from when there are none', async () => {
+    vi.stubGlobal('fetch', listsApi())
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByText('example.com')
+    await user.click(screen.getByRole('button', { name: 'From template' }))
+
+    expect(await screen.findByText(/No templates yet/)).toBeInTheDocument()
+  })
+
+  it('turns a host into a new template from its menu', async () => {
+    vi.stubGlobal('fetch', listsApi())
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByText('example.com')
+    await user.click(screen.getByRole('button', { name: 'Actions' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Save as template' }))
+
+    // The template editor, seeded from the host: its target, not its domains.
+    const dialog = await screen.findByRole('dialog', {
+      name: 'New proxy host template',
+    })
+    expect(within(dialog).getByLabelText('Forward host')).toHaveValue('10.0.0.5')
+    expect(within(dialog).getByLabelText('Template name')).toHaveValue('')
+    expect(within(dialog).queryByLabelText('Domain names')).toBeNull()
+  })
+
   it('shows an empty state when there are no hosts', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ hosts: [] })))
+    vi.stubGlobal('fetch', answerAll({ hosts: [] }))
 
     renderPage()
 

@@ -120,7 +120,7 @@ DNS-провайдерам минимально необходимые прав�
   via the API, then apply). Caveat: the global `deny` is NOT inherited by hosts that define their
   own IP access rules (access lists) — add the IP to those lists too if needed.
 - The config export is a full backup (every host type, certificates, access lists, upstream
-  pools, settings) and contains secrets — advanced-snippet contents and basic-auth password
+  pools, templates, settings) and contains secrets — advanced-snippet contents and basic-auth password
   hashes — so treat the file as sensitive. On import those hashes are shape-checked as bcrypt
   (they land in an htpasswd file).
   `/var/lib/angie-panel` is 0700, the DB 0600.

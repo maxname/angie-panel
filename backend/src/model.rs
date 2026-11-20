@@ -1067,7 +1067,7 @@ pub fn validate_proxy_tuning(mut p: ProxyTuning) -> Result<ProxyTuning, ApiError
 }
 
 /// Create/update payload; validation normalizes it in place.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyHostInput {
     pub domains: Vec<String>,
     pub forward_scheme: Scheme,
@@ -1427,6 +1427,26 @@ pub fn validate_host_input(
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
     Ok(input)
+}
+
+/// How to issue the certificate a host asks for in the same request that
+/// creates it. The domains are the host's; everything omitted falls back to
+/// the global ACME settings (default CA, contact email) or the certificate
+/// defaults — at the time the certificate is created, not before.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewCertificate {
+    #[serde(default)]
+    pub challenge: Option<Challenge>,
+    #[serde(default)]
+    pub dns_provider: Option<String>,
+    #[serde(default)]
+    pub ca: Option<String>,
+    #[serde(default)]
+    pub key_type: Option<KeyType>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub staging: bool,
 }
 
 // ============================================================ certificates
@@ -2251,7 +2271,7 @@ pub struct Stream {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamInput {
     pub incoming_port: u16,
     pub forward_host: String,
@@ -2467,6 +2487,313 @@ fn validate_sni_hostname(raw: &str) -> Result<String, ApiError> {
         ));
     }
     Ok(s)
+}
+
+// =============================================================== templates
+
+/// What a template is a template of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateKind {
+    ProxyHost,
+    Stream,
+}
+
+impl TemplateKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TemplateKind::ProxyHost => "proxy_host",
+            TemplateKind::Stream => "stream",
+        }
+    }
+
+    pub fn from_db(s: &str) -> Option<Self> {
+        match s {
+            "proxy_host" => Some(TemplateKind::ProxyHost),
+            "stream" => Some(TemplateKind::Stream),
+            _ => None,
+        }
+    }
+}
+
+/// A saved set of settings to start a new proxy host or stream from. A preset,
+/// not a link: what is created from it is an ordinary host/stream, and later
+/// edits to the template do not reach it.
+///
+/// `config` is the create payload of the template's kind, already normalized
+/// by [`validate_template_input`], minus what makes each one unique — a host's
+/// `domains`, a stream's `incoming_port` — and minus `enabled`. A proxy-host
+/// template may also carry `new_certificate`: "request a certificate for the
+/// new host's domains" (see [`NewCertificate`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct Template {
+    pub id: i64,
+    pub kind: TemplateKind,
+    pub name: String,
+    pub config: serde_json::Value,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TemplateInput {
+    pub kind: TemplateKind,
+    pub name: String,
+    #[serde(default)]
+    pub config: serde_json::Value,
+}
+
+/// A proxy-host template's settings: everything a host create request carries.
+#[derive(Deserialize)]
+struct HostTemplateConfig {
+    #[serde(flatten)]
+    host: ProxyHostInput,
+    #[serde(default)]
+    new_certificate: Option<NewCertificate>,
+}
+
+pub const MAX_TEMPLATE_NAME_LEN: usize = 64;
+
+/// Stand-in for what a template leaves open — the domain a host will bring,
+/// and a forward target it may not fix — so that its settings can go through
+/// the very validators a real host or stream goes through. `.invalid` is
+/// reserved (RFC 6761): it never resolves and is never anyone's backend, and
+/// the stand-in is taken out again before anything is stored.
+const TEMPLATE_STAND_IN: &str = "template.invalid";
+
+/// Validate + normalize a template. Its settings are held to exactly the rules
+/// of the thing it creates (same allowlists, same SSRF guard, same snippet
+/// opt-in), so a template can never hold a setting that creating from it would
+/// then refuse — and nothing unvalidated is parked in the database on its way
+/// to a host. That references (certificate, access list, pool, DNS profile)
+/// exist is checked by the caller, which has the database.
+pub fn validate_template_input(
+    mut input: TemplateInput,
+    allow_advanced_snippets: bool,
+    policy: &UpstreamPolicy,
+) -> Result<TemplateInput, ApiError> {
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty() {
+        return Err(bad("invalid_name", "template name must not be empty"));
+    }
+    if input.name.chars().count() > MAX_TEMPLATE_NAME_LEN {
+        return Err(bad("invalid_name", "template name is too long"));
+    }
+    if input.name.chars().any(|c| c.is_control()) {
+        return Err(bad(
+            "invalid_name",
+            "template name must not contain control characters",
+        ));
+    }
+    let serde_json::Value::Object(settings) = input.config else {
+        return Err(bad(
+            "invalid_template",
+            "template settings must be an object",
+        ));
+    };
+    input.config = match input.kind {
+        TemplateKind::ProxyHost => host_template(settings, allow_advanced_snippets, policy)?,
+        TemplateKind::Stream => stream_template(settings, policy)?,
+    };
+    Ok(input)
+}
+
+type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+/// Whether the settings leave the forward target open, and the port they give
+/// for it (0 = none). A blank host is the one thing a template may hold that
+/// a real host/stream may not.
+fn template_target(settings: &JsonObject) -> (bool, u64) {
+    let blank = settings
+        .get("forward_host")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|h| h.trim().is_empty());
+    let port = settings
+        .get("forward_port")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    (blank, port)
+}
+
+fn invalid_template(what: &str, err: impl std::fmt::Display) -> ApiError {
+    bad(
+        "invalid_template",
+        format!("invalid {what} settings: {err}"),
+    )
+}
+
+fn host_template(
+    mut settings: JsonObject,
+    allow_advanced_snippets: bool,
+    policy: &UpstreamPolicy,
+) -> Result<serde_json::Value, ApiError> {
+    use serde_json::json;
+
+    let on_pool = settings
+        .get("upstream_pool_id")
+        .is_some_and(|v| !v.is_null());
+    let (blank_host, port) = template_target(&settings);
+    let open_target = blank_host && !on_pool;
+
+    // Not a template's to carry: the host brings its own domains, and is
+    // created enabled.
+    settings.remove("enabled");
+    settings.insert("domains".into(), json!([TEMPLATE_STAND_IN]));
+    if open_target {
+        settings.insert("forward_host".into(), json!(TEMPLATE_STAND_IN));
+        if port == 0 {
+            settings.insert("forward_port".into(), json!(80));
+        }
+    }
+
+    let parsed: HostTemplateConfig =
+        serde_json::from_value(settings.into()).map_err(|e| invalid_template("proxy host", e))?;
+    let mut host = validate_host_input(parsed.host, allow_advanced_snippets, policy)?;
+    let new_certificate = parsed
+        .new_certificate
+        .map(validate_new_certificate)
+        .transpose()?;
+    if host.certificate_id.is_some() && new_certificate.is_some() {
+        return Err(bad(
+            "conflicting_certificate",
+            "pick an existing certificate or request a new one, not both",
+        ));
+    }
+
+    // The stand-ins come back out; the port the template gave (if any) stays.
+    if open_target {
+        host.forward_host.clear();
+        host.forward_port = port as u16;
+    }
+    let mut out = match serde_json::to_value(&host) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => return Err(ApiError::internal("serializing a host template")),
+    };
+    out.remove("domains");
+    out.remove("enabled");
+    out.insert("new_certificate".into(), json!(new_certificate));
+    Ok(out.into())
+}
+
+/// A template's "request a certificate" settings, through the certificate
+/// validator — with stand-ins for the name and the domains, which only exist
+/// once a host is created. What was left to the defaults stays left to them:
+/// the default CA is the one in force when the certificate is requested.
+fn validate_new_certificate(mut req: NewCertificate) -> Result<NewCertificate, ApiError> {
+    let checked = validate_cert_input(CertificateInput {
+        name: "template".into(),
+        domains: vec![TEMPLATE_STAND_IN.into()],
+        challenge: req.challenge.unwrap_or(Challenge::Http),
+        key_type: req.key_type.unwrap_or(KeyType::Ecdsa),
+        email: req.email.take(),
+        staging: req.staging,
+        dns_provider: req.dns_provider.take(),
+        ca: req.ca.clone().unwrap_or_else(default_ca),
+    })?;
+    req.email = checked.email;
+    req.dns_provider = checked.dns_provider;
+    Ok(req)
+}
+
+fn stream_template(
+    mut settings: JsonObject,
+    policy: &UpstreamPolicy,
+) -> Result<serde_json::Value, ApiError> {
+    use serde_json::json;
+
+    let (open_target, port) = template_target(&settings);
+
+    // Not a template's to carry: each stream has its own incoming port.
+    settings.remove("enabled");
+    settings.insert("incoming_port".into(), json!(1));
+    if open_target {
+        settings.insert("forward_host".into(), json!(TEMPLATE_STAND_IN));
+        if port == 0 {
+            settings.insert("forward_port".into(), json!(1));
+        }
+    }
+
+    let parsed: StreamInput =
+        serde_json::from_value(settings.into()).map_err(|e| invalid_template("stream", e))?;
+    let mut stream = validate_stream_input(parsed, policy)?;
+
+    if open_target {
+        stream.forward_host.clear();
+        stream.forward_port = port as u16;
+    }
+    let mut out = match serde_json::to_value(&stream) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => return Err(ApiError::internal("serializing a stream template")),
+    };
+    out.remove("incoming_port");
+    out.remove("enabled");
+    Ok(out.into())
+}
+
+/// The other rows a template's settings point at — for the caller to check
+/// they exist, and for a delete to find the templates that pointed at it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TemplateRefs {
+    pub certificate_id: Option<i64>,
+    pub access_list_id: Option<i64>,
+    pub upstream_pool_id: Option<i64>,
+    /// DNS credential profile of a `new_certificate` request (a profile is
+    /// referenced by its id, as a string).
+    pub dns_provider: Option<String>,
+}
+
+/// One of the references in [`TemplateRefs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateRef {
+    Certificate,
+    AccessList,
+    UpstreamPool,
+    DnsCredential,
+}
+
+impl TemplateRefs {
+    /// Whether this reference points at the row with `id`.
+    pub fn points_at(&self, what: TemplateRef, id: i64) -> bool {
+        match what {
+            TemplateRef::Certificate => self.certificate_id == Some(id),
+            TemplateRef::AccessList => self.access_list_id == Some(id),
+            TemplateRef::UpstreamPool => self.upstream_pool_id == Some(id),
+            TemplateRef::DnsCredential => {
+                self.dns_provider.as_deref() == Some(id.to_string().as_str())
+            }
+        }
+    }
+}
+
+/// Clear one reference in a template's settings: the template keeps
+/// everything else and just loses that default. For a DNS profile that means
+/// its certificate request falls back to Angie answering the challenge itself.
+pub fn clear_template_ref(config: &mut serde_json::Value, what: TemplateRef) {
+    let slot = match what {
+        TemplateRef::Certificate => config.get_mut("certificate_id"),
+        TemplateRef::AccessList => config.get_mut("access_list_id"),
+        TemplateRef::UpstreamPool => config.get_mut("upstream_pool_id"),
+        TemplateRef::DnsCredential => config
+            .get_mut("new_certificate")
+            .and_then(|nc| nc.get_mut("dns_provider")),
+    };
+    if let Some(slot) = slot {
+        *slot = serde_json::Value::Null;
+    }
+}
+
+pub fn template_refs(config: &serde_json::Value) -> TemplateRefs {
+    let id = |key: &str| config.get(key).and_then(serde_json::Value::as_i64);
+    TemplateRefs {
+        certificate_id: id("certificate_id"),
+        access_list_id: id("access_list_id"),
+        upstream_pool_id: id("upstream_pool_id"),
+        dns_provider: config
+            .get("new_certificate")
+            .and_then(|nc| nc.get("dns_provider"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    }
 }
 
 #[cfg(test)]
@@ -3451,6 +3778,266 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "invalid_forward_port");
+    }
+
+    fn template(kind: TemplateKind, config: serde_json::Value) -> TemplateInput {
+        TemplateInput {
+            kind,
+            name: "t".into(),
+            config,
+        }
+    }
+
+    fn host_tpl(config: serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        validate_template_input(template(TemplateKind::ProxyHost, config), true, &policy())
+            .map(|t| t.config)
+    }
+
+    fn stream_tpl(config: serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        validate_template_input(template(TemplateKind::Stream, config), true, &policy())
+            .map(|t| t.config)
+    }
+
+    #[test]
+    fn host_template_holds_settings_but_not_what_makes_a_host_unique() {
+        use serde_json::json;
+
+        // The least a template can say: a scheme. No domains (the host brings
+        // them), no target (asked for when creating).
+        let bare = host_tpl(json!({ "forward_scheme": "http" })).unwrap();
+        assert_eq!(bare["forward_host"], json!(""));
+        assert_eq!(bare["forward_port"], json!(0));
+        assert_eq!(bare["new_certificate"], json!(null));
+        // Normalized to the full shape, so a reader never has to guess a default…
+        assert_eq!(bare["http2"], json!(true));
+        assert_eq!(bare["rate_limit"]["enabled"], json!(false));
+        // …and never the stand-ins the validation ran with, nor the fields a
+        // template has no business carrying.
+        assert!(bare.get("domains").is_none());
+        assert!(bare.get("enabled").is_none());
+        assert!(!bare.to_string().contains("template.invalid"), "{bare}");
+
+        // A port without a host is a default worth keeping ("always :8080").
+        let port_only = host_tpl(json!({ "forward_scheme": "http", "forward_port": 8080 }));
+        assert_eq!(port_only.unwrap()["forward_port"], json!(8080));
+
+        // A full target is normalized like a host's.
+        let full = host_tpl(json!({
+            "forward_scheme": "https", "forward_host": "APP.internal", "forward_port": 8443,
+            "websockets_upgrade": true,
+            "custom_headers": [{ "name": "X-Real-IP", "value": "$remote_addr", "direction": "request" }],
+            // Whatever a client sends for these is not the template's to keep.
+            "domains": ["sneaky.example.com"], "enabled": false,
+        }))
+        .unwrap();
+        assert_eq!(full["forward_host"], json!("app.internal"));
+        assert_eq!(full["websockets_upgrade"], json!(true));
+        assert_eq!(full["custom_headers"][0]["value"], json!("$remote_addr"));
+        assert!(full.get("domains").is_none() && full.get("enabled").is_none());
+
+        // On a shared pool the template has no target of its own, like a host.
+        let pooled = host_tpl(json!({
+            "forward_scheme": "http", "forward_host": "10.0.0.5", "forward_port": 80,
+            "upstream_pool_id": 3,
+        }))
+        .unwrap();
+        assert_eq!(pooled["upstream_pool_id"], json!(3));
+        assert_eq!(pooled["forward_host"], json!(""));
+    }
+
+    #[test]
+    fn host_template_is_held_to_the_rules_of_a_host() {
+        use serde_json::json;
+
+        // A template is on its way to becoming a host: nothing a host would be
+        // refused may be parked in one. Injection, the SSRF guard…
+        assert!(host_tpl(json!({
+            "forward_scheme": "http",
+            "forward_host": "1.2.3.4; } location /x { root /; ", "forward_port": 80,
+        }))
+        .is_err());
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "forward_host": "127.0.0.1", "forward_port": 8100,
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "forbidden_forward_host");
+        // …a host that is given needs its port…
+        let err =
+            host_tpl(json!({ "forward_scheme": "http", "forward_host": "10.0.0.5" })).unwrap_err();
+        assert_eq!(err.code, "invalid_forward_port");
+        // …nested settings are validated too…
+        let err = host_tpl(json!({
+            "forward_scheme": "http",
+            "custom_headers": [{ "name": "X-Evil", "value": "a\"; evil", "direction": "request" }],
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_header");
+        // …and the snippet opt-in applies.
+        let snippet = json!({ "forward_scheme": "http", "advanced_snippet": "gzip on;" });
+        assert!(host_tpl(snippet.clone()).is_ok());
+        let err =
+            validate_template_input(template(TemplateKind::ProxyHost, snippet), false, &policy())
+                .unwrap_err();
+        assert_eq!(err.code, "snippets_disabled");
+
+        // Settings must at least parse as a host's.
+        for junk in [json!("nope"), json!([1, 2]), json!(null)] {
+            assert_eq!(host_tpl(junk).unwrap_err().code, "invalid_template");
+        }
+        let err = host_tpl(json!({ "forward_scheme": "gopher" })).unwrap_err();
+        assert_eq!(err.code, "invalid_template");
+        let err = host_tpl(json!({ "forward_scheme": "http", "forward_port": 70000 })).unwrap_err();
+        assert_eq!(err.code, "invalid_template");
+    }
+
+    #[test]
+    fn host_template_can_ask_for_a_certificate_per_host() {
+        use serde_json::json;
+
+        // "Request a certificate for the new host's domains" — the setting that
+        // makes creating from a template one field long.
+        let tpl = host_tpl(json!({
+            "forward_scheme": "http",
+            "new_certificate": { "challenge": "dns", "dns_provider": "3", "email": " Ops@Example.com " },
+        }))
+        .unwrap();
+        assert_eq!(tpl["new_certificate"]["challenge"], json!("dns"));
+        assert_eq!(tpl["new_certificate"]["dns_provider"], json!("3"));
+        assert_eq!(tpl["new_certificate"]["email"], json!("ops@example.com"));
+        // Left to the default stays left to the default: the CA in force when
+        // the certificate is requested, not the one in force today.
+        assert_eq!(tpl["new_certificate"]["ca"], json!(null));
+
+        // A DNS profile means nothing outside DNS-01 and is dropped, as for a
+        // certificate.
+        let tpl = host_tpl(json!({
+            "forward_scheme": "http",
+            "new_certificate": { "challenge": "http", "dns_provider": "3" },
+        }))
+        .unwrap();
+        assert_eq!(tpl["new_certificate"]["dns_provider"], json!(null));
+
+        // The request is validated like a certificate…
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "new_certificate": { "ca": "not-a-ca" },
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_ca");
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "new_certificate": { "email": "a;b@c" },
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_email");
+        // …and is an alternative to naming an existing one, not an addition.
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "certificate_id": 5, "new_certificate": {},
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "conflicting_certificate");
+    }
+
+    #[test]
+    fn stream_template_validation() {
+        use serde_json::json;
+
+        // Nothing but the defaults: plain TCP, target asked for when creating.
+        let bare = stream_tpl(json!({})).unwrap();
+        assert_eq!(bare["tcp"], json!(true));
+        assert_eq!(bare["udp"], json!(false));
+        assert_eq!(bare["tls"], json!("none"));
+        assert_eq!(bare["forward_host"], json!(""));
+        assert_eq!(bare["forward_port"], json!(0));
+        // Each stream has its own incoming port: not a template's to carry.
+        assert!(bare.get("incoming_port").is_none());
+        assert!(bare.get("enabled").is_none());
+        assert!(!bare.to_string().contains("template.invalid"), "{bare}");
+
+        let full = stream_tpl(json!({
+            "incoming_port": 5432, "forward_host": "DB.internal", "forward_port": 5432,
+            "tls": "terminate", "certificate_id": 7,
+        }))
+        .unwrap();
+        assert_eq!(full["forward_host"], json!("db.internal"));
+        assert_eq!(full["certificate_id"], json!(7));
+        assert!(full.get("incoming_port").is_none());
+
+        // The rules of a stream apply: a protocol, TLS needs a certificate and
+        // TCP alone, the SSRF guard, a port for a host that is given.
+        assert_eq!(
+            stream_tpl(json!({ "tcp": false, "udp": false }))
+                .unwrap_err()
+                .code,
+            "no_protocol"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "tls": "terminate" })).unwrap_err().code,
+            "cert_required"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "tls": "terminate", "certificate_id": 1, "udp": true }))
+                .unwrap_err()
+                .code,
+            "tls_tcp_only"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "forward_host": "127.0.0.1", "forward_port": 22 }))
+                .unwrap_err()
+                .code,
+            "forbidden_forward_host"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "forward_host": "10.0.0.5" }))
+                .unwrap_err()
+                .code,
+            "invalid_template"
+        );
+    }
+
+    #[test]
+    fn template_name_and_references() {
+        use serde_json::json;
+
+        let named = |name: &str| {
+            validate_template_input(
+                TemplateInput {
+                    kind: TemplateKind::Stream,
+                    name: name.into(),
+                    config: json!({}),
+                },
+                false,
+                &policy(),
+            )
+        };
+        assert_eq!(named("  Web apps  ").unwrap().name, "Web apps");
+        for bad_name in ["", "   ", "a\nb", &"x".repeat(MAX_TEMPLATE_NAME_LEN + 1)] {
+            assert_eq!(named(bad_name).unwrap_err().code, "invalid_name");
+        }
+
+        // What a template points at, and clearing one such pointer without
+        // disturbing the rest.
+        let mut config = host_tpl(json!({
+            "forward_scheme": "http", "access_list_id": 2, "upstream_pool_id": 3,
+            "new_certificate": { "challenge": "dns", "dns_provider": "4" },
+        }))
+        .unwrap();
+        let refs = template_refs(&config);
+        assert_eq!(refs.access_list_id, Some(2));
+        assert_eq!(refs.upstream_pool_id, Some(3));
+        assert_eq!(refs.dns_provider.as_deref(), Some("4"));
+        assert_eq!(refs.certificate_id, None);
+        assert!(refs.points_at(TemplateRef::UpstreamPool, 3));
+        assert!(!refs.points_at(TemplateRef::UpstreamPool, 4));
+        assert!(refs.points_at(TemplateRef::DnsCredential, 4));
+        assert!(!refs.points_at(TemplateRef::Certificate, 3));
+
+        clear_template_ref(&mut config, TemplateRef::UpstreamPool);
+        clear_template_ref(&mut config, TemplateRef::DnsCredential);
+        let refs = template_refs(&config);
+        assert_eq!(refs.upstream_pool_id, None);
+        assert_eq!(refs.dns_provider, None);
+        assert_eq!(refs.access_list_id, Some(2));
+        // The certificate request itself survives losing its DNS profile.
+        assert_eq!(config["new_certificate"]["challenge"], json!("dns"));
     }
 
     #[test]

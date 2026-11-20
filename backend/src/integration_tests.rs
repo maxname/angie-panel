@@ -3075,3 +3075,393 @@ async fn hosts_revision_tracks_upstream_pool_edits() {
         .await
         .is_err());
 }
+
+/// Templates end to end: what the API accepts and stores, that the stored
+/// settings really are a host's create payload, and what happens to a template
+/// when something it points at is deleted.
+#[tokio::test]
+async fn template_crud_and_reference_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    // Things for a template to point at.
+    let (_, cert) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/certificates",
+        Some(json!({ "domains": ["*.example.com"], "challenge": "dns" })),
+    )
+    .await;
+    let cert_id = cert["id"].as_i64().unwrap();
+    let (_, acl) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/access-lists",
+        Some(json!({ "name": "office", "clients": [{ "directive": "allow", "address": "10.0.0.0/8" }], "users": [] })),
+    )
+    .await;
+    let acl_id = acl["id"].as_i64().unwrap();
+    let (_, pool) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({ "name": "apps", "servers": [{ "host": "10.0.0.2", "port": 8080 }] })),
+    )
+    .await;
+    let pool_id = pool["id"].as_i64().unwrap();
+    let (_, profile) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/dns-credentials",
+        Some(json!({ "provider": "cloudflare", "name": "cf", "credentials": { "CF_Token": "t" } })),
+    )
+    .await;
+    let profile_id = profile["id"].as_i64().unwrap();
+
+    // Settings are validated like a host's: no injection through a template.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({
+            "kind": "proxy_host", "name": "evil",
+            "config": { "forward_scheme": "http", "forward_host": "1.2.3.4; }", "forward_port": 80 }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // A reference must point at something that exists.
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({
+            "kind": "proxy_host", "name": "dangling",
+            "config": { "forward_scheme": "http", "certificate_id": 999 }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({
+            "kind": "proxy_host", "name": "dangling",
+            "config": { "forward_scheme": "http",
+                        "new_certificate": { "challenge": "dns", "dns_provider": "999" } }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("invalid_dns_provider"));
+
+    // A host template on the wildcard certificate, behind the access list, on
+    // the shared pool.
+    let (status, wildcard) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({
+            "kind": "proxy_host", "name": " Internal app ",
+            "config": {
+                "forward_scheme": "http", "websockets_upgrade": true,
+                "certificate_id": cert_id, "access_list_id": acl_id,
+                "upstream_pool_id": pool_id
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{wildcard}");
+    let wildcard_id = wildcard["id"].as_i64().unwrap();
+    assert_eq!(wildcard["name"], json!("Internal app"));
+    assert_eq!(wildcard["kind"], json!("proxy_host"));
+    // Stored normalized: the full host shape, without domains.
+    assert_eq!(wildcard["config"]["http2"], json!(true));
+    assert!(wildcard["config"].get("domains").is_none());
+
+    // And one that requests a certificate per host, through the DNS profile.
+    let (status, per_host) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({
+            "kind": "proxy_host", "name": "Public site",
+            "config": {
+                "forward_scheme": "http", "forward_port": 8080,
+                "new_certificate": { "challenge": "dns", "dns_provider": profile_id.to_string() }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{per_host}");
+    let per_host_id = per_host["id"].as_i64().unwrap();
+
+    // Names are unique within a kind — the same name is free for a stream.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({ "kind": "proxy_host", "name": "Public site",
+                     "config": { "forward_scheme": "http" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], json!("template_name_taken"));
+    let (status, stream) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({ "kind": "stream", "name": "Public site",
+                     "config": { "tls": "terminate", "certificate_id": cert_id } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    let stream_id = stream["id"].as_i64().unwrap();
+
+    // The point of validating templates: the stored settings, plus what the
+    // template left open, are accepted as they are by the create endpoints.
+    let mut host_body = wildcard["config"].clone();
+    host_body["domains"] = json!(["app.example.com"]);
+    let (status, host) = call(&app, &cookie, Method::POST, "/api/hosts", Some(host_body)).await;
+    assert_eq!(status, StatusCode::OK, "{host}");
+    assert_eq!(host["upstream_pool_id"], json!(pool_id));
+    assert_eq!(host["websockets_upgrade"], json!(true));
+    let host_id = host["id"].as_i64().unwrap();
+    let mut stream_body = stream["config"].clone();
+    stream_body["incoming_port"] = json!(8443);
+    stream_body["forward_host"] = json!("10.0.0.9");
+    stream_body["forward_port"] = json!(443);
+    let (status, made) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/streams",
+        Some(stream_body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let made_stream_id = made["id"].as_i64().unwrap();
+
+    // Update: rename and change settings; the kind is fixed.
+    let (status, updated) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        &format!("/api/templates/{per_host_id}"),
+        Some(json!({ "kind": "proxy_host", "name": "Public site v2",
+                     "config": per_host["config"].clone() })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], json!("Public site v2"));
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        &format!("/api/templates/{per_host_id}"),
+        Some(json!({ "kind": "stream", "name": "x", "config": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A template never blocks a delete, and never changes generated config:
+    // the preview is the same with and without them.
+    // Free the references the real host/stream hold first — those do block.
+    for uri in [
+        format!("/api/hosts/{host_id}"),
+        format!("/api/streams/{made_stream_id}"),
+    ] {
+        let (status, _) = call(&app, &cookie, Method::DELETE, &uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    for uri in [
+        format!("/api/certificates/{cert_id}"),
+        format!("/api/access-lists/{acl_id}"),
+        format!("/api/upstream-pools/{pool_id}"),
+        format!("/api/dns-credentials/{profile_id}"),
+    ] {
+        let (status, body) = call(&app, &cookie, Method::DELETE, &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+    }
+
+    // Each template lost exactly the reference that went away, and kept the
+    // rest. (Left in place, the reference would come to mean the next row to
+    // be given that id.)
+    let (_, list) = call(&app, &cookie, Method::GET, "/api/templates", None).await;
+    let by_id = |id: i64| {
+        list["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == json!(id))
+            .unwrap()
+            .clone()
+    };
+    let wildcard = by_id(wildcard_id);
+    assert_eq!(wildcard["config"]["certificate_id"], Value::Null);
+    assert_eq!(wildcard["config"]["access_list_id"], Value::Null);
+    assert_eq!(wildcard["config"]["upstream_pool_id"], Value::Null);
+    assert_eq!(wildcard["config"]["websockets_upgrade"], json!(true));
+    let per_host = by_id(per_host_id);
+    assert_eq!(
+        per_host["config"]["new_certificate"]["dns_provider"],
+        Value::Null
+    );
+    assert_eq!(
+        per_host["config"]["new_certificate"]["challenge"],
+        json!("dns")
+    );
+    assert_eq!(per_host["config"]["forward_port"], json!(8080));
+    assert_eq!(by_id(stream_id)["config"]["certificate_id"], Value::Null);
+
+    // Delete, and gone.
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::DELETE,
+        &format!("/api/templates/{stream_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::GET,
+        &format!("/api/templates/{stream_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Templates travel with a backup, are re-validated on the way in, and a
+/// reference to a row the backup does not contain is dropped, not fatal.
+#[tokio::test]
+async fn export_import_carries_templates() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    let (_, pool) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({ "name": "apps", "servers": [{ "host": "10.0.0.2", "port": 8080 }] })),
+    )
+    .await;
+    let pool_id = pool["id"].as_i64().unwrap();
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({ "kind": "proxy_host", "name": "On the pool",
+                     "config": { "forward_scheme": "http", "upstream_pool_id": pool_id,
+                                 "gzip": { "enabled": true } } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/templates",
+        Some(json!({ "kind": "stream", "name": "Plain TCP", "config": { "forward_port": 5432 } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, doc) = call(&app, &cookie, Method::GET, "/api/export", None).await;
+    assert_eq!(doc["templates"].as_array().unwrap().len(), 2);
+
+    // Round trip.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/import",
+        Some(doc.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["imported"]["templates"], json!(2));
+    let (_, list) = call(&app, &cookie, Method::GET, "/api/templates", None).await;
+    let names: Vec<&str> = list["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["On the pool", "Plain TCP"]);
+    assert_eq!(
+        list["templates"][0]["config"]["upstream_pool_id"],
+        json!(pool_id)
+    );
+    assert_eq!(
+        list["templates"][0]["config"]["gzip"]["enabled"],
+        json!(true)
+    );
+
+    // The pool is not in the document: the template comes back without it,
+    // and everything else restores.
+    let mut without_pool = doc.clone();
+    without_pool["upstream_pools"] = json!([]);
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/import",
+        Some(without_pool),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, list) = call(&app, &cookie, Method::GET, "/api/templates", None).await;
+    assert_eq!(
+        list["templates"][0]["config"]["upstream_pool_id"],
+        Value::Null
+    );
+    assert_eq!(
+        list["templates"][0]["config"]["gzip"]["enabled"],
+        json!(true)
+    );
+
+    // Imported templates are validated like created ones.
+    let mut evil = doc.clone();
+    evil["templates"][1]["config"]["forward_host"] = json!("10.0.0.2; } server { listen 81; ");
+    let (status, _) = call(&app, &cookie, Method::POST, "/api/import", Some(evil)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut dupe = doc.clone();
+    let mut twin = doc["templates"][1].clone();
+    twin["id"] = json!(99);
+    dupe["templates"].as_array_mut().unwrap().push(twin);
+    let (status, body) = call(&app, &cookie, Method::POST, "/api/import", Some(dupe)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate name"),
+        "{body}"
+    );
+
+    // A backup from before templates existed has no such key and still restores.
+    let mut legacy = doc;
+    legacy.as_object_mut().unwrap().remove("templates");
+    let (status, body) = call(&app, &cookie, Method::POST, "/api/import", Some(legacy)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, list) = call(&app, &cookie, Method::GET, "/api/templates", None).await;
+    assert_eq!(list["templates"], json!([]));
+}

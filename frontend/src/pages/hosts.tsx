@@ -18,6 +18,7 @@ import {
 } from '@/components/bulk-actions'
 import { DomainBadges } from '@/components/domain-badges'
 import { HostEditorDialog } from '@/components/hosts/host-editor-dialog'
+import { TemplateMenu } from '@/components/template-menu'
 import { UptimeBar } from '@/components/hosts/uptime-bar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,7 +38,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, ApiError, type Cert, type Host, type UpstreamPool } from '@/lib/api'
+import {
+  api,
+  ApiError,
+  type Cert,
+  type Host,
+  type HostTemplate,
+  type UpstreamPool,
+} from '@/lib/api'
 import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
 import { useSelection, type Selection } from '@/lib/use-selection'
@@ -53,6 +61,13 @@ export function HostsPage() {
   const queryClient = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Host | null>(null)
+  // The template a new host starts from, when one was picked.
+  const [fromTemplate, setFromTemplate] = useState<HostTemplate | null>(null)
+  // "Save as template": the host a new template starts from. Kept apart from
+  // whether its editor is open, so the editor does not blank out while it
+  // fades away.
+  const [templateSeed, setTemplateSeed] = useState<Host | null>(null)
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Host | null>(null)
 
   const hostsQuery = useQuery({
@@ -95,24 +110,34 @@ export function HostsPage() {
     (poolsQuery.data?.upstream_pools ?? []).map((pool) => [pool.id, pool]),
   )
 
-  const openCreate = () => {
+  const openCreate = (template: HostTemplate | null = null) => {
     setEditing(null)
+    setFromTemplate(template)
     setEditorOpen(true)
   }
 
   const openEdit = (host: Host) => {
     setEditing(host)
+    setFromTemplate(null)
     setEditorOpen(true)
+  }
+
+  const saveAsTemplate = (host: Host) => {
+    setTemplateSeed(host)
+    setTemplateEditorOpen(true)
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">{t('hosts.title')}</h1>
-        <Button onClick={openCreate}>
-          <Plus aria-hidden="true" />
-          {t('hosts.add')}
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <TemplateMenu kind="proxy_host" onPick={openCreate} />
+          <Button onClick={() => openCreate()}>
+            <Plus aria-hidden="true" />
+            {t('hosts.add')}
+          </Button>
+        </div>
       </div>
 
       {hostsQuery.isPending ? (
@@ -182,6 +207,7 @@ export function HostsPage() {
                     }
                     selection={selection}
                     onEdit={() => openEdit(host)}
+                    onSaveAsTemplate={() => saveAsTemplate(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
               ))}
@@ -198,7 +224,18 @@ export function HostsPage() {
         successNote={t('hosts.unappliedBody')}
       />
 
-      <HostEditorDialog open={editorOpen} onOpenChange={setEditorOpen} host={editing} />
+      <HostEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        host={editing}
+        fromTemplate={fromTemplate}
+      />
+      <HostEditorDialog
+        open={templateEditorOpen}
+        onOpenChange={setTemplateEditorOpen}
+        host={null}
+        templateEdit={{ template: null, seed: templateSeed }}
+      />
       <DeleteHostDialog
         host={deleteTarget}
         onOpenChange={(open) => {
@@ -219,10 +256,19 @@ interface HostRowProps {
   pool: UpstreamPool | undefined
   selection: Selection<Host>
   onEdit: () => void
+  onSaveAsTemplate: () => void
   onDelete: () => void
 }
 
-function HostRow({ host, cert, pool, selection, onEdit, onDelete }: HostRowProps) {
+function HostRow({
+  host,
+  cert,
+  pool,
+  selection,
+  onEdit,
+  onSaveAsTemplate,
+  onDelete,
+}: HostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -289,6 +335,9 @@ function HostRow({ host, cert, pool, selection, onEdit, onDelete }: HostRowProps
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => toggleMutation.mutate()}>
               {host.enabled ? t('hosts.actions.disable') : t('hosts.actions.enable')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={onSaveAsTemplate}>
+              {t('templates.saveAs')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={onDelete}>

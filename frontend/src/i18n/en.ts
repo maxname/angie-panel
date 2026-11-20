@@ -27,6 +27,7 @@ export const en = {
     streams: 'Streams',
     sniRouters: 'SNI Routers',
     upstreamPools: 'Upstream Pools',
+    templates: 'Templates',
     certificates: 'Certificates',
     dnsProviders: 'DNS Providers',
     accessLists: 'Access Lists',
@@ -61,6 +62,7 @@ export const en = {
       certificates: 'Certificate',
       access_lists: 'Access list',
       upstream_pools: 'Upstream pool',
+      templates: 'Template',
       users: 'User',
       bans: 'IP blocklist',
       geo: 'Country policy',
@@ -823,6 +825,63 @@ export const en = {
       saveFailed: 'Could not save access list',
       savedToastTitle: 'Access list saved',
       savedToastBody: 'Attach it to a proxy host and Apply for it to take effect.',
+    },
+  },
+  templates: {
+    title: 'Templates',
+    add: 'Add template',
+    addHost: 'Proxy host template',
+    addStream: 'Stream template',
+    loadFailed: 'Failed to load templates',
+    empty:
+      'No templates yet. Save a set of settings once, then start new proxy hosts or streams from it.',
+    info: {
+      body: 'A template is a saved set of settings to start a new proxy host or stream from — pick it under “From template” when adding one. It is a starting point, not a link: what you create from it is an ordinary host, and editing the template later does not change it.',
+    },
+    fromTemplate: 'From template',
+    saveAs: 'Save as template',
+    noneHint:
+      'No templates yet. Add one under Templates, or use “Save as template” in a row’s menu.',
+    kind: {
+      proxy_host: 'Proxy host',
+      stream: 'Stream',
+    },
+    table: {
+      name: 'Name',
+      kind: 'For',
+      target: 'Forward target',
+      certificate: 'Certificate',
+      actions: 'Actions',
+    },
+    targetOpen: 'set when creating',
+    certificateNew: 'requested per host',
+    actions: {
+      edit: 'Edit',
+      delete: 'Delete',
+    },
+    delete: {
+      title: 'Delete template?',
+      body: 'This removes the template “{{name}}”. Hosts and streams already created from it are not affected.',
+      failed: 'Could not delete template',
+    },
+    editor: {
+      hostCreateTitle: 'New proxy host template',
+      hostEditTitle: 'Edit proxy host template',
+      hostDescription:
+        'Settings that new proxy hosts start from. Each host adds its own domains.',
+      streamCreateTitle: 'New stream template',
+      streamEditTitle: 'Edit stream template',
+      streamDescription:
+        'Settings that new streams start from. Each stream adds its own incoming port.',
+      name: 'Template name',
+      hostNamePlaceholder: 'Internal web app',
+      streamNamePlaceholder: 'Database forward',
+      hostNameHelp: 'Shown under “From template” when adding a proxy host.',
+      streamNameHelp: 'Shown under “From template” when adding a stream.',
+      targetHelp:
+        'Leave the forward host blank to fill it in for each one created from this template.',
+      noName: 'Enter a name for the template.',
+      savedToast: 'Template saved',
     },
   },
   bulk: {

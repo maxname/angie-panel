@@ -6,6 +6,7 @@ import {
   FileQuestion,
   Globe,
   LayoutDashboard,
+  LayoutTemplate,
   ListChecks,
   LogOut,
   Network,
@@ -67,6 +68,7 @@ const NAV_SECTIONS = [
       { to: '/streams', labelKey: 'nav.streams', icon: Network, exact: false },
       { to: '/sni-routers', labelKey: 'nav.sniRouters', icon: Split, exact: false },
       { to: '/upstream-pools', labelKey: 'nav.upstreamPools', icon: Server, exact: false },
+      { to: '/templates', labelKey: 'nav.templates', icon: LayoutTemplate, exact: false },
     ],
   },
   {

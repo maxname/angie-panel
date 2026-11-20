@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import i18n from '@/i18n'
-import type { Host, UpstreamPool } from '@/lib/api'
+import type { Host, HostTemplate, UpstreamPool } from '@/lib/api'
 import { isValidDomain } from '@/lib/domain'
 
 import { HostEditorDialog, HostEditorForm } from './host-editor-dialog'
@@ -930,5 +930,254 @@ describe('host editor shared upstream pool', () => {
     expect(
       await screen.findByText('This pool no longer exists. Pick another one.'),
     ).toBeInTheDocument()
+  })
+})
+
+describe('host editor templates', () => {
+  // The settings a template stores: a host's, without its domains.
+  const settings: HostTemplate['config'] = {
+    forward_scheme: 'http',
+    forward_host: '',
+    forward_port: 8080,
+    websockets_upgrade: true,
+    block_exploits: false,
+    cache_assets: false,
+    http2: true,
+    http3: false,
+    force_ssl: true,
+    health_checks: [],
+    hsts: false,
+    hsts_subdomains: false,
+    trust_forwarded_proto: false,
+    certificate_id: null,
+    access_list_id: null,
+    locations: [],
+    advanced_snippet: null,
+    rate_limit: { enabled: false, rps: 0, burst: 0, nodelay: false, conn: 0 },
+    upstream: {
+      servers: [],
+      method: 'round_robin',
+      primary_weight: 1,
+      max_fails: 1,
+      fail_timeout_secs: 10,
+    },
+    upstream_pool_id: null,
+    mtls: { ca_pem: null, optional: false },
+    forward_auth: {
+      enabled: false,
+      verify_url: '',
+      sign_in_url: null,
+      copy_headers: [],
+    },
+    custom_headers: [
+      { name: 'CF-Connecting-IP', value: '$remote_addr', direction: 'request' },
+    ],
+    maintenance: { enabled: false, title: '', message: '' },
+    gzip: { enabled: true, comp_level: 0, min_length: 0, types: [] },
+    error_pages: {
+      not_found: { enabled: false, title: '', message: '' },
+      server_error: { enabled: false, title: '', message: '' },
+    },
+    proxy_tuning: {
+      client_max_body_size: '',
+      connect_timeout_secs: 0,
+      read_timeout_secs: 0,
+      send_timeout_secs: 0,
+      disable_buffering: false,
+    },
+    new_certificate: {
+      challenge: 'http',
+      dns_provider: null,
+      // Set through the API: this form has no control for it.
+      ca: 'zerossl',
+      key_type: null,
+      email: null,
+      staging: false,
+    },
+  }
+
+  const webApp: HostTemplate = {
+    id: 5,
+    kind: 'proxy_host',
+    name: 'Web app',
+    config: settings,
+    created_at: 1751700000,
+    updated_at: 1751700000,
+  }
+
+  // A host as the API returns it, with a certificate issued for its own name.
+  const shop: Host = {
+    ...settings,
+    id: 7,
+    domains: ['shop.example.com'],
+    forward_host: '10.0.0.5',
+    certificate_id: 4,
+    enabled: true,
+    created_at: 1751700000,
+    updated_at: 1751700000,
+  }
+
+  /** Answers the editor's lookups, and accepts a host or a template save. */
+  function stubApi() {
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (method === 'GET') {
+        const lists: Record<string, unknown> = {
+          '/api/certificates': { certificates: [] },
+          '/api/access-lists': { access_lists: [] },
+          '/api/upstream-pools': { upstream_pools: [] },
+        }
+        return input in lists
+          ? Promise.resolve(jsonResponse(lists[input]))
+          : Promise.reject(new Error(`unexpected fetch ${input}`))
+      }
+      return Promise.resolve(jsonResponse({ id: 1 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  function renderEditor(props: Parameters<typeof HostEditorForm>[0]) {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <HostEditorForm {...props} />
+      </QueryClientProvider>,
+    )
+  }
+
+  /** The one write the editor made: its URL, method and JSON body. */
+  async function savedRequest(fetchMock: ReturnType<typeof stubApi>) {
+    const isWrite = ([, init]: [string, RequestInit?]) =>
+      init?.method !== undefined && init.method !== 'GET'
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.filter(isWrite)).toHaveLength(1),
+    )
+    const [url, init] = fetchMock.mock.calls.filter(isWrite)[0]
+    return { url, method: init?.method, body: JSON.parse(String(init?.body)) }
+  }
+
+  it('starts a new host from a template, leaving only what is its own to fill in', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({ host: null, fromTemplate: webApp, onDone: () => {} })
+
+    // The template's settings are already in the form.
+    expect(screen.getByLabelText('Port')).toHaveValue(8080)
+    expect(screen.getByLabelText('Websockets support')).toBeChecked()
+    // It left the target open, and a host cannot: the form says so.
+    await user.type(screen.getByLabelText('Domain names'), 'shop.example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Enter the forward host.')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Forward host'), '10.0.0.5')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    // An ordinary host is created — through the ordinary endpoint.
+    const { url, method, body } = await savedRequest(fetchMock)
+    expect([url, method]).toEqual(['/api/hosts', 'POST'])
+    expect(body.domains).toEqual(['shop.example.com'])
+    expect(body.forward_host).toBe('10.0.0.5')
+    expect(body.forward_port).toBe(8080)
+    expect(body.websockets_upgrade).toBe(true)
+    expect(body.gzip.enabled).toBe(true)
+    expect(body.custom_headers).toEqual([
+      { name: 'CF-Connecting-IP', value: '$remote_addr', direction: 'request' },
+    ])
+    // "Request a certificate for this host" came along, including the CA the
+    // template names although the form cannot show it.
+    expect(body.certificate_id).toBeNull()
+    expect(body.new_certificate).toEqual({
+      ca: 'zerossl',
+      challenge: 'http',
+      dns_provider: null,
+    })
+  })
+
+  it('edits a template: a name instead of domains, and a target that may stay open', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({ host: null, templateEdit: { template: null }, onDone: () => {} })
+
+    expect(
+      screen.getByRole('heading', { name: 'New proxy host template' }),
+    ).toBeInTheDocument()
+    // Domains are the one thing each host brings itself.
+    expect(screen.queryByLabelText('Domain names')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(
+      await screen.findByText('Enter a name for the template.'),
+    ).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Template name'), '  Internal app ')
+    await user.click(screen.getByLabelText('Websockets support'))
+    // No forward host: for a template that is a choice, not an omission.
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const { url, method, body } = await savedRequest(fetchMock)
+    expect([url, method]).toEqual(['/api/templates', 'POST'])
+    expect(body.kind).toBe('proxy_host')
+    expect(body.name).toBe('Internal app')
+    expect(body.config.forward_host).toBe('')
+    expect(body.config.websockets_upgrade).toBe(true)
+    // What a template does not carry is not sent at all.
+    expect(body.config).not.toHaveProperty('domains')
+    expect(body.config).not.toHaveProperty('enabled')
+  })
+
+  it('makes a template from a host without its domains or its certificate', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({
+      host: null,
+      templateEdit: { template: null, seed: shop },
+      onDone: () => {},
+    })
+
+    // The host's settings, target included, are the starting point.
+    expect(screen.getByLabelText('Forward host')).toHaveValue('10.0.0.5')
+    await user.type(screen.getByLabelText('Template name'), 'Like the shop')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const { url, body } = await savedRequest(fetchMock)
+    expect(url).toBe('/api/templates')
+    expect(body.config.forward_host).toBe('10.0.0.5')
+    expect(body.config).not.toHaveProperty('domains')
+    // The shop's certificate was issued for shop.example.com; attached to
+    // every host made from the template it would not match their names. The
+    // template asks for a certificate per host instead.
+    expect(body.config.certificate_id).toBeNull()
+    expect(body.config.new_certificate).toMatchObject({ challenge: 'http' })
+  })
+
+  it('saves an existing template in place, once something has changed', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({ host: null, templateEdit: { template: webApp }, onDone: () => {} })
+
+    expect(
+      screen.getByRole('heading', { name: 'Edit proxy host template' }),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Template name')).toHaveValue('Web app')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+
+    await user.type(screen.getByLabelText('Template name'), ' v2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const { url, method, body } = await savedRequest(fetchMock)
+    expect([url, method]).toEqual(['/api/templates/5', 'PUT'])
+    expect(body.name).toBe('Web app v2')
+    // Untouched settings round-trip, including the open target and what the
+    // form has no control for.
+    expect(body.config.forward_host).toBe('')
+    expect(body.config.forward_port).toBe(8080)
+    expect(body.config.new_certificate.ca).toBe('zerossl')
   })
 })
