@@ -119,9 +119,10 @@ DNS-провайдерам минимально необходимые прав�
   return 403. This is the panel-native enforcement point fail2ban / CrowdSec can drive (push a ban
   via the API, then apply). Caveat: the global `deny` is NOT inherited by hosts that define their
   own IP access rules (access lists) — add the IP to those lists too if needed.
-- The config export is a full backup (every host type, certificates, access lists, settings) and
-  contains secrets — advanced-snippet contents and basic-auth password hashes — so treat the file
-  as sensitive. On import those hashes are shape-checked as bcrypt (they land in an htpasswd file).
+- The config export is a full backup (every host type, certificates, access lists, upstream
+  pools, settings) and contains secrets — advanced-snippet contents and basic-auth password
+  hashes — so treat the file as sensitive. On import those hashes are shape-checked as bcrypt
+  (they land in an htpasswd file).
   `/var/lib/angie-panel` is 0700, the DB 0600.
 - **DNS provider credentials are encrypted at rest** (ChaCha20-Poly1305; key in
   `secret.key`, 0600, beside the DB). The key shares the DB's owner, so this does not stop an

@@ -30,8 +30,9 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy, HeaderDirection, ProxyHost,
-    RateLimit, RedirectHost, Scheme, SniRouter, Stream, StreamTls,
+    BalanceMethod, Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy,
+    HeaderDirection, ProxyHost, RateLimit, RedirectHost, Scheme, SniRouter, Stream, StreamTls,
+    UpstreamPool, UpstreamServer,
 };
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
@@ -68,6 +69,9 @@ pub struct GeneratorInput {
     pub acme_hook_token: String,
     /// Access lists referenced by hosts via `access_list_id`.
     pub access_lists: Vec<AccessList>,
+    /// Shared upstream pools referenced by hosts via `upstream_pool_id`. Only
+    /// the ones an enabled host proxies to are emitted (17-upstream-pools.conf).
+    pub upstream_pools: Vec<UpstreamPool>,
     /// Managed config dir — where generated files (incl. htpasswd) live; used
     /// to build the absolute `auth_basic_user_file` path.
     pub http_d_dir: std::path::PathBuf,
@@ -193,6 +197,11 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
     // context before any server block references them.
     if let Some(body) = gen_rate_limits(input) {
         files.insert("15-rate-limits.conf".to_string(), body);
+    }
+    // Shared upstream pools: one `upstream pool_<id>` block per pool in use,
+    // emitted before the 20-host-* files whose proxy_pass names them.
+    if let Some(body) = gen_upstream_pools(input) {
+        files.insert(UPSTREAM_POOLS_FILE.to_string(), body);
     }
 
     // Index certificates by id so hosts can resolve name + readiness in O(1).
@@ -1095,51 +1104,136 @@ fn gen_bans(input: &GeneratorInput) -> Option<String> {
 
 // ------------------------------------------------------------- upstream pool
 
-/// Emit the `upstream <zone> { ... }` block: shared-memory zone, optional
-/// balancing method, the primary server, then any extra pool members. Passive
-/// health (`max_fails`/`fail_timeout`) is attached to every peer when tuned off
-/// the Angie defaults (1 / 10s). Hosts/ports were SSRF-validated upstream.
-fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
-    let up = &host.upstream;
+/// One `server` line of an `upstream` block.
+struct Peer<'a> {
+    host: &'a str,
+    port: u16,
+    weight: u32,
+    backup: bool,
+    down: bool,
+}
+
+impl<'a> From<&'a UpstreamServer> for Peer<'a> {
+    fn from(s: &'a UpstreamServer) -> Self {
+        Peer {
+            host: &s.host,
+            port: s.port,
+            weight: s.weight,
+            backup: s.backup,
+            down: s.down,
+        }
+    }
+}
+
+/// Emit an `upstream <zone> { ... }` block: shared-memory zone, optional
+/// balancing method, then one `server` per peer. Passive health
+/// (`max_fails`/`fail_timeout`) is attached to every peer when tuned off the
+/// Angie defaults (1 / 10s). Hosts/ports were SSRF-validated upstream.
+fn write_upstream_block<'a>(
+    out: &mut String,
+    zone: &str,
+    method: BalanceMethod,
+    max_fails: u32,
+    fail_timeout_secs: u32,
+    peers: impl Iterator<Item = Peer<'a>>,
+) {
     let _ = writeln!(out, "upstream {zone} {{");
     let _ = writeln!(out, "    zone {zone} 64k;");
-    if let Some(method) = up.method.directive() {
+    if let Some(method) = method.directive() {
         let _ = writeln!(out, "    {method};");
     }
     // Passive-health suffix shared by every peer (empty when at defaults).
-    let health = if up.max_fails != 1 || up.fail_timeout_secs != 10 {
-        format!(
-            " max_fails={} fail_timeout={}s",
-            up.max_fails, up.fail_timeout_secs
-        )
+    let health = if max_fails != 1 || fail_timeout_secs != 10 {
+        format!(" max_fails={max_fails} fail_timeout={fail_timeout_secs}s")
     } else {
         String::new()
     };
-    // Primary server (never backup/down — it is the host's main target).
-    let mut primary = format!("    server {}:{}", host.forward_host, host.forward_port);
-    if up.primary_weight != 1 {
-        let _ = write!(primary, " weight={}", up.primary_weight);
-    }
-    primary.push_str(&health);
-    primary.push(';');
-    let _ = writeln!(out, "{primary}");
-    // Extra pool members.
-    for s in &up.servers {
-        let mut line = format!("    server {}:{}", s.host, s.port);
-        if s.weight != 1 {
-            let _ = write!(line, " weight={}", s.weight);
+    for peer in peers {
+        let mut line = format!("    server {}:{}", peer.host, peer.port);
+        if peer.weight != 1 {
+            let _ = write!(line, " weight={}", peer.weight);
         }
         line.push_str(&health);
-        if s.backup {
+        if peer.backup {
             line.push_str(" backup");
         }
-        if s.down {
+        if peer.down {
             line.push_str(" down");
         }
         line.push(';');
         let _ = writeln!(out, "{line}");
     }
     let _ = writeln!(out, "}}");
+}
+
+/// A host's own upstream block: the primary server (`forward_host:forward_port`,
+/// never backup/down — it is the host's main target), then any extra pool
+/// members from `host.upstream`.
+fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
+    let up = &host.upstream;
+    let primary = Peer {
+        host: &host.forward_host,
+        port: host.forward_port,
+        weight: up.primary_weight,
+        backup: false,
+        down: false,
+    };
+    write_upstream_block(
+        out,
+        zone,
+        up.method,
+        up.max_fails,
+        up.fail_timeout_secs,
+        std::iter::once(primary).chain(up.servers.iter().map(Peer::from)),
+    );
+}
+
+/// FileSet key for the shared upstream pools.
+const UPSTREAM_POOLS_FILE: &str = "17-upstream-pools.conf";
+
+/// Shared upstream pools: one `upstream pool_<id>` block per pool that an
+/// ENABLED host proxies to, each with its own metrics zone. Returns None when
+/// no pool is in use.
+///
+/// Unreferenced pools are deliberately left out rather than emitted "just in
+/// case": an `upstream` block resolves its servers' hostnames when the config
+/// loads, so a parked pool with a stale hostname would fail `angie -t` and
+/// block every apply for a backend nothing uses.
+fn gen_upstream_pools(input: &GeneratorInput) -> Option<String> {
+    let in_use: std::collections::BTreeSet<i64> = input
+        .hosts
+        .iter()
+        .filter(|h| h.enabled)
+        .filter_map(|h| h.upstream_pool_id)
+        .collect();
+    let mut pools: Vec<&UpstreamPool> = input
+        .upstream_pools
+        .iter()
+        .filter(|p| in_use.contains(&p.id))
+        .collect();
+    if pools.is_empty() {
+        return None;
+    }
+    pools.sort_by_key(|p| p.id);
+
+    let mut out = String::new();
+    for (i, pool) in pools.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        // The name is a single-line label (control characters are rejected on
+        // input), so it cannot end the comment early.
+        let _ = writeln!(out, "# {}", pool.name);
+        write_upstream_block(
+            &mut out,
+            &UpstreamPool::zone(pool.id),
+            pool.method,
+            pool.max_fails,
+            pool.fail_timeout_secs,
+            pool.servers.iter().map(Peer::from),
+        );
+    }
+    Some(out)
 }
 
 // -------------------------------------------------- 20-host-<id>-<slug>.conf
@@ -1172,7 +1266,28 @@ fn gen_host(
     // primary server is forward_host:forward_port; extra pool members, the
     // balancing method, and passive health (max_fails/fail_timeout) come from
     // host.upstream (PLAN.md §4).
-    gen_upstream_block(&mut out, &zone, host);
+    //
+    // A host that references a shared pool has no block of its own: it proxies
+    // to `pool_<id>`, defined once in 17-upstream-pools.conf. The reference is
+    // checked on write and held by a foreign key; if it dangles anyway, fail
+    // the generation — emitting the proxy_pass regardless would make Angie
+    // treat `pool_<id>` as a hostname to resolve, and fail somewhere murkier.
+    match host.upstream_pool_id {
+        None => gen_upstream_block(&mut out, &zone, host),
+        Some(pool_id) => {
+            if !input.upstream_pools.iter().any(|p| p.id == pool_id) {
+                anyhow::bail!(
+                    "host #{} references upstream pool #{pool_id}, which does not exist",
+                    host.id
+                );
+            }
+            let _ = writeln!(
+                out,
+                "# upstream: shared pool {} ({UPSTREAM_POOLS_FILE})",
+                UpstreamPool::zone(pool_id)
+            );
+        }
+    }
     out.push('\n');
 
     if https {
@@ -1604,10 +1719,14 @@ fn gen_dead(dh: &DeadHost, cert: Option<&Certificate>, input: &GeneratorInput) -
 
 /// The upstream reference used by the main `location /` proxy_pass.
 ///
-/// The main location always proxies to the named `upstream host_<id>` block
-/// (which carries the metrics zone). The scheme comes from `forward_scheme`.
+/// The main location always proxies to a named `upstream` block (which carries
+/// the metrics zone): the host's own `host_<id>`, or the shared `pool_<id>`
+/// when it references one. The scheme comes from `forward_scheme`.
 fn host_upstream_ref(host: &ProxyHost) -> String {
-    format!("host_{}", host.id)
+    match host.upstream_pool_id {
+        Some(pool_id) => UpstreamPool::zone(pool_id),
+        None => format!("host_{}", host.id),
+    }
 }
 
 /// Custom locations proxy directly to `host:port` rather than a named upstream

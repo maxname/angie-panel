@@ -16,6 +16,7 @@
 //! Credentials, in order: `--token`, `$ANGIE_PANEL_TOKEN`, then the local token
 //! file in the data dir — which is what makes it zero-config on the box itself.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
@@ -256,6 +257,33 @@ fn s(v: &Value, key: &str) -> String {
 }
 
 /// Parse `--to http://host:port` into the three fields the API wants.
+/// `id → name` from a `GET /api/upstream-pools` response.
+fn pool_names(v: &Value) -> HashMap<i64, String> {
+    v["upstream_pools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((p["id"].as_i64()?, p["name"].as_str()?.to_string())))
+        .collect()
+}
+
+/// Where a host sends its traffic, for `host ls`: `scheme://host:port`, or the
+/// shared pool's name for a host that proxies to one (it has no host:port).
+fn host_upstream(h: &Value, pool_names: &HashMap<i64, String>) -> String {
+    let scheme = s(h, "forward_scheme");
+    match h["upstream_pool_id"].as_i64() {
+        Some(id) => match pool_names.get(&id) {
+            Some(name) => format!("{scheme}://{name} (pool)"),
+            None => format!("{scheme}://pool #{id}"),
+        },
+        None => format!(
+            "{scheme}://{}:{}",
+            s(h, "forward_host"),
+            h["forward_port"].as_u64().unwrap_or(0)
+        ),
+    }
+}
+
 fn parse_upstream(raw: &str) -> anyhow::Result<(String, String, u16)> {
     let (scheme, rest) = raw
         .split_once("://")
@@ -513,6 +541,13 @@ async fn host(c: &Client, cmd: HostCommand) -> anyhow::Result<()> {
                 println!("No proxy hosts yet.");
                 return Ok(());
             }
+            // Hosts on a shared upstream pool have no target of their own; the
+            // pool's name is what tells them apart. Asked for only when needed.
+            let pool_names = if hosts.iter().any(|h| !h["upstream_pool_id"].is_null()) {
+                pool_names(&c.get("/api/upstream-pools").await?)
+            } else {
+                HashMap::new()
+            };
             println!("{:>4}  {:<40} {:<28} STATE", "ID", "DOMAINS", "UPSTREAM");
             for h in hosts {
                 let domains = h["domains"]
@@ -524,12 +559,7 @@ async fn host(c: &Client, cmd: HostCommand) -> anyhow::Result<()> {
                             .join(", ")
                     })
                     .unwrap_or_default();
-                let upstream = format!(
-                    "{}://{}:{}",
-                    s(h, "forward_scheme"),
-                    s(h, "forward_host"),
-                    h["forward_port"].as_u64().unwrap_or(0)
-                );
+                let upstream = host_upstream(h, &pool_names);
                 let mut state = if h["enabled"].as_bool().unwrap_or(true) {
                     "enabled".to_string()
                 } else {
@@ -676,6 +706,32 @@ mod tests {
         for bad in ["127.0.0.1:3000", "ftp://x:1", "http://:80", "http://x:abc"] {
             assert!(parse_upstream(bad).is_err(), "{bad} must be rejected");
         }
+    }
+
+    #[test]
+    fn host_ls_names_the_shared_pool() {
+        let pools = pool_names(&json!({
+            "upstream_pools": [{ "id": 3, "name": "apps" }, { "id": 4, "name": "api" }]
+        }));
+        // A host's own upstream reads as it always did.
+        let own = json!({
+            "forward_scheme": "http", "forward_host": "10.0.0.5", "forward_port": 8080,
+            "upstream_pool_id": null
+        });
+        assert_eq!(host_upstream(&own, &pools), "http://10.0.0.5:8080");
+        // A pooled host has an empty host and port 0 — print the pool, not ":0".
+        let pooled = json!({
+            "forward_scheme": "https", "forward_host": "", "forward_port": 0,
+            "upstream_pool_id": 3
+        });
+        assert_eq!(host_upstream(&pooled, &pools), "https://apps (pool)");
+        // The pool list could not be matched: still say it is a pool.
+        assert_eq!(host_upstream(&pooled, &HashMap::new()), "https://pool #3");
+        // An older panel has no such field at all.
+        let legacy = json!({
+            "forward_scheme": "http", "forward_host": "app", "forward_port": 80
+        });
+        assert_eq!(host_upstream(&legacy, &pools), "http://app:80");
     }
 
     fn endpoint(bind: &str, port: u16, url: Option<&str>) -> Endpoint {

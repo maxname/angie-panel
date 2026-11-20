@@ -1,7 +1,8 @@
 //! Config export / import (M4) — the top NPM feature request (backup/export
 //! from the UI, open since 2018). Export dumps the FULL config — every host
-//! type (proxy / redirect / 404 / stream), certificates, access lists, and
-//! settings — as one JSON document; import replaces it transactionally.
+//! type (proxy / redirect / 404 / stream), certificates, access lists, shared
+//! upstream pools, and settings — as one JSON document; import replaces it
+//! transactionally.
 //!
 //! SECURITY: imported JSON is UNTRUSTED (it is a config-injection vector — the
 //! security review flagged this explicitly). Every entry is run through the
@@ -23,7 +24,7 @@ use serde_json::{json, Value};
 use crate::model::{
     self, AccessListClientInput, AccessListInput, AccessListUserInput, CertificateInput,
     DeadHostInput, Directive, ProxyHostInput, RedirectHostInput, Satisfy, StreamInput,
-    UpstreamPolicy,
+    UpstreamPolicy, UpstreamPoolInput,
 };
 use crate::repo::{self, AclImportRow, AclUserHash};
 use crate::{auth::AuthUser, error::ApiError, error::ApiResult, state::AppState};
@@ -38,6 +39,7 @@ struct Export {
     exported_at: i64,
     certificates: Vec<Value>,
     access_lists: Vec<Value>,
+    upstream_pools: Vec<Value>,
     hosts: Vec<Value>,
     redirect_hosts: Vec<Value>,
     dead_hosts: Vec<Value>,
@@ -64,6 +66,7 @@ pub async fn export(u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResul
     u.require_admin()?;
     let hosts = repo::list_hosts(&state.db).await?;
     let certs = repo::list_certs(&state.db).await?;
+    let upstream_pools = repo::list_upstream_pools(&state.db).await?;
     let redirects = repo::list_redirects(&state.db).await?;
     let deads = repo::list_dead(&state.db).await?;
     let streams = repo::list_streams(&state.db).await?;
@@ -104,6 +107,7 @@ pub async fn export(u: AuthUser, State(state): State<Arc<AppState>>) -> ApiResul
         exported_at: crate::db::now_epoch(),
         certificates: to_values(&certs),
         access_lists,
+        upstream_pools: to_values(&upstream_pools),
         hosts: to_values(&hosts),
         redirect_hosts: to_values(&redirects),
         dead_hosts: to_values(&deads),
@@ -124,6 +128,10 @@ pub struct ImportDoc {
     certificates: Vec<Value>,
     #[serde(default)]
     access_lists: Vec<Value>,
+    // Absent in backups taken before shared pools existed — those have no host
+    // that references one, so an empty list restores them faithfully.
+    #[serde(default)]
+    upstream_pools: Vec<Value>,
     #[serde(default)]
     hosts: Vec<Value>,
     #[serde(default)]
@@ -291,6 +299,26 @@ pub async fn import(
         });
     }
 
+    // --- shared upstream pools (same SSRF-guarded validation as the CRUD API;
+    //     ids preserved so hosts keep their upstream_pool_id reference) ---
+    let mut upstream_pools: Vec<(i64, UpstreamPoolInput)> = Vec::new();
+    let mut pool_ids = std::collections::HashSet::new();
+    let mut pool_names = std::collections::HashSet::new();
+    for (i, v) in doc.upstream_pools.iter().enumerate() {
+        let id =
+            extract_id(v).ok_or_else(|| bad_entry("upstream pool", i, "missing numeric id"))?;
+        let input: UpstreamPoolInput = serde_json::from_value(v.clone())
+            .map_err(|e| bad_entry("upstream pool", i, &e.to_string()))?;
+        let input = model::validate_upstream_pool_input(input, &policy)?;
+        if !pool_ids.insert(id) {
+            return Err(bad_entry("upstream pool", i, "duplicate id"));
+        }
+        if !pool_names.insert(input.name.clone()) {
+            return Err(bad_entry("upstream pool", i, "duplicate name"));
+        }
+        upstream_pools.push((id, input));
+    }
+
     // Domain uniqueness is CROSS-TYPE among enabled hosts (proxy/redirect/dead).
     let mut enabled_domains = std::collections::HashSet::new();
 
@@ -313,6 +341,17 @@ pub async fn import(
                     "host",
                     i,
                     "access_list_id references an access list not present in the import",
+                ));
+            }
+        }
+        // upstream_pool_id must reference a pool in THIS import — a dangling
+        // one would leave the host with no backend.
+        if let Some(pid) = input.upstream_pool_id {
+            if !pool_ids.contains(&pid) {
+                return Err(bad_entry(
+                    "host",
+                    i,
+                    "upstream_pool_id references an upstream pool not present in the import",
                 ));
             }
         }
@@ -524,6 +563,7 @@ pub async fn import(
         &state.db,
         &certs,
         &acls,
+        &upstream_pools,
         &hosts,
         &redirects,
         &deads,
@@ -540,6 +580,7 @@ pub async fn import(
         "imported": {
             "certificates": certs.len(),
             "access_lists": acls.len(),
+            "upstream_pools": upstream_pools.len(),
             "hosts": hosts.len(),
             "redirect_hosts": redirects.len(),
             "dead_hosts": deads.len(),

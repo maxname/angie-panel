@@ -11,6 +11,7 @@ import {
   Network,
   Rocket,
   ScrollText,
+  Server,
   Settings,
   ShieldBan,
   ShieldCheck,
@@ -65,6 +66,7 @@ const NAV_SECTIONS = [
       { to: '/dead-hosts', labelKey: 'nav.deadHosts', icon: FileQuestion, exact: false },
       { to: '/streams', labelKey: 'nav.streams', icon: Network, exact: false },
       { to: '/sni-routers', labelKey: 'nav.sniRouters', icon: Split, exact: false },
+      { to: '/upstream-pools', labelKey: 'nav.upstreamPools', icon: Server, exact: false },
     ],
   },
   {

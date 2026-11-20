@@ -375,6 +375,7 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         acme_hook_target: hook_target(state),
         acme_hook_token: ensure_acme_hook_token(state).await?,
         access_lists,
+        upstream_pools: repo::list_upstream_pools(&state.db).await?,
         http_d_dir: state.cfg.angie.http_d_dir.clone(),
         redirect_hosts: repo::list_redirects(&state.db).await?,
         dead_hosts: repo::list_dead(&state.db).await?,

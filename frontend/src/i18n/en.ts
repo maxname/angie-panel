@@ -26,6 +26,7 @@ export const en = {
     deadHosts: '404 Hosts',
     streams: 'Streams',
     sniRouters: 'SNI Routers',
+    upstreamPools: 'Upstream Pools',
     certificates: 'Certificates',
     dnsProviders: 'DNS Providers',
     accessLists: 'Access Lists',
@@ -59,6 +60,7 @@ export const en = {
       streams: 'Stream',
       certificates: 'Certificate',
       access_lists: 'Access list',
+      upstream_pools: 'Upstream pool',
       users: 'User',
       bans: 'IP blocklist',
       geo: 'Country policy',
@@ -199,6 +201,7 @@ export const en = {
     table: {
       domains: 'Domains',
       target: 'Forward target',
+      pool: 'Shared upstream pool',
       certificate: 'Certificate',
       ssl: 'SSL',
       status: 'Status',
@@ -328,6 +331,8 @@ export const en = {
       forwardScheme: 'Scheme',
       forwardHost: 'Forward host',
       forwardPort: 'Port',
+      forwardPool: 'Upstream pool',
+      forwardPoolChange: 'Change',
       websockets: 'Websockets support',
       blockExploits: 'Block common exploits',
       cacheAssets: 'Cache assets',
@@ -405,6 +410,16 @@ export const en = {
         failTimeout: 'Fail timeout (seconds)',
         healthHint:
           'A peer is taken out of rotation after “max fails” errors within the fail timeout, then retried. max fails 0 disables passive checking.',
+        source: 'Backend servers come from',
+        sourceOwn: 'This host’s own servers',
+        sourcePool: 'Pool: {{name}}',
+        newPool: 'New pool',
+        sourceHelp:
+          'A shared pool is defined once and can serve any number of hosts — edit it under Upstream Pools and every host that uses it follows.',
+        poolsLoadFailed: 'Failed to load upstream pools',
+        poolMissing: 'This pool no longer exists. Pick another one.',
+        poolShared:
+          'These servers belong to the pool, not to this host. Edit them under Upstream Pools.',
         errServer: 'Each backend server needs a host and a valid port (1–65535).',
         errIpHashBackup: 'ip_hash balancing cannot be combined with backup servers.',
       },
@@ -808,6 +823,48 @@ export const en = {
       saveFailed: 'Could not save access list',
       savedToastTitle: 'Access list saved',
       savedToastBody: 'Attach it to a proxy host and Apply for it to take effect.',
+    },
+  },
+  upstreamPools: {
+    title: 'Upstream Pools',
+    add: 'Add upstream pool',
+    loadFailed: 'Failed to load upstream pools',
+    empty:
+      'No upstream pools yet. Add one to define backend servers once and share them between proxy hosts.',
+    info: {
+      body: 'An upstream pool is a set of backend servers defined once and shared by any number of proxy hosts. Pick it in a host’s Upstreams section; editing the pool changes every host that uses it.',
+    },
+    table: {
+      name: 'Name',
+      servers: 'Servers',
+      method: 'Balancing',
+      hosts: 'Hosts',
+      actions: 'Actions',
+    },
+    unused: 'not used',
+    serverWeight: 'weight {{weight}}',
+    actions: {
+      edit: 'Edit',
+      delete: 'Delete',
+    },
+    delete: {
+      title: 'Delete upstream pool?',
+      body: 'This removes the upstream pool “{{name}}”. A pool that hosts still use cannot be deleted.',
+      failed: 'Could not delete upstream pool',
+    },
+    editor: {
+      createTitle: 'New upstream pool',
+      editTitle: 'Edit upstream pool',
+      description:
+        'Backend servers shared between proxy hosts. A change reaches every host that uses the pool on the next Apply.',
+      name: 'Name',
+      namePlaceholder: 'app-backends',
+      noName: 'Enter a name for the pool.',
+      errNoServers: 'Add at least one backend server.',
+      errOnlyBackups: 'At least one server must not be a backup.',
+      saveFailed: 'Could not save upstream pool',
+      savedToastTitle: 'Upstream pool saved',
+      savedToastBody: 'Hosts that use it pick up the change on the next Apply.',
     },
   },
   redirectHosts: {

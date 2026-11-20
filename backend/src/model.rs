@@ -636,6 +636,24 @@ impl BalanceMethod {
             BalanceMethod::IpHash => Some("ip_hash"),
         }
     }
+
+    /// The stored / wire spelling (matches the serde representation).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BalanceMethod::RoundRobin => "round_robin",
+            BalanceMethod::LeastConn => "least_conn",
+            BalanceMethod::IpHash => "ip_hash",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`]; an unknown value reads as the default.
+    pub fn from_db(s: &str) -> Self {
+        match s {
+            "least_conn" => BalanceMethod::LeastConn,
+            "ip_hash" => BalanceMethod::IpHash,
+            _ => BalanceMethod::RoundRobin,
+        }
+    }
 }
 
 /// One additional backend server beyond the host's primary
@@ -792,8 +810,7 @@ pub fn validate_upstream(mut up: Upstream, policy: &UpstreamPolicy) -> Result<Up
     if up.servers.len() > MAX_UPSTREAM_SERVERS {
         return Err(bad("invalid_upstream", "too many backend servers"));
     }
-    let weight_ok = |w: u32| (1..=MAX_WEIGHT).contains(&w);
-    if !weight_ok(up.primary_weight) {
+    if !(1..=MAX_WEIGHT).contains(&up.primary_weight) {
         return Err(bad("invalid_upstream", "primary weight out of range"));
     }
     if up.max_fails > MAX_FAILS {
@@ -802,23 +819,125 @@ pub fn validate_upstream(mut up: Upstream, policy: &UpstreamPolicy) -> Result<Up
     if up.fail_timeout_secs == 0 || up.fail_timeout_secs > MAX_FAIL_TIMEOUT {
         return Err(bad("invalid_upstream", "fail_timeout out of range"));
     }
-    for s in &mut up.servers {
+    validate_upstream_servers(&mut up.servers, up.method, policy)?;
+    Ok(up)
+}
+
+/// Validate + normalize a list of pool members — shared by a host's own extra
+/// servers and by a shared [`UpstreamPool`]. Each host runs through the SAME
+/// SSRF-guarded validation as a host's primary upstream.
+fn validate_upstream_servers(
+    servers: &mut [UpstreamServer],
+    method: BalanceMethod,
+    policy: &UpstreamPolicy,
+) -> Result<(), ApiError> {
+    for s in servers {
         s.host = validate_forward_host(&s.host, policy)?;
         if s.port == 0 {
             return Err(bad("invalid_upstream", "server port must be 1-65535"));
         }
-        if !weight_ok(s.weight) {
+        if !(1..=MAX_WEIGHT).contains(&s.weight) {
             return Err(bad("invalid_upstream", "server weight out of range"));
         }
         // ip_hash cannot be combined with backup servers (Angie rejects it).
-        if up.method == BalanceMethod::IpHash && s.backup {
+        if method == BalanceMethod::IpHash && s.backup {
             return Err(bad(
                 "invalid_upstream",
                 "ip_hash balancing cannot be combined with backup servers",
             ));
         }
     }
-    Ok(up)
+    Ok(())
+}
+
+/// A shared upstream pool: a named set of backend servers with a balancing
+/// method and passive health, defined once and referenced by any number of
+/// proxy hosts through `upstream_pool_id`. Unlike a host's own [`Upstream`]
+/// there is no separate "primary" — every member is listed in `servers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpstreamPool {
+    pub id: i64,
+    pub name: String,
+    pub servers: Vec<UpstreamServer>,
+    pub method: BalanceMethod,
+    pub max_fails: u32,
+    pub fail_timeout_secs: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl UpstreamPool {
+    /// The name of the generated `upstream` block (and its metrics zone). Keyed
+    /// by id so renaming a pool never touches the hosts that proxy to it.
+    pub fn zone(id: i64) -> String {
+        format!("pool_{id}")
+    }
+}
+
+/// Create/update payload for a shared upstream pool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpstreamPoolInput {
+    pub name: String,
+    pub servers: Vec<UpstreamServer>,
+    #[serde(default)]
+    pub method: BalanceMethod,
+    #[serde(default = "default_max_fails")]
+    pub max_fails: u32,
+    #[serde(default = "default_fail_timeout")]
+    pub fail_timeout_secs: u32,
+}
+
+pub const MAX_UPSTREAM_POOL_NAME_LEN: usize = 64;
+/// A host's own pool is its primary plus `MAX_UPSTREAM_SERVERS` extras; a shared
+/// pool may hold as many members as that, so any host's servers fit in one.
+pub const MAX_UPSTREAM_POOL_SERVERS: usize = MAX_UPSTREAM_SERVERS + 1;
+
+/// Validate + normalize a shared upstream pool. The name is a UI label that is
+/// also written as a config comment, so it must stay on one line; servers get
+/// the same SSRF-guarded validation as any other upstream target.
+pub fn validate_upstream_pool_input(
+    mut input: UpstreamPoolInput,
+    policy: &UpstreamPolicy,
+) -> Result<UpstreamPoolInput, ApiError> {
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty() {
+        return Err(bad("invalid_name", "pool name must not be empty"));
+    }
+    if input.name.chars().count() > MAX_UPSTREAM_POOL_NAME_LEN {
+        return Err(bad("invalid_name", "pool name is too long"));
+    }
+    if input.name.chars().any(|c| c.is_control()) {
+        return Err(bad(
+            "invalid_name",
+            "pool name must not contain control characters",
+        ));
+    }
+    if input.servers.is_empty() {
+        return Err(bad(
+            "invalid_upstream",
+            "a pool needs at least one backend server",
+        ));
+    }
+    if input.servers.len() > MAX_UPSTREAM_POOL_SERVERS {
+        return Err(bad("invalid_upstream", "too many backend servers"));
+    }
+    if input.max_fails > MAX_FAILS {
+        return Err(bad("invalid_upstream", "max_fails is too high"));
+    }
+    if input.fail_timeout_secs == 0 || input.fail_timeout_secs > MAX_FAIL_TIMEOUT {
+        return Err(bad("invalid_upstream", "fail_timeout out of range"));
+    }
+    validate_upstream_servers(&mut input.servers, input.method, policy)?;
+    // Angie refuses an upstream made only of backup servers ("no servers in
+    // upstream") — a host's own pool can't hit this because its primary is
+    // never a backup, but a shared pool has no primary.
+    if input.servers.iter().all(|s| s.backup) {
+        return Err(bad(
+            "invalid_upstream",
+            "a pool needs at least one server that is not a backup",
+        ));
+    }
+    Ok(input)
 }
 
 /// Validate + normalize a rate-limit config. When disabled it is flattened to
@@ -875,6 +994,10 @@ pub struct ProxyHost {
     /// Availability checks. Empty = the host is not probed.
     pub health_checks: Vec<HealthCheck>,
     pub upstream: Upstream,
+    /// Shared [`UpstreamPool`] this host proxies to. When set, the pool IS the
+    /// backend: `forward_host` is empty, `forward_port` is 0 and `upstream` is
+    /// at its defaults (see [`validate_host_input`]).
+    pub upstream_pool_id: Option<i64>,
     pub mtls: Mtls,
     pub forward_auth: ForwardAuth,
     pub custom_headers: Vec<CustomHeader>,
@@ -948,7 +1071,12 @@ pub fn validate_proxy_tuning(mut p: ProxyTuning) -> Result<ProxyTuning, ApiError
 pub struct ProxyHostInput {
     pub domains: Vec<String>,
     pub forward_scheme: Scheme,
+    // Optional in the payload only so a host that references a shared pool can
+    // leave them out; without `upstream_pool_id` both are still required (an
+    // absent host / port fails validation like an empty one always did).
+    #[serde(default)]
     pub forward_host: String,
+    #[serde(default)]
     pub forward_port: u16,
     #[serde(default)]
     pub websockets_upgrade: bool,
@@ -986,6 +1114,10 @@ pub struct ProxyHostInput {
     pub rate_limit: RateLimit,
     #[serde(default)]
     pub upstream: Upstream,
+    /// Proxy to this shared upstream pool instead of the host's own
+    /// `forward_host:forward_port` (+ `upstream` extras).
+    #[serde(default)]
+    pub upstream_pool_id: Option<i64>,
     #[serde(default)]
     pub mtls: Mtls,
     #[serde(default)]
@@ -1226,9 +1358,21 @@ pub fn validate_host_input(
     }
     input.domains = domains;
 
-    input.forward_host = validate_forward_host(&input.forward_host, upstream_policy)?;
-    if input.forward_port == 0 {
-        return Err(bad("invalid_forward_port", "port must be 1-65535"));
+    if input.upstream_pool_id.is_some() {
+        // The shared pool is the backend. The host's own target and balancing
+        // config would never be used, so they are cleared rather than kept as
+        // stale values that every reader (list, health probe, CLI) could mistake
+        // for where the traffic goes. Whether the pool exists is checked by the
+        // caller, which has the database.
+        input.forward_host = String::new();
+        input.forward_port = 0;
+        input.upstream = Upstream::default();
+    } else {
+        input.forward_host = validate_forward_host(&input.forward_host, upstream_policy)?;
+        if input.forward_port == 0 {
+            return Err(bad("invalid_forward_port", "port must be 1-65535"));
+        }
+        input.upstream = validate_upstream(input.upstream, upstream_policy)?;
     }
 
     if input.locations.len() > MAX_LOCATIONS_PER_HOST {
@@ -1272,7 +1416,6 @@ pub fn validate_host_input(
     }
 
     input.rate_limit = validate_rate_limit(input.rate_limit)?;
-    input.upstream = validate_upstream(input.upstream, upstream_policy)?;
     input.mtls = validate_mtls(input.mtls)?;
     input.forward_auth = validate_forward_auth(input.forward_auth, upstream_policy)?;
     input.custom_headers = validate_custom_headers(input.custom_headers)?;
@@ -2632,6 +2775,7 @@ mod tests {
             advanced_snippet: Some("client_max_body_size 100m;".into()),
             rate_limit: RateLimit::default(),
             upstream: Upstream::default(),
+            upstream_pool_id: None,
             mtls: Mtls::default(),
             forward_auth: ForwardAuth::default(),
             custom_headers: vec![],
@@ -3150,6 +3294,163 @@ mod tests {
             &policy(),
         )
         .is_err());
+    }
+
+    fn pool_server(host: &str, port: u16) -> UpstreamServer {
+        UpstreamServer {
+            host: host.into(),
+            port,
+            ..Default::default()
+        }
+    }
+
+    fn pool_input(name: &str, servers: Vec<UpstreamServer>) -> UpstreamPoolInput {
+        UpstreamPoolInput {
+            name: name.into(),
+            servers,
+            method: BalanceMethod::RoundRobin,
+            max_fails: 1,
+            fail_timeout_secs: 10,
+        }
+    }
+
+    #[test]
+    fn upstream_pool_validation() {
+        // A valid pool: name trimmed, server hosts normalized.
+        let ok = validate_upstream_pool_input(
+            pool_input(
+                "  App backends  ",
+                vec![
+                    pool_server("APP.internal", 8080),
+                    pool_server("10.0.0.3", 8080),
+                ],
+            ),
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!(ok.name, "App backends");
+        assert_eq!(ok.servers[0].host, "app.internal");
+
+        // The name is written as a config comment: it must stay on one line.
+        for bad_name in ["", "   ", "a\nserver 127.0.0.1:8100;", &"x".repeat(65)] {
+            let err = validate_upstream_pool_input(
+                pool_input(bad_name, vec![pool_server("10.0.0.2", 80)]),
+                &policy(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "invalid_name", "name {bad_name:?}");
+        }
+
+        // A pool with no servers has nothing to proxy to.
+        let err = validate_upstream_pool_input(pool_input("empty", vec![]), &policy()).unwrap_err();
+        assert_eq!(err.code, "invalid_upstream");
+
+        // Servers go through the same SSRF-guarded validation as any upstream:
+        // injection and (without the opt-in) loopback are both refused.
+        assert!(validate_upstream_pool_input(
+            pool_input(
+                "evil",
+                vec![pool_server("1.2.3.4; } location /x { root /; ", 80)]
+            ),
+            &policy(),
+        )
+        .is_err());
+        let err = validate_upstream_pool_input(
+            pool_input("local", vec![pool_server("127.0.0.1", 8100)]),
+            &policy(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "forbidden_forward_host");
+
+        // Port 0 and an out-of-range weight are rejected per server.
+        assert!(validate_upstream_pool_input(
+            pool_input("p", vec![pool_server("10.0.0.2", 0)]),
+            &policy()
+        )
+        .is_err());
+        let mut heavy = pool_server("10.0.0.2", 80);
+        heavy.weight = MAX_WEIGHT + 1;
+        assert!(validate_upstream_pool_input(pool_input("p", vec![heavy]), &policy()).is_err());
+
+        // Angie rejects an upstream made only of backups, and ip_hash + backup.
+        let backup = UpstreamServer {
+            backup: true,
+            ..pool_server("10.0.0.2", 80)
+        };
+        let err = validate_upstream_pool_input(pool_input("p", vec![backup.clone()]), &policy())
+            .unwrap_err();
+        assert!(err.message.contains("not a backup"), "{}", err.message);
+        let mut ip_hash = pool_input("p", vec![pool_server("10.0.0.1", 80), backup]);
+        ip_hash.method = BalanceMethod::IpHash;
+        assert!(validate_upstream_pool_input(ip_hash, &policy()).is_err());
+
+        // Size and passive-health bounds.
+        let too_many = (0..=MAX_UPSTREAM_POOL_SERVERS)
+            .map(|i| pool_server(&format!("10.0.1.{i}"), 80))
+            .collect();
+        assert!(validate_upstream_pool_input(pool_input("p", too_many), &policy()).is_err());
+        let mut zero_timeout = pool_input("p", vec![pool_server("10.0.0.2", 80)]);
+        zero_timeout.fail_timeout_secs = 0;
+        assert!(validate_upstream_pool_input(zero_timeout, &policy()).is_err());
+    }
+
+    /// The JSON a client sends for a host; fields left out take their defaults.
+    fn host_input(extra: serde_json::Value) -> ProxyHostInput {
+        let mut body = serde_json::json!({
+            "domains": ["a.example.com"],
+            "forward_scheme": "http",
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(body).unwrap()
+    }
+
+    #[test]
+    fn host_on_a_shared_pool_needs_no_target_of_its_own() {
+        // With a pool, forward_host/port may be left out entirely…
+        let ok = validate_host_input(
+            host_input(serde_json::json!({ "upstream_pool_id": 3 })),
+            false,
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!(ok.upstream_pool_id, Some(3));
+        assert_eq!((ok.forward_host.as_str(), ok.forward_port), ("", 0));
+
+        // …and whatever the client still sends for the host's own upstream is
+        // cleared, not kept as stale data: the pool is the backend. That covers
+        // a target the SSRF guard would otherwise have refused — it is dropped,
+        // never stored, so it cannot come back to life when the pool is unset.
+        let ok = validate_host_input(
+            host_input(serde_json::json!({
+                "upstream_pool_id": 3,
+                "forward_host": "127.0.0.1",
+                "forward_port": 8100,
+                "upstream": {
+                    "method": "least_conn",
+                    "primary_weight": 5,
+                    "servers": [{ "host": "10.0.0.9", "port": 80 }],
+                },
+            })),
+            false,
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!((ok.forward_host.as_str(), ok.forward_port), ("", 0));
+        assert_eq!(ok.upstream, Upstream::default());
+
+        // Without a pool the target is as mandatory as it ever was.
+        let err =
+            validate_host_input(host_input(serde_json::json!({})), false, &policy()).unwrap_err();
+        assert_eq!(err.code, "invalid_forward_host");
+        let err = validate_host_input(
+            host_input(serde_json::json!({ "forward_host": "10.0.0.1" })),
+            false,
+            &policy(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_forward_port");
     }
 
     #[test]

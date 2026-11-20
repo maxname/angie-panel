@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, Loader2, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Server,
+  ShieldCheck,
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -24,7 +32,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, ApiError, type Cert, type Host } from '@/lib/api'
+import { api, ApiError, type Cert, type Host, type UpstreamPool } from '@/lib/api'
 import { toast } from '@/lib/toast'
 
 export function HostsPage() {
@@ -61,6 +69,14 @@ export function HostsPage() {
 
   const certsById = new Map(
     (certsQuery.data?.certificates ?? []).map((cert) => [cert.id, cert]),
+  )
+  // Needed to name the shared pool a host proxies to (it has no host:port).
+  const poolsQuery = useQuery({
+    queryKey: ['upstream-pools'],
+    queryFn: () => api.listUpstreamPools(),
+  })
+  const poolsById = new Map(
+    (poolsQuery.data?.upstream_pools ?? []).map((pool) => [pool.id, pool]),
   )
 
   const openCreate = () => {
@@ -137,6 +153,11 @@ export function HostsPage() {
                         ? certsById.get(host.certificate_id)
                         : undefined
                     }
+                    pool={
+                      host.upstream_pool_id != null
+                        ? poolsById.get(host.upstream_pool_id)
+                        : undefined
+                    }
                     onEdit={() => openEdit(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
@@ -162,11 +183,14 @@ export function HostsPage() {
 interface HostRowProps {
   host: Host
   cert: Cert | undefined
+  /** The shared pool the host proxies to; undefined for a host with its own
+   *  target, and while the pool list is still loading. */
+  pool: UpstreamPool | undefined
   onEdit: () => void
   onDelete: () => void
 }
 
-function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
+function HostRow({ host, cert, pool, onEdit, onDelete }: HostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -189,7 +213,11 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
     },
   })
 
-  const target = `${host.forward_scheme}://${host.forward_host}:${host.forward_port}`
+  // A host on a shared pool has no host:port of its own — name the pool.
+  const onPool = host.upstream_pool_id !== null
+  const target = onPool
+    ? `${host.forward_scheme}://${pool?.name ?? '…'}`
+    : `${host.forward_scheme}://${host.forward_host}:${host.forward_port}`
   // Only probed hosts get a bar. Config toggled off is not "down".
   const probed = host.enabled && host.health_checks.some((c) => c.enabled)
 
@@ -241,7 +269,19 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
           </Badge>
         )}
 
-        <span className="font-mono text-xs text-muted-foreground">{target}</span>
+        <span
+          className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground"
+          title={onPool ? t('hosts.table.pool') : undefined}
+        >
+          {onPool && (
+            <Server
+              className="size-3.5 shrink-0"
+              role="img"
+              aria-label={t('hosts.table.pool')}
+            />
+          )}
+          {target}
+        </span>
 
         {cert && (
           <span

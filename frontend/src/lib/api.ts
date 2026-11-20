@@ -131,6 +131,31 @@ export interface Upstream {
   fail_timeout_secs: number
 }
 
+/** A shared upstream pool: named backend servers (with balancing and passive
+ *  health) defined once and referenced by any number of proxy hosts. Unlike a
+ *  host's own `Upstream` it has no separate primary — every member is in
+ *  `servers`. */
+export interface UpstreamPool {
+  id: number
+  name: string
+  servers: UpstreamServer[]
+  method: BalanceMethod
+  max_fails: number
+  fail_timeout_secs: number
+  /** Unix timestamps, seconds. */
+  created_at: number
+  updated_at: number
+}
+
+/** UpstreamPool without id/timestamps — the create/update payload. */
+export interface UpstreamPoolInput {
+  name: string
+  servers: UpstreamServer[]
+  method?: BalanceMethod
+  max_fails?: number
+  fail_timeout_secs?: number
+}
+
 export interface Ban {
   id: number
   /** Bare IP or IP/CIDR (v4 or v6). */
@@ -267,6 +292,7 @@ export interface Host {
   id: number
   domains: string[]
   forward_scheme: ForwardScheme
+  /** Empty (and the port 0) when the host proxies to a shared pool instead. */
   forward_host: string
   forward_port: number
   websockets_upgrade: boolean
@@ -285,6 +311,9 @@ export interface Host {
   advanced_snippet: string | null
   rate_limit: RateLimit
   upstream: Upstream
+  /** Shared upstream pool this host proxies to, instead of its own
+   *  forward_host:forward_port (+ `upstream`). null = the host's own. */
+  upstream_pool_id: number | null
   mtls: Mtls
   forward_auth: ForwardAuth
   custom_headers: CustomHeader[]
@@ -321,6 +350,9 @@ export interface HostInput {
   advanced_snippet?: string | null
   rate_limit?: RateLimit
   upstream?: Upstream
+  /** When set, the server ignores (and clears) forward_host / forward_port /
+   *  upstream: the pool is the backend. */
+  upstream_pool_id?: number | null
   mtls?: Mtls
   forward_auth?: ForwardAuth
   custom_headers?: CustomHeader[]
@@ -754,7 +786,10 @@ export interface DashboardHost {
   id: number
   domains: string[]
   enabled: boolean
+  /** `scheme://host:port`, or `scheme://<pool name>` when `upstream_pool` is set. */
   forward: string
+  /** The shared upstream pool the host proxies to, if any. */
+  upstream_pool: { id: number; name: string } | null
   certificate_id: number | null
   https_active: boolean
   /** null when the host has no traffic yet or Angie's status API is down. */
@@ -1138,6 +1173,18 @@ export const api = {
   deleteAccessList: (id: number) =>
     request<OkResponse>('DELETE', `/api/access-lists/${id}`),
 
+  listUpstreamPools: () =>
+    request<{ upstream_pools: UpstreamPool[] }>('GET', '/api/upstream-pools'),
+
+  createUpstreamPool: (body: UpstreamPoolInput) =>
+    request<UpstreamPool>('POST', '/api/upstream-pools', body),
+
+  updateUpstreamPool: (id: number, body: UpstreamPoolInput) =>
+    request<UpstreamPool>('PUT', `/api/upstream-pools/${id}`, body),
+
+  deleteUpstreamPool: (id: number) =>
+    request<OkResponse>('DELETE', `/api/upstream-pools/${id}`),
+
   exportConfig: () => request<unknown>('GET', '/api/export'),
 
   importConfig: (doc: unknown) =>
@@ -1149,6 +1196,7 @@ export interface ImportResult {
   imported: {
     certificates: number
     access_lists: number
+    upstream_pools: number
     hosts: number
     redirect_hosts: number
     dead_hosts: number

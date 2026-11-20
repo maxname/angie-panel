@@ -2655,3 +2655,423 @@ async fn certificate_authorities_eab_and_shared_account() {
         "{acme}"
     );
 }
+
+/// Shared upstream pools end to end: validation, the host binding in both
+/// directions, what reaches the generated config, and the delete guard.
+#[tokio::test]
+async fn upstream_pool_crud_and_host_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie, state) = authed_app_with_state(dir.path()).await;
+
+    // Servers get the same SSRF-guarded validation as any upstream target.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({
+            "name": "evil",
+            "servers": [{ "host": "1.2.3.4; } location /x { root /; ", "port": 80 }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({ "name": "status", "servers": [{ "host": "127.0.0.1", "port": 8100 }] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("forbidden_forward_host"));
+    // A pool with nothing in it is not a pool.
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({ "name": "empty", "servers": [] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Create one; omitted fields take the same defaults as a host's upstream.
+    let (status, pool) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({
+            "name": " apps ",
+            "method": "least_conn",
+            "servers": [
+                { "host": "10.0.0.2", "port": 8080, "weight": 2 },
+                { "host": "10.0.0.3", "port": 8080, "backup": true }
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pool}");
+    let pool_id = pool["id"].as_i64().unwrap();
+    assert_eq!(pool["name"], json!("apps"));
+    assert_eq!(pool["max_fails"], json!(1));
+    assert_eq!(pool["fail_timeout_secs"], json!(10));
+    assert_eq!(pool["servers"][1]["weight"], json!(1));
+
+    // Names are how a pool is picked in the host editor — no duplicates.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({ "name": "apps", "servers": [{ "host": "10.0.0.9", "port": 80 }] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], json!("upstream_pool_name_taken"));
+
+    // A host cannot point at a pool that does not exist…
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(json!({
+            "domains": ["a.example.com"], "forward_scheme": "http",
+            "upstream_pool_id": 999
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // …and with a real one it needs no forward host of its own. Anything sent
+    // for the host's own upstream is dropped: the pool is the backend.
+    let (status, host) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(json!({
+            "domains": ["a.example.com"], "forward_scheme": "https",
+            "upstream_pool_id": pool_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{host}");
+    let host_a = host["id"].as_i64().unwrap();
+    assert_eq!(host["upstream_pool_id"], json!(pool_id));
+    assert_eq!(host["forward_host"], json!(""));
+    assert_eq!(host["forward_port"], json!(0));
+
+    let (status, host) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(json!({
+            "domains": ["b.example.com"], "forward_scheme": "http",
+            "forward_host": "192.168.1.10", "forward_port": 8123,
+            "upstream": { "servers": [{ "host": "10.9.9.9", "port": 80 }] },
+            "upstream_pool_id": pool_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{host}");
+    let host_b = host["id"].as_i64().unwrap();
+    assert_eq!(host["forward_host"], json!(""));
+    assert_eq!(host["upstream"]["servers"], json!([]));
+
+    // Generated config: the pool once, both hosts proxying to it by name, and
+    // no per-host upstream block. It passes the panel's own linter (build_fileset
+    // would have failed otherwise).
+    let files = crate::settings::build_fileset(&state).await.unwrap();
+    let pools_file = &files["17-upstream-pools.conf"];
+    assert_eq!(
+        pools_file.matches("upstream pool_").count(),
+        1,
+        "{pools_file}"
+    );
+    assert!(pools_file.contains("# apps\n"), "{pools_file}");
+    assert!(pools_file.contains("    least_conn;\n"), "{pools_file}");
+    assert!(
+        pools_file.contains("    server 10.0.0.2:8080 weight=2;\n"),
+        "{pools_file}"
+    );
+    assert!(
+        pools_file.contains("    server 10.0.0.3:8080 backup;\n"),
+        "{pools_file}"
+    );
+    let a = &files[&format!("20-host-{host_a}-a-example-com.conf")];
+    assert!(
+        a.contains(&format!("proxy_pass https://pool_{pool_id};")),
+        "{a}"
+    );
+    assert!(!a.contains(&format!("upstream host_{host_a}")), "{a}");
+    let b = &files[&format!("20-host-{host_b}-b-example-com.conf")];
+    assert!(
+        b.contains(&format!("proxy_pass http://pool_{pool_id};")),
+        "{b}"
+    );
+    assert!(!b.contains("10.9.9.9"), "{b}");
+
+    // The dashboard names the pool instead of printing an empty host:port.
+    let (_, dash) = call(&app, &cookie, Method::GET, "/api/dashboard", None).await;
+    let row = dash["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["id"] == json!(host_a))
+        .unwrap();
+    assert_eq!(row["forward"], json!("https://apps"));
+    assert_eq!(
+        row["upstream_pool"],
+        json!({ "id": pool_id, "name": "apps" })
+    );
+
+    // Editing the pool is one change that reaches every host on it.
+    let (status, pool) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        &format!("/api/upstream-pools/{pool_id}"),
+        Some(json!({
+            "name": "apps",
+            "servers": [{ "host": "10.0.0.7", "port": 9000 }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pool}");
+    assert_eq!(pool["method"], json!("round_robin"));
+    let files = crate::settings::build_fileset(&state).await.unwrap();
+    assert!(files["17-upstream-pools.conf"].contains("server 10.0.0.7:9000;"));
+    assert!(!files["17-upstream-pools.conf"].contains("10.0.0.2"));
+
+    // A pool that hosts still proxy to cannot be deleted; the error names them.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::DELETE,
+        &format!("/api/upstream-pools/{pool_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], json!("upstream_pool_in_use"));
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("a.example.com") && message.contains("b.example.com"),
+        "{message}"
+    );
+
+    // Moving a host back to its own upstream needs a real target again…
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::PUT,
+        &format!("/api/hosts/{host_a}"),
+        Some(json!({ "domains": ["a.example.com"], "forward_scheme": "http" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("invalid_forward_host"));
+    for (id, domain) in [(host_a, "a.example.com"), (host_b, "b.example.com")] {
+        let (status, host) = call(
+            &app,
+            &cookie,
+            Method::PUT,
+            &format!("/api/hosts/{id}"),
+            Some(json!({
+                "domains": [domain], "forward_scheme": "http",
+                "forward_host": "192.168.1.10", "forward_port": 8123
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{host}");
+        assert_eq!(host["upstream_pool_id"], Value::Null);
+    }
+
+    // …after which nothing uses the pool: it leaves the config and can go.
+    let files = crate::settings::build_fileset(&state).await.unwrap();
+    assert!(!files.contains_key("17-upstream-pools.conf"));
+    assert!(files[&format!("20-host-{host_a}-a-example-com.conf")]
+        .contains(&format!("upstream host_{host_a} {{")));
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::DELETE,
+        &format!("/api/upstream-pools/{pool_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::GET,
+        &format!("/api/upstream-pools/{pool_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, list) = call(&app, &cookie, Method::GET, "/api/upstream-pools", None).await;
+    assert_eq!(list["upstream_pools"], json!([]));
+}
+
+/// A backup must carry the pools and the hosts' references to them, and an
+/// import must not smuggle a dangling reference or an unvalidated server in.
+#[tokio::test]
+async fn export_import_carries_upstream_pools() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+
+    let (_, pool) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/upstream-pools",
+        Some(json!({
+            "name": "apps", "method": "ip_hash", "max_fails": 3, "fail_timeout_secs": 30,
+            "servers": [{ "host": "10.0.0.2", "port": 8080, "weight": 4, "down": true },
+                        { "host": "10.0.0.3", "port": 8080 }]
+        })),
+    )
+    .await;
+    let pool_id = pool["id"].as_i64().unwrap();
+    let (status, _) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(json!({
+            "domains": ["a.example.com"], "forward_scheme": "http",
+            "upstream_pool_id": pool_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, doc) = call(&app, &cookie, Method::GET, "/api/export", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(doc["upstream_pools"][0]["name"], json!("apps"));
+    assert_eq!(doc["hosts"][0]["upstream_pool_id"], json!(pool_id));
+
+    // Round trip: the export restores as-is, pool and binding intact.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/import",
+        Some(doc.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["imported"]["upstream_pools"], json!(1));
+    let (_, restored) = call(
+        &app,
+        &cookie,
+        Method::GET,
+        &format!("/api/upstream-pools/{pool_id}"),
+        None,
+    )
+    .await;
+    for field in [
+        "name",
+        "servers",
+        "method",
+        "max_fails",
+        "fail_timeout_secs",
+    ] {
+        assert_eq!(restored[field], pool[field], "{field}");
+    }
+    let (_, hosts) = call(&app, &cookie, Method::GET, "/api/hosts", None).await;
+    assert_eq!(hosts["hosts"][0]["upstream_pool_id"], json!(pool_id));
+
+    // A host that references a pool the document does not contain is refused —
+    // it would be left with no backend.
+    let mut dangling = doc.clone();
+    dangling["upstream_pools"] = json!([]);
+    let (status, body) = call(&app, &cookie, Method::POST, "/api/import", Some(dangling)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("upstream_pool_id references an upstream pool not present"),
+        "{body}"
+    );
+
+    // Imported pools are validated like created ones: no injection, no dupes.
+    let mut evil = doc.clone();
+    evil["upstream_pools"][0]["servers"][0]["host"] = json!("10.0.0.2; } server { listen 81; ");
+    let (status, _) = call(&app, &cookie, Method::POST, "/api/import", Some(evil)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut dupe = doc.clone();
+    let mut twin = doc["upstream_pools"][0].clone();
+    twin["id"] = json!(pool_id + 1);
+    dupe["upstream_pools"].as_array_mut().unwrap().push(twin);
+    let (status, body) = call(&app, &cookie, Method::POST, "/api/import", Some(dupe)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate name"),
+        "{body}"
+    );
+
+    // None of the rejected imports changed anything (all-or-nothing).
+    let (_, list) = call(&app, &cookie, Method::GET, "/api/upstream-pools", None).await;
+    assert_eq!(list["upstream_pools"].as_array().unwrap().len(), 1);
+
+    // A backup from before pools existed has no such key and still restores.
+    let mut legacy = doc;
+    legacy.as_object_mut().unwrap().remove("upstream_pools");
+    legacy["hosts"][0]["upstream_pool_id"] = Value::Null;
+    legacy["hosts"][0]["forward_host"] = json!("192.168.1.10");
+    legacy["hosts"][0]["forward_port"] = json!(8123);
+    let (status, body) = call(&app, &cookie, Method::POST, "/api/import", Some(legacy)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, list) = call(&app, &cookie, Method::GET, "/api/upstream-pools", None).await;
+    assert_eq!(list["upstream_pools"], json!([]));
+}
+
+/// A pool edit changes what hosts proxy to, so it must move the revision: the
+/// reconciler auto-applies only when the revision is unchanged since the last
+/// apply, and must never push an unreviewed backend change on its own.
+#[tokio::test]
+async fn hosts_revision_tracks_upstream_pool_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    assert_eq!(crate::repo::hosts_revision(&state.db).await.unwrap(), 0);
+    let input = crate::model::UpstreamPoolInput {
+        name: "apps".into(),
+        servers: vec![crate::model::UpstreamServer {
+            host: "10.0.0.2".into(),
+            port: 8080,
+            ..Default::default()
+        }],
+        method: crate::model::BalanceMethod::RoundRobin,
+        max_fails: 1,
+        fail_timeout_secs: 10,
+    };
+    let id = crate::repo::insert_upstream_pool(&state.db, &input)
+        .await
+        .unwrap();
+    assert!(crate::repo::hosts_revision(&state.db).await.unwrap() > 0);
+
+    // The foreign key is the backstop behind the API's in-use check: a pool a
+    // host still references cannot be deleted out from under it.
+    sqlx::query(
+        "INSERT INTO proxy_hosts (domains, forward_host, forward_port, upstream_pool_id, \
+         created_at, updated_at) VALUES ('[\"a.example.com\"]', '', 0, ?, 0, 0)",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    assert!(crate::repo::delete_upstream_pool(&state.db, id)
+        .await
+        .is_err());
+}

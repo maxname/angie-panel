@@ -7,7 +7,7 @@ use axum::Router;
 use crate::state::AppState;
 use crate::{
     access_lists, acme_hook, apply_api, assets, audit, auth, bans, certs, dashboard, export_import,
-    geo, hosts, other_hosts, security, sni_routers, streams, system, tokens, users,
+    geo, hosts, other_hosts, security, sni_routers, streams, system, tokens, upstream_pools, users,
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -69,6 +69,16 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(access_lists::get_one)
                 .put(access_lists::update)
                 .delete(access_lists::delete),
+        )
+        .route(
+            "/upstream-pools",
+            get(upstream_pools::list).post(upstream_pools::create),
+        )
+        .route(
+            "/upstream-pools/{id}",
+            get(upstream_pools::get_one)
+                .put(upstream_pools::update)
+                .delete(upstream_pools::delete),
         )
         .route(
             "/redirect-hosts",

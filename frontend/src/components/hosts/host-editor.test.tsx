@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import i18n from '@/i18n'
+import type { Host, UpstreamPool } from '@/lib/api'
 import { isValidDomain } from '@/lib/domain'
 
 import { HostEditorDialog, HostEditorForm } from './host-editor-dialog'
@@ -672,5 +673,262 @@ describe('host editor — request a new certificate', () => {
     const body = JSON.parse(String((post![1] as RequestInit).body))
     expect(body.certificate_id).toBeNull()
     expect(body.new_certificate).toEqual({ challenge: 'dns', dns_provider: '3' })
+  })
+})
+
+describe('host editor shared upstream pool', () => {
+  const apps: UpstreamPool = {
+    id: 3,
+    name: 'apps',
+    method: 'least_conn',
+    max_fails: 1,
+    fail_timeout_secs: 10,
+    servers: [
+      { host: '10.0.0.2', port: 8080, weight: 2, backup: false, down: false },
+      { host: '10.0.0.3', port: 8080, weight: 1, backup: true, down: false },
+    ],
+    created_at: 1751700000,
+    updated_at: 1751700000,
+  }
+
+  // A host as the API returns it once it proxies to a pool: no target of its own.
+  const pooledHost: Host = {
+    id: 7,
+    domains: ['example.com'],
+    forward_scheme: 'http',
+    forward_host: '',
+    forward_port: 0,
+    websockets_upgrade: false,
+    block_exploits: false,
+    cache_assets: false,
+    http2: true,
+    http3: false,
+    force_ssl: true,
+    health_checks: [],
+    hsts: false,
+    hsts_subdomains: false,
+    trust_forwarded_proto: false,
+    certificate_id: null,
+    access_list_id: null,
+    locations: [],
+    advanced_snippet: null,
+    rate_limit: { enabled: false, rps: 0, burst: 0, nodelay: false, conn: 0 },
+    upstream: {
+      servers: [],
+      method: 'round_robin',
+      primary_weight: 1,
+      max_fails: 1,
+      fail_timeout_secs: 10,
+    },
+    upstream_pool_id: 3,
+    mtls: { ca_pem: null, optional: false },
+    forward_auth: {
+      enabled: false,
+      verify_url: '',
+      sign_in_url: null,
+      copy_headers: [],
+    },
+    custom_headers: [],
+    maintenance: { enabled: false, title: '', message: '' },
+    gzip: { enabled: false, comp_level: 0, min_length: 0, types: [] },
+    error_pages: {
+      not_found: { enabled: false, title: '', message: '' },
+      server_error: { enabled: false, title: '', message: '' },
+    },
+    proxy_tuning: {
+      client_max_body_size: '',
+      connect_timeout_secs: 0,
+      read_timeout_secs: 0,
+      send_timeout_secs: 0,
+      disable_buffering: false,
+    },
+    enabled: true,
+    created_at: 1751700000,
+    updated_at: 1751700000,
+  }
+
+  /** A stateful stand-in for the API: lists the pools, creates new ones (which
+   *  then show up in the list) and accepts a host save. */
+  function stubPoolApi(pools: UpstreamPool[]) {
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/upstream-pools' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ upstream_pools: pools }))
+      }
+      if (input === '/api/upstream-pools' && method === 'POST') {
+        const created: UpstreamPool = {
+          ...JSON.parse(String(init?.body)),
+          id: 9,
+          created_at: 1751700000,
+          updated_at: 1751700000,
+        }
+        pools = [...pools, created]
+        return Promise.resolve(jsonResponse(created))
+      }
+      if (input.startsWith('/api/hosts') && method !== 'GET') {
+        return Promise.resolve(jsonResponse({ id: 7 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  function renderHostForm(host: Host | null) {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <HostEditorForm host={host} onDone={() => {}} />
+      </QueryClientProvider>,
+    )
+  }
+
+  function hostSaves(fetchMock: ReturnType<typeof stubPoolApi>) {
+    return fetchMock.mock.calls.filter(
+      ([url, init]) => url.startsWith('/api/hosts') && init?.method !== undefined,
+    )
+  }
+
+  it('proxies a new host to a picked pool, with no forward host of its own', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubPoolApi([apps])
+    renderHostForm(null)
+
+    // A domain and nothing else: no forward host is typed anywhere.
+    await user.type(screen.getByLabelText('Domain names'), 'example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    await user.click(screen.getByRole('tab', { name: 'Upstreams' }))
+    await user.click(
+      screen.getByRole('combobox', { name: 'Backend servers come from' }),
+    )
+    await user.click(await screen.findByRole('option', { name: 'Pool: apps' }))
+
+    // The pool's servers are shown read-only; the host's own server list and
+    // balancing controls are gone, since they would not be used.
+    expect(screen.getByText('10.0.0.2:8080')).toBeInTheDocument()
+    expect(screen.getByText('weight 2')).toBeInTheDocument()
+    expect(screen.getByText('10.0.0.3:8080')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add server' })).toBeNull()
+    expect(screen.queryByLabelText('Balancing method')).toBeNull()
+
+    // Details names the pool where the host:port fields were.
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    expect(screen.getByLabelText('Upstream pool')).toHaveValue('apps')
+    expect(screen.queryByLabelText('Forward host')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await vi.waitFor(() => expect(hostSaves(fetchMock)).toHaveLength(1))
+    const body = JSON.parse(String(hostSaves(fetchMock)[0][1]?.body))
+    expect(body.upstream_pool_id).toBe(3)
+    expect(body.forward_host).toBe('')
+    expect(body.forward_port).toBe(0)
+    // Balancing and servers are the pool's — the host sends none of its own.
+    expect(body).not.toHaveProperty('upstream')
+  })
+
+  it('creates a pool from the host editor and selects it, without saving the host', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubPoolApi([apps])
+    renderHostForm(null)
+
+    await user.type(screen.getByLabelText('Domain names'), 'example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('tab', { name: 'Upstreams' }))
+    await user.click(screen.getByRole('button', { name: 'New pool' }))
+
+    // The pool dialog is modal: its fields and its Save are the reachable ones.
+    const dialog = await screen.findByRole('dialog', { name: 'New upstream pool' })
+    await user.type(screen.getByLabelText('Name'), 'fresh')
+    await user.type(screen.getByLabelText('Server host / IP'), '10.0.0.9')
+    await user.type(screen.getByLabelText('Server port'), '9000')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await vi.waitFor(() => expect(dialog).not.toBeInTheDocument())
+    const created = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/upstream-pools' && init?.method === 'POST',
+    )
+    expect(JSON.parse(String(created![1]?.body))).toEqual({
+      name: 'fresh',
+      method: 'round_robin',
+      max_fails: 1,
+      fail_timeout_secs: 10,
+      servers: [
+        { host: '10.0.0.9', port: 9000, weight: 1, backup: false, down: false },
+      ],
+    })
+    // Saving the pool must not have saved the host it was created from.
+    expect(hostSaves(fetchMock)).toHaveLength(0)
+
+    // The new pool is already the host's backend — no hunting for it in the list.
+    expect(
+      await screen.findByRole('combobox', { name: 'Backend servers come from' }),
+    ).toHaveTextContent('Pool: fresh')
+    expect(screen.getByText('10.0.0.9:9000')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await vi.waitFor(() => expect(hostSaves(fetchMock)).toHaveLength(1))
+    const body = JSON.parse(String(hostSaves(fetchMock)[0][1]?.body))
+    expect(body.upstream_pool_id).toBe(9)
+  })
+
+  it('needs a real target again when a pooled host goes back to its own servers', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubPoolApi([apps])
+    renderHostForm(pooledHost)
+
+    // Opened on a pool: Details says so.
+    expect(await screen.findByDisplayValue('apps')).toBe(
+      screen.getByLabelText('Upstream pool'),
+    )
+
+    // "Change" leads to the section where the backend is chosen.
+    await user.click(screen.getByRole('button', { name: 'Change' }))
+    await user.click(
+      screen.getByRole('combobox', { name: 'Backend servers come from' }),
+    )
+    await user.click(
+      await screen.findByRole('option', { name: 'This host’s own servers' }),
+    )
+    expect(screen.getByRole('button', { name: 'Add server' })).toBeInTheDocument()
+
+    // The stored target was empty (port 0); the form offers the usual default
+    // port and insists on a host rather than saving a host that goes nowhere.
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Enter the forward host.')).toBeInTheDocument()
+    expect(screen.getByLabelText('Port')).toHaveValue(80)
+    expect(hostSaves(fetchMock)).toHaveLength(0)
+
+    await user.type(screen.getByLabelText('Forward host'), '10.0.0.5')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await vi.waitFor(() => expect(hostSaves(fetchMock)).toHaveLength(1))
+    const [url, init] = hostSaves(fetchMock)[0]
+    expect(url).toBe('/api/hosts/7')
+    const body = JSON.parse(String(init?.body))
+    expect(body.upstream_pool_id).toBeNull()
+    expect(body.forward_host).toBe('10.0.0.5')
+    expect(body.forward_port).toBe(80)
+  })
+
+  it('says so when the pool a host points at has been deleted', async () => {
+    const user = userEvent.setup()
+    stubPoolApi([])
+    renderHostForm(pooledHost)
+
+    await user.click(screen.getByRole('tab', { name: 'Upstreams' }))
+    expect(
+      await screen.findByText('This pool no longer exists. Pick another one.'),
+    ).toBeInTheDocument()
   })
 })

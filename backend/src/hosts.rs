@@ -51,11 +51,12 @@ async fn check_domain_uniqueness(
     Ok(())
 }
 
-/// Reject a create/update that references a certificate or access list which
-/// doesn't exist. Without this the generator would emit a dangling
-/// `$acme_cert_<name>` reference, or (for a bad access_list_id) the host would
-/// silently lose its intended IP/basic-auth restriction — a fail-open. Streams
-/// already do the cert check; hosts must too.
+/// Reject a create/update that references a certificate, access list or
+/// upstream pool which doesn't exist. Without this the generator would emit a
+/// dangling `$acme_cert_<name>` reference, or (for a bad access_list_id) the
+/// host would silently lose its intended IP/basic-auth restriction — a
+/// fail-open — or (for a bad upstream_pool_id) have no backend to proxy to.
+/// Streams already do the cert check; hosts must too.
 async fn check_refs(state: &AppState, input: &ProxyHostInput) -> ApiResult<()> {
     if let Some(cid) = input.certificate_id {
         if repo::get_cert(&state.db, cid).await?.is_none() {
@@ -65,6 +66,11 @@ async fn check_refs(state: &AppState, input: &ProxyHostInput) -> ApiResult<()> {
     if let Some(aid) = input.access_list_id {
         if repo::get_access_list(&state.db, aid).await?.is_none() {
             return Err(ApiError::not_found(format!("no access list #{aid}")));
+        }
+    }
+    if let Some(pid) = input.upstream_pool_id {
+        if repo::get_upstream_pool(&state.db, pid).await?.is_none() {
+            return Err(ApiError::not_found(format!("no upstream pool #{pid}")));
         }
     }
     Ok(())
@@ -289,6 +295,7 @@ fn host_to_input(h: &ProxyHost, enabled: bool) -> ProxyHostInput {
         advanced_snippet: h.advanced_snippet.clone(),
         rate_limit: h.rate_limit.clone(),
         upstream: h.upstream.clone(),
+        upstream_pool_id: h.upstream_pool_id,
         mtls: h.mtls.clone(),
         forward_auth: h.forward_auth.clone(),
         custom_headers: h.custom_headers.clone(),

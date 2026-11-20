@@ -43,6 +43,7 @@ const sampleHost: Host = {
     max_fails: 1,
     fail_timeout_secs: 10,
   },
+  upstream_pool_id: null,
   mtls: { ca_pem: null, optional: false },
   forward_auth: {
     enabled: false,
@@ -146,6 +147,41 @@ describe('proxy hosts page', () => {
     expect(screen.getByText('Enabled')).toBeInTheDocument()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/hosts', expect.anything())
+  })
+
+  it('names the shared pool for a host that has no target of its own', async () => {
+    // A host on a pool is stored with an empty forward host and port 0;
+    // printing that would read "http://:0".
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/hosts') {
+        return Promise.resolve(
+          jsonResponse({
+            hosts: [
+              {
+                ...sampleHost,
+                forward_scheme: 'https',
+                forward_host: '',
+                forward_port: 0,
+                upstream_pool_id: 3,
+              },
+            ],
+          }),
+        )
+      }
+      if (input === '/api/upstream-pools') {
+        return Promise.resolve(
+          jsonResponse({ upstream_pools: [{ id: 3, name: 'apps', servers: [] }] }),
+        )
+      }
+      return Promise.resolve(jsonResponse({ certificates: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderPage()
+
+    expect(await screen.findByText('https://apps')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Shared upstream pool' })).toBeInTheDocument()
+    expect(screen.queryByText(/:0/)).toBeNull()
   })
 
   it('shows an empty state when there are no hosts', async () => {
