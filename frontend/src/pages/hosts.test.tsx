@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -182,6 +182,55 @@ describe('proxy hosts page', () => {
     expect(await screen.findByText('https://apps')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Shared upstream pool' })).toBeInTheDocument()
     expect(screen.queryByText(/:0/)).toBeNull()
+  })
+
+  it('disables the ticked hosts with one request each, in list order', async () => {
+    // Three hosts; the middle one is already off. The API is stateful enough
+    // to show the refetch picking the change up.
+    let hosts = [
+      { ...sampleHost, id: 1, domains: ['a.example.com'], enabled: true },
+      { ...sampleHost, id: 2, domains: ['b.example.com'], enabled: false },
+      { ...sampleHost, id: 3, domains: ['c.example.com'], enabled: true },
+    ]
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const toggle = /^\/api\/hosts\/(\d+)\/(enable|disable)$/.exec(input)
+      if (toggle && init?.method === 'POST') {
+        const id = Number(toggle[1])
+        hosts = hosts.map((h) =>
+          h.id === id ? { ...h, enabled: toggle[2] === 'enable' } : h,
+        )
+        return Promise.resolve(jsonResponse({ ok: true }))
+      }
+      if (input === '/api/hosts') {
+        return Promise.resolve(jsonResponse({ hosts }))
+      }
+      if (input === '/api/upstream-pools') {
+        return Promise.resolve(jsonResponse({ upstream_pools: [] }))
+      }
+      return Promise.resolve(jsonResponse({ certificates: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByText('a.example.com')
+    expect(screen.getAllByText('Enabled')).toHaveLength(2)
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select all' }))
+    const bar = screen.getByRole('toolbar')
+    expect(within(bar).getByText('Selected: 3')).toBeInTheDocument()
+    await user.click(within(bar).getByRole('button', { name: 'Disable' }))
+
+    // The same single-host endpoint the row menu uses, once per host that was
+    // on — never for the one already off — and in the order of the list.
+    await vi.waitFor(() => expect(screen.queryByText('Enabled')).toBeNull())
+    const posts = fetchMock.mock.calls
+      .filter(([, init]) => init?.method === 'POST')
+      .map(([url]) => url)
+    expect(posts).toEqual(['/api/hosts/1/disable', '/api/hosts/3/disable'])
+    expect(screen.getAllByText('Disabled')).toHaveLength(3)
+    // Done: nothing is left ticked and the bar is gone.
+    expect(screen.queryByRole('toolbar')).toBeNull()
   })
 
   it('shows an empty state when there are no hosts', async () => {

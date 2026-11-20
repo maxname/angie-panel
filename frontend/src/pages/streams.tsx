@@ -3,6 +3,11 @@ import { Loader2, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
 import { ToggleRow } from '@/components/hosts/host-editor-fields'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -48,7 +53,15 @@ import {
   type StreamTls,
 } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const STREAM_BULK_ACTIONS = lifecycleActions<Stream>({
+  enable: api.enableStream,
+  disable: api.disableStream,
+  remove: api.deleteStream,
+})
 
 export function StreamsPage() {
   const { t } = useTranslation()
@@ -60,6 +73,8 @@ export function StreamsPage() {
     queryKey: ['streams'],
     queryFn: () => api.listStreams(),
   })
+  const queryClient = useQueryClient()
+  const selection = useSelection(streamsQuery.data?.streams ?? [])
   // The dashboard is the source of truth for whether the stream {} context is
   // active; reuse it so the enable banner shows only when it's actually off.
   const dashboardQuery = useQuery({
@@ -130,6 +145,7 @@ export function StreamsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('streams.table.incomingPort')}</TableHead>
                   <TableHead>{t('streams.table.forward')}</TableHead>
                   <TableHead>{t('streams.table.protocol')}</TableHead>
@@ -144,6 +160,7 @@ export function StreamsPage() {
                   <StreamRow
                     key={stream.id}
                     stream={stream}
+                    selection={selection}
                     onEdit={() => openEdit(stream)}
                     onDelete={() => setDeleteTarget(stream)}
                   />
@@ -153,6 +170,14 @@ export function StreamsPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(stream) => `:${stream.incoming_port}`}
+        actions={STREAM_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['streams'] })}
+        successNote={t('streams.unappliedBody')}
+      />
 
       <StreamEditorDialog
         open={editorOpen}
@@ -226,11 +251,12 @@ function protocolLabel(stream: Stream, t: (key: string) => string): string {
 
 interface StreamRowProps {
   stream: Stream
+  selection: Selection<Stream>
   onEdit: () => void
   onDelete: () => void
 }
 
-function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
+function StreamRow({ stream, selection, onEdit, onDelete }: StreamRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -254,7 +280,8 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
   })
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(stream.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={stream} name={`:${stream.incoming_port}`} />
       <TableCell>
         <span className="font-mono text-sm">{stream.incoming_port}</span>
       </TableCell>

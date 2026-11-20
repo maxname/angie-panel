@@ -99,7 +99,8 @@ nothing running on the box can.
 an audit log, and role-based users.
 
 **Operations.** Config export/import as JSON, apply history, drift detection, and a
-dashboard fed by Angie's own status API.
+dashboard fed by Angie's own status API. Lists take several rows at once: tick them to
+enable, disable or delete in one go, with a per-row report of anything that was refused.
 
 ## Architecture
 

@@ -4,6 +4,11 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
+import {
   DomainChipsField,
   HostAdvancedField,
   HostSslFields,
@@ -57,7 +62,15 @@ import {
   type RedirectHostInput,
 } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const REDIRECT_BULK_ACTIONS = lifecycleActions<RedirectHost>({
+  enable: api.enableRedirectHost,
+  disable: api.disableRedirectHost,
+  remove: api.deleteRedirectHost,
+})
 
 export function RedirectHostsPage() {
   const { t } = useTranslation()
@@ -69,6 +82,8 @@ export function RedirectHostsPage() {
     queryKey: ['redirect-hosts'],
     queryFn: () => api.listRedirectHosts(),
   })
+  const queryClient = useQueryClient()
+  const selection = useSelection(hostsQuery.data?.redirect_hosts ?? [])
 
   const openCreate = () => {
     setEditing(null)
@@ -120,6 +135,7 @@ export function RedirectHostsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('redirectHosts.table.domains')}</TableHead>
                   <TableHead>{t('redirectHosts.table.target')}</TableHead>
                   <TableHead>{t('redirectHosts.table.ssl')}</TableHead>
@@ -134,6 +150,7 @@ export function RedirectHostsPage() {
                   <RedirectHostRow
                     key={host.id}
                     host={host}
+                    selection={selection}
                     onEdit={() => openEdit(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
@@ -143,6 +160,14 @@ export function RedirectHostsPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(host) => host.domains[0] ?? `#${host.id}`}
+        actions={REDIRECT_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['redirect-hosts'] })}
+        successNote={t('redirectHosts.unappliedBody')}
+      />
 
       <RedirectHostEditorDialog
         open={editorOpen}
@@ -170,11 +195,12 @@ function formatTarget(host: RedirectHost): string {
 
 interface RedirectHostRowProps {
   host: RedirectHost
+  selection: Selection<RedirectHost>
   onEdit: () => void
   onDelete: () => void
 }
 
-function RedirectHostRow({ host, onEdit, onDelete }: RedirectHostRowProps) {
+function RedirectHostRow({ host, selection, onEdit, onDelete }: RedirectHostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -200,7 +226,8 @@ function RedirectHostRow({ host, onEdit, onDelete }: RedirectHostRowProps) {
   })
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(host.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={host} name={host.domains[0] ?? `#${host.id}`} />
       <TableCell>
         <DomainBadges
           domains={host.domains}

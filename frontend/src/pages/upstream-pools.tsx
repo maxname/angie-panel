@@ -4,6 +4,11 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
+import {
   PoolServerList,
   UpstreamPoolEditorDialog,
 } from '@/components/upstream-pools/upstream-pool-editor'
@@ -34,9 +39,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api, ApiError, type UpstreamPool } from '@/lib/api'
+import { deleteAction } from '@/lib/bulk'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const POOL_BULK_ACTIONS = deleteAction<UpstreamPool>(api.deleteUpstreamPool)
 
 export function UpstreamPoolsPage() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<UpstreamPool | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<UpstreamPool | null>(null)
@@ -45,6 +55,7 @@ export function UpstreamPoolsPage() {
     queryKey: ['upstream-pools'],
     queryFn: () => api.listUpstreamPools(),
   })
+  const selection = useSelection(poolsQuery.data?.upstream_pools ?? [])
   // Which hosts proxy to each pool — the number that says how far an edit
   // reaches, and why a pool cannot be deleted. Shares the ['hosts'] cache.
   const hostsQuery = useQuery({
@@ -124,6 +135,7 @@ export function UpstreamPoolsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('upstreamPools.table.name')}</TableHead>
                   <TableHead>{t('upstreamPools.table.servers')}</TableHead>
                   <TableHead>{t('upstreamPools.table.method')}</TableHead>
@@ -140,6 +152,7 @@ export function UpstreamPoolsPage() {
                   <UpstreamPoolRow
                     key={pool.id}
                     pool={pool}
+                    selection={selection}
                     usedBy={domainsByPool.get(pool.id) ?? []}
                     onEdit={() => openEdit(pool)}
                     onDelete={() => setDeleteTarget(pool)}
@@ -150,6 +163,15 @@ export function UpstreamPoolsPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(pool) => pool.name}
+        actions={POOL_BULK_ACTIONS}
+        onChanged={() =>
+          void queryClient.invalidateQueries({ queryKey: ['upstream-pools'] })
+        }
+      />
 
       <UpstreamPoolEditorDialog
         open={editorOpen}
@@ -170,17 +192,25 @@ export function UpstreamPoolsPage() {
 
 interface UpstreamPoolRowProps {
   pool: UpstreamPool
+  selection: Selection<UpstreamPool>
   /** First domain of every host that proxies to this pool. */
   usedBy: string[]
   onEdit: () => void
   onDelete: () => void
 }
 
-function UpstreamPoolRow({ pool, usedBy, onEdit, onDelete }: UpstreamPoolRowProps) {
+function UpstreamPoolRow({
+  pool,
+  selection,
+  usedBy,
+  onEdit,
+  onDelete,
+}: UpstreamPoolRowProps) {
   const { t } = useTranslation()
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(pool.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={pool} name={pool.name} />
       <TableCell className="align-top font-medium">{pool.name}</TableCell>
       <TableCell className="align-top">
         <PoolServerList servers={pool.servers} />

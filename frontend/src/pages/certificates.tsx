@@ -8,6 +8,11 @@ import { Info, Loader2, MoreHorizontal, Plus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { DomainBadges } from '@/components/domain-badges'
 import { StatusPill } from '@/components/certificate-status'
@@ -59,10 +64,14 @@ import {
   type DnsCredentialProfile,
 } from '@/lib/api'
 import { isValidDomain } from '@/lib/domain'
+import { deleteAction } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
 
 /** Create a fresh cert, or edit an existing one, through the same wizard. */
 type WizardTarget = { mode: 'create' } | { mode: 'edit'; cert: Cert }
+
+const CERT_BULK_ACTIONS = deleteAction<Cert>(api.deleteCertificate)
 
 export function CertificatesPage() {
   const { t } = useTranslation()
@@ -73,6 +82,8 @@ export function CertificatesPage() {
     queryKey: ['certificates'],
     queryFn: () => api.listCertificates(),
   })
+  const queryClient = useQueryClient()
+  const selection = useSelection(certsQuery.data?.certificates ?? [])
 
   return (
     <div className="space-y-6">
@@ -120,6 +131,7 @@ export function CertificatesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('certificates.table.domains')}</TableHead>
                   <TableHead>{t('certificates.table.challenge')}</TableHead>
                   <TableHead>{t('certificates.table.keyType')}</TableHead>
@@ -136,6 +148,7 @@ export function CertificatesPage() {
                   <CertRow
                     key={cert.id}
                     cert={cert}
+                    selection={selection}
                     onEdit={() => setWizard({ mode: 'edit', cert })}
                     onDelete={() => setDeleteTarget(cert)}
                   />
@@ -145,6 +158,13 @@ export function CertificatesPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(cert) => cert.domains[0] ?? cert.name}
+        actions={CERT_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['certificates'] })}
+      />
 
       <CertWizardDialog
         target={wizard}
@@ -168,11 +188,12 @@ export function CertificatesPage() {
 
 interface CertRowProps {
   cert: Cert
+  selection: Selection<Cert>
   onEdit: () => void
   onDelete: () => void
 }
 
-function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
+function CertRow({ cert, selection, onEdit, onDelete }: CertRowProps) {
   const { t, i18n } = useTranslation()
   const casQuery = useQuery({
     queryKey: ['acme-cas'],
@@ -185,7 +206,8 @@ function CertRow({ cert, onEdit, onDelete }: CertRowProps) {
   }).format(new Date(cert.created_at * 1000))
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(cert.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={cert} name={cert.domains[0] ?? cert.name} />
       <TableCell>
         <DomainBadges domains={cert.domains} secure />
       </TableCell>

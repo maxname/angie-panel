@@ -11,6 +11,11 @@ import {
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllCheckbox,
+  SelectRowCheckbox,
+} from '@/components/bulk-actions'
 import { DomainBadges } from '@/components/domain-badges'
 import { HostEditorDialog } from '@/components/hosts/host-editor-dialog'
 import { UptimeBar } from '@/components/hosts/uptime-bar'
@@ -33,10 +38,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { api, ApiError, type Cert, type Host, type UpstreamPool } from '@/lib/api'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const HOST_BULK_ACTIONS = lifecycleActions<Host>({
+  enable: api.enableHost,
+  disable: api.disableHost,
+  remove: api.deleteHost,
+})
 
 export function HostsPage() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Host | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Host | null>(null)
@@ -66,6 +80,8 @@ export function HostsPage() {
       return sortAsc ? cmp : -cmp
     })
   }, [hostsQuery.data?.hosts, sortAsc])
+
+  const selection = useSelection(sortedHosts)
 
   const certsById = new Map(
     (certsQuery.data?.certificates ?? []).map((cert) => [cert.id, cert]),
@@ -126,7 +142,13 @@ export function HostsPage() {
           {/* Sort used to live in the column header; the card layout has none,
               so it moves to a control over the list. Still by first domain —
               the field operators scan. */}
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between pl-4">
+            {/* A label, not a bare box: with no column headers above the
+                cards, nothing else says what this one ticks. */}
+            <label className="flex cursor-pointer items-center gap-3 text-sm text-muted-foreground">
+              <SelectAllCheckbox selection={selection} />
+              {t('bulk.selectAll')}
+            </label>
             <Button
               variant="ghost"
               size="sm"
@@ -158,6 +180,7 @@ export function HostsPage() {
                         ? poolsById.get(host.upstream_pool_id)
                         : undefined
                     }
+                    selection={selection}
                     onEdit={() => openEdit(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
@@ -166,6 +189,14 @@ export function HostsPage() {
           </Card>
         </div>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(host) => host.domains[0] ?? `#${host.id}`}
+        actions={HOST_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['hosts'] })}
+        successNote={t('hosts.unappliedBody')}
+      />
 
       <HostEditorDialog open={editorOpen} onOpenChange={setEditorOpen} host={editing} />
       <DeleteHostDialog
@@ -186,11 +217,12 @@ interface HostRowProps {
   /** The shared pool the host proxies to; undefined for a host with its own
    *  target, and while the pool list is still loading. */
   pool: UpstreamPool | undefined
+  selection: Selection<Host>
   onEdit: () => void
   onDelete: () => void
 }
 
-function HostRow({ host, cert, pool, onEdit, onDelete }: HostRowProps) {
+function HostRow({ host, cert, pool, selection, onEdit, onDelete }: HostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -224,8 +256,17 @@ function HostRow({ host, cert, pool, onEdit, onDelete }: HostRowProps) {
   return (
     <div className="space-y-2 p-4">
       {/* Line 1: the domains, and the actions menu pinned right. */}
-      <div className="flex items-start justify-between gap-2">
-        <DomainBadges domains={host.domains} secure={cert !== undefined} />
+      <div className="flex items-start gap-3">
+        <div className="pt-1">
+          <SelectRowCheckbox
+            selection={selection}
+            item={host}
+            name={host.domains[0] ?? `#${host.id}`}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <DomainBadges domains={host.domains} secure={cert !== undefined} />
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -260,7 +301,7 @@ function HostRow({ host, cert, pool, onEdit, onDelete }: HostRowProps) {
       {/* Line 2: status → target → certificate → uptime. Wraps on narrow
           screens rather than overflowing — what the columnar table could not
           do on a phone. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-7 text-sm">
         {host.enabled ? (
           <Badge variant="success">{t('hosts.status.enabled')}</Badge>
         ) : (
