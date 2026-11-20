@@ -310,7 +310,7 @@ export const en = {
       headers: {
         title: 'Custom headers',
         description:
-          'Add headers to responses sent to the client (add_header) or to requests forwarded upstream (proxy_set_header). Values may use nginx variables such as $remote_addr. An empty request value strips the header.',
+          'Add headers to responses sent to the client (add_header) or to requests forwarded upstream (proxy_set_header). Values may use nginx variables such as $remote_addr. An empty request value strips the header. A request header named like one the panel sets itself (Host, X-Forwarded-For, X-Forwarded-Proto) replaces it.',
         empty: 'No custom headers.',
         name: 'Name',
         value: 'Value',

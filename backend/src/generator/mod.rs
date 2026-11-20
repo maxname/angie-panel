@@ -802,9 +802,17 @@ fn emit_forward_auth_server(out: &mut String, host: &ProxyHost) {
     }
 }
 
-/// Per-location `auth_request` + identity-header copy. Emitted inside each proxy
-/// location so the whole host is gated. Header names were validated to an HTTP
-/// token; `$upstream_http_<name>` is the name lowercased with dashes→underscores.
+/// The variable an identity header from the auth response is captured into
+/// (`auth_request_set`) and then sent upstream from (`proxy_set_header`).
+fn forward_auth_var(index: usize) -> String {
+    format!("$fa_{index}")
+}
+
+/// Per-location `auth_request` + identity-header capture. Emitted inside each
+/// proxy location so the whole host is gated. The captured values are sent
+/// upstream by the host's shared header set (see [`proxy_request_headers`]).
+/// Header names were validated to an HTTP token; `$upstream_http_<name>` is the
+/// name lowercased with dashes→underscores.
 fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
     let fa = &host.forward_auth;
     if !fa.active() {
@@ -812,10 +820,9 @@ fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
     }
     let _ = writeln!(out, "{indent}auth_request {FORWARD_AUTH_LOCATION};");
     for (i, header) in fa.copy_headers.iter().enumerate() {
-        let var = format!("$fa_{i}");
+        let var = forward_auth_var(i);
         let upstream_var = format!("$upstream_http_{}", header.to_lowercase().replace('-', "_"));
         let _ = writeln!(out, "{indent}auth_request_set {var} {upstream_var};");
-        let _ = writeln!(out, "{indent}proxy_set_header {header} {var};");
     }
 }
 
@@ -829,16 +836,6 @@ fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
 fn emit_response_headers(out: &mut String, host: &ProxyHost) {
     for h in header_iter(host, HeaderDirection::Response) {
         let _ = writeln!(out, "    add_header {} \"{}\" always;", h.name, h.value);
-    }
-}
-
-/// Custom request headers (`proxy_set_header`), per proxy location. Emitted
-/// AFTER the standard proxy headers so a user rule can deliberately override
-/// them (last `proxy_set_header` for a name wins). An empty value strips the
-/// header from the upstream request.
-fn emit_request_headers(out: &mut String, host: &ProxyHost, indent: &str) {
-    for h in header_iter(host, HeaderDirection::Request) {
-        let _ = writeln!(out, "{indent}proxy_set_header {} \"{}\";", h.name, h.value);
     }
 }
 
@@ -1402,7 +1399,8 @@ fn gen_http_server(
 }
 
 /// Body shared between the HTTP-only and HTTPS server blocks: HSTS, shared
-/// snippets, the main `location /`, custom locations, and the advanced snippet.
+/// snippets, the request headers, the main `location /`, custom locations, and
+/// the advanced snippet.
 fn host_features(
     out: &mut String,
     host: &ProxyHost,
@@ -1496,6 +1494,18 @@ fn host_features(
     // Proxy fine-tuning (body size, timeouts, buffering) at server scope.
     emit_proxy_tuning(out, host);
 
+    // Request headers for the upstream: one set per host, written once at
+    // server scope and inherited by every proxy location below — the same
+    // "all at one scope" rule the response headers follow above, and for the
+    // same reason. The locations that do NOT inherit it are the ones that
+    // declare headers of their own: the forward-auth verify location (its own
+    // set, on purpose) and a custom location whose snippet sets some.
+    let headers = proxy_request_headers(host, input);
+    let scope = header_scope(host);
+    if scope == HeaderScope::Server {
+        emit_proxy_headers(out, &headers, "    ");
+    }
+
     // Custom error pages (server scope): proxy_intercept_errors + error_page +
     // named error locations. Not reachable for a maintenance host (that path
     // returns early above). Emitted before the proxy locations it applies to.
@@ -1512,14 +1522,10 @@ fn host_features(
     // proxy_pass — so it is emitted here rather than at server scope.
     let _ = writeln!(out, "    location / {{");
     emit_auth_request(out, host, "        ");
-    proxy_body(
-        out,
-        host.forward_scheme,
-        &host_upstream_ref(host),
-        host,
-        input,
-    );
-    emit_request_headers(out, host, "        ");
+    proxy_body(out, host.forward_scheme, &host_upstream_ref(host), host);
+    if scope == HeaderScope::Location {
+        emit_proxy_headers(out, &headers, "        ");
+    }
     if host.cache_assets {
         let p = snippet_path(&input.snippets_dir, "cache-assets.conf")?;
         let _ = writeln!(out, "        include {p};");
@@ -1536,14 +1542,18 @@ fn host_features(
             let _ = writeln!(out, "        rewrite ^ {rewrite} break;");
         }
         emit_auth_request(out, host, "        ");
-        proxy_body(
-            out,
-            loc.forward_scheme,
-            &location_upstream_ref(loc),
-            host,
-            input,
-        );
-        emit_request_headers(out, host, "        ");
+        proxy_body(out, loc.forward_scheme, &location_upstream_ref(loc), host);
+        // A snippet that sets request headers makes this location declare its
+        // own, which cuts it off from the server's: write the shared set here
+        // too, so the snippet adds to it as it always has instead of replacing
+        // it.
+        let declares_own = loc
+            .snippet
+            .as_deref()
+            .is_some_and(snippet_declares_proxy_headers);
+        if scope == HeaderScope::Location || declares_own {
+            emit_proxy_headers(out, &headers, "        ");
+        }
         // Per-location snippet (validated + gated upstream; re-linted on output).
         if let Some(snip) = &loc.snippet {
             emit_snippet(out, snip, "        ");
@@ -1736,55 +1746,158 @@ fn location_upstream_ref(loc: &CustomLocation) -> String {
     format!("{}:{}", loc.forward_host, loc.forward_port)
 }
 
-/// Emit the standard proxy_pass + proxy_set_header set into an open `location`
-/// block. `target` is either a named upstream (`host_<id>`) or `host:port`.
-fn proxy_body(
-    out: &mut String,
-    scheme: Scheme,
-    target: &str,
-    host: &ProxyHost,
-    input: &GeneratorInput,
-) {
+/// Emit `proxy_pass` into an open `location` block. `target` is either a named
+/// upstream (`host_<id>`, `pool_<id>`) or `host:port`. The request headers are
+/// not here: they are the host's shared set (see [`proxy_request_headers`]).
+fn proxy_body(out: &mut String, scheme: Scheme, target: &str, host: &ProxyHost) {
     let _ = writeln!(out, "        proxy_pass {}://{target};", scheme.as_str());
-    let _ = writeln!(out, "        proxy_set_header Host $host;");
-    let _ = writeln!(
-        out,
-        "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
-    );
+    // WebSocket upgrade needs HTTP/1.1 to the upstream; the Upgrade/Connection
+    // headers that go with it are part of the shared header set.
+    if host.websockets_upgrade {
+        let _ = writeln!(out, "        proxy_http_version 1.1;");
+    }
+}
+
+// --------------------------------------------------------- request headers
+
+/// One `proxy_set_header` line: the header's name, and its value exactly as it
+/// is written in the config (a bare variable, or an already-quoted literal).
+struct ProxyHeader {
+    name: String,
+    value: String,
+}
+
+/// Every header a host sets on the request it forwards upstream, as ONE list:
+/// the standard proxy headers, then whatever the host's features add, then the
+/// operator's own custom request headers.
+///
+/// One list, because Angie inherits `proxy_set_header` all-or-nothing: a level
+/// that declares any of its own gets none from the level above. Headers
+/// scattered over several places silently knock each other out — a config that
+/// still passes `angie -t`. So they are gathered here and written in one place
+/// per host (see [`HeaderScope`]).
+///
+/// A later header REPLACES an earlier one of the same name rather than being
+/// added next to it: Angie sends every `proxy_set_header` it is given, so two
+/// lines for one name put the header on the wire twice. That is how a custom
+/// header overrides a standard one — give it the standard name; an empty value
+/// then drops the header from the upstream request altogether.
+fn proxy_request_headers(host: &ProxyHost, input: &GeneratorInput) -> Vec<ProxyHeader> {
+    let mut headers: Vec<ProxyHeader> = Vec::new();
+    let mut set = |name: &str, value: String| {
+        headers.retain(|h| !h.name.eq_ignore_ascii_case(name));
+        headers.push(ProxyHeader {
+            name: name.to_string(),
+            value,
+        });
+    };
+
+    set("Host", "$host".into());
+    set("X-Forwarded-For", "$proxy_add_x_forwarded_for".into());
     // X-Forwarded-Proto: when we trust an inbound proxy we forward its value
     // (`$scheme` reflects the connection to *us*; to honour an upstream L7 LB we
     // pass the incoming header through). Otherwise we assert our own scheme.
-    if host.trust_forwarded_proto {
-        let _ = writeln!(
-            out,
-            "        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;"
-        );
+    let proto = if host.trust_forwarded_proto {
+        "$http_x_forwarded_proto"
     } else {
-        let _ = writeln!(out, "        proxy_set_header X-Forwarded-Proto $scheme;");
-    }
+        "$scheme"
+    };
+    set("X-Forwarded-Proto", proto.into());
 
-    // WebSocket upgrade support.
+    // WebSocket upgrade support (with `proxy_http_version 1.1` in the location).
     if host.websockets_upgrade {
-        let _ = writeln!(out, "        proxy_http_version 1.1;");
-        let _ = writeln!(out, "        proxy_set_header Upgrade $http_upgrade;");
-        let _ = writeln!(
-            out,
-            "        proxy_set_header Connection $connection_upgrade;"
-        );
+        set("Upgrade", "$http_upgrade".into());
+        set("Connection", "$connection_upgrade".into());
     }
 
     // When the host's access list has basic auth and "pass auth to upstream" is
-    // OFF, strip the Authorization header so the upstream never sees the
-    // gate's credentials. Emitted per-location because a location that sets any
-    // proxy_set_header does not inherit server-scope ones.
+    // OFF, strip the Authorization header so the upstream never sees the gate's
+    // credentials.
     if let Some(list) = host
         .access_list_id
         .and_then(|id| input.access_lists.iter().find(|l| l.id == id))
     {
         if !list.pass_auth && !list.users.is_empty() {
-            let _ = writeln!(out, "        proxy_set_header Authorization \"\";");
+            set("Authorization", "\"\"".into());
         }
     }
+
+    // Forward auth: identity headers captured from the auth response by each
+    // location's `auth_request_set` (see `emit_auth_request`).
+    if host.forward_auth.active() {
+        for (i, header) in host.forward_auth.copy_headers.iter().enumerate() {
+            set(header, forward_auth_var(i));
+        }
+    }
+
+    // The operator's custom request headers come last and win: one named like a
+    // header above takes its place. They are kept exactly as entered otherwise
+    // — including a name entered twice, which is theirs to send twice.
+    let custom: Vec<&CustomHeader> = header_iter(host, HeaderDirection::Request).collect();
+    headers.retain(|h| !custom.iter().any(|c| c.name.eq_ignore_ascii_case(&h.name)));
+    headers.extend(custom.into_iter().map(|c| ProxyHeader {
+        name: c.name.clone(),
+        value: format!("\"{}\"", c.value),
+    }));
+
+    headers
+}
+
+fn emit_proxy_headers(out: &mut String, headers: &[ProxyHeader], indent: &str) {
+    for h in headers {
+        let _ = writeln!(out, "{indent}proxy_set_header {} {};", h.name, h.value);
+    }
+}
+
+/// Where a host's `proxy_set_header` lines are written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderScope {
+    /// Once, at server scope: every proxy location inherits the same set
+    /// instead of repeating it.
+    Server,
+    /// Inside each proxy location, with nothing at server scope — for a host
+    /// whose raw server-level snippet would be changed by a shared set.
+    Location,
+}
+
+/// Decide where a host's request headers go.
+///
+/// Server scope, unless the host's advanced snippet could mean something
+/// different with a header set next to it. Such a snippet is inserted verbatim
+/// at server scope, and three things in it interact with headers there:
+///
+/// - its own `proxy_set_header` — on the same level it would merge with ours,
+///   where it has so far been inert (every location declared its own);
+/// - a `location` — a raw proxy location with no headers of its own would start
+///   inheriting ours, `Host $host` instead of Angie's default included;
+/// - an `include` — whatever it pulls in could be either of the above.
+///
+/// Config is re-applied without review when the generator changes under an
+/// unchanged database, so a snippet must keep meaning what it meant. Those
+/// hosts keep the per-location layout, where nothing a snippet declares is
+/// touched. The match is on the bare word, comments included: a false positive
+/// only costs a few repeated lines, a false negative changes what a site sends.
+fn header_scope(host: &ProxyHost) -> HeaderScope {
+    match &host.advanced_snippet {
+        Some(snippet) if mentions(snippet, &["proxy_set_header", "location", "include"]) => {
+            HeaderScope::Location
+        }
+        _ => HeaderScope::Server,
+    }
+}
+
+/// Whether a custom location's snippet makes the location declare request
+/// headers of its own — directly, or through an `include`. Such a location
+/// inherits nothing from the server, so the shared set has to be written into
+/// it as well, or its upstream would lose every header but the snippet's.
+fn snippet_declares_proxy_headers(snippet: &str) -> bool {
+    mentions(snippet, &["proxy_set_header", "include"])
+}
+
+/// Case-insensitive "does this snippet contain any of these words".
+fn mentions(snippet: &str, words: &[&str]) -> bool {
+    let lower = snippet.to_ascii_lowercase();
+    words.iter().any(|w| lower.contains(w))
 }
 
 /// Insert a validated snippet verbatim, re-indented so the output stays tidy.

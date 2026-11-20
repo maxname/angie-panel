@@ -296,7 +296,7 @@ export const zh = {
       },
       headers: {
         title: '自定义请求头',
-        description: '向发送给客户端的响应添加请求头（add_header），或向转发到上游的请求添加请求头（proxy_set_header）。值中可使用 nginx 变量，例如 $remote_addr。请求值为空时会移除该请求头。',
+        description: '向发送给客户端的响应添加请求头（add_header），或向转发到上游的请求添加请求头（proxy_set_header）。值中可使用 nginx 变量，例如 $remote_addr。请求值为空时会移除该请求头。与面板自动设置的请求头同名（Host、X-Forwarded-For、X-Forwarded-Proto）的请求头会替换它。',
         empty: '暂无自定义请求头。',
         name: '名称',
         value: '值',
