@@ -86,6 +86,19 @@ describe('streams page', () => {
     expect(screen.queryByText(/stream context is off/i)).not.toBeInTheDocument()
   })
 
+  it('brackets an IPv6 forward host, which the API returns bare', async () => {
+    const v6Stream: Stream = { ...sampleStream, forward_host: '2a01:4f8::1' }
+    vi.stubGlobal('fetch', routedFetch([v6Stream], true))
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <StreamsPage />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('[2a01:4f8::1]:5432')).toBeInTheDocument()
+  })
+
   it('shows the enable banner when the stream context is off', async () => {
     vi.stubGlobal('fetch', routedFetch([sampleStream], false))
 

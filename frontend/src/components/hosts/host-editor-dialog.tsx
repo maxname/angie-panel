@@ -75,6 +75,7 @@ import {
   type Host,
   type HostInput,
 } from '@/lib/api'
+import { formatAuthority } from '@/lib/authority'
 import { toast } from '@/lib/toast'
 
 interface LocationDraft {
@@ -1456,7 +1457,10 @@ export function HostEditorForm({
                 {t('hosts.editor.upstreams.primary')}
               </span>
               <span className="font-mono text-xs">
-                {form.forward_host || '—'}:{form.forward_port || '—'}
+                {formatAuthority(
+                  form.forward_host.trim() || '—',
+                  form.forward_port || '—',
+                )}
               </span>
               <div className="ml-auto flex items-center gap-2">
                 <Label

@@ -47,6 +47,7 @@ import {
   type StreamInput,
   type StreamTls,
 } from '@/lib/api'
+import { formatAuthority } from '@/lib/authority'
 import { useIsDirty } from '@/lib/use-dirty'
 import { toast } from '@/lib/toast'
 
@@ -260,7 +261,7 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
       </TableCell>
       <TableCell>
         <span className="font-mono text-xs">
-          {stream.forward_host}:{stream.forward_port}
+          {formatAuthority(stream.forward_host, stream.forward_port)}
         </span>
       </TableCell>
       <TableCell>

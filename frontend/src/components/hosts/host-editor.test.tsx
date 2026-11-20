@@ -530,6 +530,39 @@ describe('host editor rate limiting', () => {
     ])
   })
 
+  it('brackets an IPv6 primary in the pool, but submits it bare', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates') {
+        return Promise.resolve(jsonResponse({ certificates: [] }))
+      }
+      if (input === '/api/access-lists') {
+        return Promise.resolve(jsonResponse({ access_lists: [] }))
+      }
+      if (input === '/api/hosts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 1 }))
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    await user.type(screen.getByLabelText('Domain names'), 'example.com')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.type(screen.getByLabelText('Forward host'), '2a01:4f8::1')
+    await user.click(screen.getByRole('tab', { name: 'Upstreams' }))
+    expect(screen.getByText('[2a01:4f8::1]:80')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/hosts' && init?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String((post![1] as RequestInit).body))
+    // The brackets are display only: the API contract is the bare address.
+    expect(body.forward_host).toBe('2a01:4f8::1')
+  })
+
   it('blocks an incomplete backend server', async () => {
     const user = userEvent.setup()
     const fetchMock = stubFetch()

@@ -148,6 +148,18 @@ describe('proxy hosts page', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/hosts', expect.anything())
   })
 
+  it('brackets an IPv6 forward host, which the API returns bare', async () => {
+    const v6Host: Host = { ...sampleHost, forward_host: '2a01:4f8::1' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ hosts: [v6Host] })),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText('http://[2a01:4f8::1]:8080')).toBeInTheDocument()
+  })
+
   it('shows an empty state when there are no hosts', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ hosts: [] })))
 

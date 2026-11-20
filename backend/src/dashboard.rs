@@ -32,6 +32,17 @@ fn zone_key(host_id: i64) -> String {
     format!("host_{host_id}")
 }
 
+/// `host:port` for a host row's `forward` display string. The stored host is a
+/// bare address — `model::validate_forward_host` rejects brackets — so an IPv6
+/// literal gets them here, or the port would be unreadable: `2a01:4f8::1:8080`.
+fn forward_authority(host: &str, port: u16) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 /// Summarize an upstream's peers into a health verdict for the host row.
 fn upstream_health(upstream: &Value) -> Value {
     let peers = upstream.get("peers").and_then(Value::as_object);
@@ -108,7 +119,11 @@ pub async fn get_dashboard(
                 "id": h.id,
                 "domains": h.domains,
                 "enabled": h.enabled,
-                "forward": format!("{}://{}:{}", h.forward_scheme.as_str(), h.forward_host, h.forward_port),
+                "forward": format!(
+                    "{}://{}",
+                    h.forward_scheme.as_str(),
+                    forward_authority(&h.forward_host, h.forward_port)
+                ),
                 "certificate_id": h.certificate_id,
                 "https_active": https_active,
                 "zone": zone,
@@ -215,6 +230,15 @@ mod tests {
         assert_eq!(h["peers_up"], json!(1));
         assert_eq!(h["peers_down"], json!(2));
         assert_eq!(h["fails"], json!(4));
+    }
+
+    #[test]
+    fn forward_authority_brackets_only_ipv6() {
+        assert_eq!(forward_authority("2a01:4f8::1", 8080), "[2a01:4f8::1]:8080");
+        assert_eq!(forward_authority("192.168.1.10", 8080), "192.168.1.10:8080");
+        assert_eq!(forward_authority("nas.lan", 443), "nas.lan:443");
+        // All hex digits, but a hostname, not an address.
+        assert_eq!(forward_authority("cafe", 80), "cafe:80");
     }
 
     #[test]

@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { api, ApiError, type Cert, type Host } from '@/lib/api'
+import { formatAuthority } from '@/lib/authority'
 import { toast } from '@/lib/toast'
 
 export function HostsPage() {
@@ -189,7 +190,7 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
     },
   })
 
-  const target = `${host.forward_scheme}://${host.forward_host}:${host.forward_port}`
+  const target = `${host.forward_scheme}://${formatAuthority(host.forward_host, host.forward_port)}`
   // Only probed hosts get a bar. Config toggled off is not "down".
   const probed = host.enabled && host.health_checks.some((c) => c.enabled)
 
