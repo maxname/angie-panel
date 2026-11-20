@@ -73,6 +73,15 @@ fn denies_proxy_pass_to_management_port() {
     );
     assert_violates("proxy_pass http://[::ffff:127.0.0.1]:3000;", "loopback");
     assert_violates("proxy_pass http://[::ffff:169.254.1.1]:80;", "link-local");
+    // Bracketed IPv6 is how the generator writes an IPv6 target, so the guard
+    // has to see through the brackets: loopback, link-local and unspecified,
+    // with the management-port callout intact.
+    assert_violates("proxy_pass http://[::1]:8100;", "management port");
+    assert_violates("proxy_pass http://[::1]:8080;", "management port");
+    assert_violates("proxy_pass https://[fe80::1]:8443;", "link-local");
+    assert_violates("proxy_pass http://[febf::1]:80;", "link-local");
+    assert_violates("proxy_pass http://[::]:3000;", "loopback");
+    assert_violates("proxy_pass http://[::1];", "loopback");
     // unix sockets.
     assert_violates("proxy_pass http://unix:/var/run/x.sock;", "unix socket");
     assert_violates("proxy_pass unix:/var/run/docker.sock:;", "unix socket");
@@ -93,6 +102,11 @@ fn allows_legit_proxy_pass() {
     assert!(lint_one("proxy_pass https://backend.lan:8443;").is_empty());
     // A non-management LAN port is fine even on a private IP.
     assert!(lint_one("proxy_pass http://10.0.0.2:9000;").is_empty());
+    // A routable or ULA IPv6 backend, bracketed as the generator emits it —
+    // on a management port number too, since the address is not local.
+    assert!(lint_one("proxy_pass http://[2a01:4f8::1]:8080;").is_empty());
+    assert!(lint_one("proxy_pass https://[fd00::10]:8443;").is_empty());
+    assert!(lint_one("proxy_pass http://[2a01:4f8::1]:8100/api;").is_empty());
 }
 
 #[test]

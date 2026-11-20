@@ -1532,6 +1532,168 @@ fn managed_meta_ignores_foreign_files() {
     assert!(managed_meta("no newline at all").is_none());
 }
 
+/// One of everything that writes a target, each aimed at its own IPv6 address:
+/// a host's primary and two extra pool members, a custom location, a stream
+/// forward, and an SNI router's route and catch-all.
+fn ipv6_everywhere_input() -> GeneratorInput {
+    let mut host = base_host(6, "v6.example.com");
+    host.forward_host = "2a01:4f8::1".into();
+    host.upstream.servers = vec![
+        UpstreamServer {
+            host: "2a01:4f8::b2".into(),
+            port: 8081,
+            weight: 2,
+            backup: false,
+            down: false,
+        },
+        UpstreamServer {
+            host: "fd00::c3".into(),
+            port: 8082,
+            weight: 1,
+            backup: true,
+            down: false,
+        },
+    ];
+    host.locations = vec![CustomLocation {
+        path: "/api".into(),
+        forward_scheme: Scheme::Https,
+        forward_host: "2a01:4f8::d4".into(),
+        forward_port: 9000,
+        rewrite: None,
+        snippet: None,
+    }];
+    let mut inp = input(vec![host], vec![], settings(DefaultSite::NotFound, false));
+    inp.streams = vec![base_stream(1, 5432, "2a01:4f8::e5", 5432)];
+    inp.sni_routers = vec![SniRouter {
+        id: 1,
+        name: "edge6".into(),
+        incoming_port: 8443,
+        routes: vec![SniRoute {
+            sni: "app.example.com".into(),
+            forward_host: "2a01:4f8::f6".into(),
+            forward_port: 443,
+        }],
+        default_host: "2a01:4f8::a7".into(),
+        default_port: 8443,
+        enabled: true,
+        created_at: 0,
+        updated_at: 0,
+    }];
+    inp
+}
+
+#[test]
+fn ipv6_targets_are_bracketed_everywhere() {
+    // The model stores an IPv6 forward host bare (`2a01:4f8::1`), and Angie
+    // cannot take a port on a bare one: `server 2a01:4f8::1:8080;` fails
+    // `angie -t` with "invalid port in upstream" (reproduced on 1.11.8, in http
+    // and stream alike). Every place a target is written must bracket it.
+    let files = generate(&ipv6_everywhere_input()).unwrap();
+
+    let (_, host) = only_host_file(&files);
+    // Primary, then the extra pool members with their parameters intact.
+    assert!(
+        host.contains(
+            "upstream host_6 {\n    zone host_6 64k;\n    server [2a01:4f8::1]:8080;\n    \
+             server [2a01:4f8::b2]:8081 weight=2;\n    server [fd00::c3]:8082 backup;\n}"
+        ),
+        "{host}"
+    );
+    // The custom location proxies straight to its own target.
+    assert!(
+        host.contains("        proxy_pass https://[2a01:4f8::d4]:9000;\n"),
+        "{host}"
+    );
+
+    let stream = &files["stream.d/stream-1.conf"];
+    assert!(
+        stream.contains("    proxy_pass [2a01:4f8::e5]:5432;\n"),
+        "{stream}"
+    );
+
+    let sni = &files["stream.d/sni-1.conf"];
+    assert!(
+        sni.contains("upstream sni_1_0 { server [2a01:4f8::f6]:443; }\n"),
+        "{sni}"
+    );
+    assert!(
+        sni.contains("upstream sni_1_default { server [2a01:4f8::a7]:8443; }\n"),
+        "{sni}"
+    );
+
+    // And nowhere does one of them survive bare: every occurrence of each
+    // address, in every file, is a bracketed one. (No address here is a prefix
+    // of another, so the counts cannot alias.)
+    for addr in [
+        "2a01:4f8::1",
+        "2a01:4f8::b2",
+        "fd00::c3",
+        "2a01:4f8::d4",
+        "2a01:4f8::e5",
+        "2a01:4f8::f6",
+        "2a01:4f8::a7",
+    ] {
+        let bracketed = format!("[{addr}]:");
+        let total: usize = files.values().map(|b| b.matches(addr).count()).sum();
+        let ok: usize = files.values().map(|b| b.matches(&bracketed).count()).sum();
+        assert!(total > 0, "{addr} was never emitted");
+        assert_eq!(total, ok, "{addr} is written without brackets somewhere");
+    }
+
+    // Routable and ULA IPv6 backends are legitimate targets: the bracketed
+    // output has to pass the generator's own linter.
+    let violations = lint::check_fileset(&files, &lint_policy());
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn bracketed_ipv6_local_targets_still_trip_the_linter() {
+    // A custom location is the one target the generator writes straight into a
+    // `proxy_pass`, so it is the one the level-2 loopback guard reads. The
+    // brackets must not hide a local address from it: should a loopback or
+    // link-local IPv6 ever get past the model, the output is still refused.
+    for (local, needle) in [
+        ("::1", "loopback"),
+        ("fe80::1", "link-local"),
+        ("::ffff:127.0.0.1", "loopback"),
+    ] {
+        let mut host = base_host(6, "v6.example.com");
+        host.locations = vec![CustomLocation {
+            path: "/api".into(),
+            forward_scheme: Scheme::Http,
+            forward_host: local.into(),
+            forward_port: 9000,
+            rewrite: None,
+            snippet: None,
+        }];
+        let files = generate(&input(
+            vec![host],
+            vec![],
+            settings(DefaultSite::NotFound, false),
+        ))
+        .unwrap();
+        let (_, body) = only_host_file(&files);
+        assert!(
+            body.contains(&format!("proxy_pass http://[{local}]:9000;")),
+            "{body}"
+        );
+        let violations = lint::check_fileset(&files, &lint_policy());
+        assert!(
+            violations.iter().any(|v| v.message.contains(needle)),
+            "[{local}]:9000 must be refused as {needle}, got: {violations:#?}"
+        );
+    }
+}
+
+fn lint_policy() -> lint::LintPolicy {
+    lint::LintPolicy {
+        snippets_dir: snippets_dir(),
+        public_dir: public_dir(),
+        allow_advanced_snippets: true,
+        acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+    }
+}
+
 #[test]
 fn full_fileset_is_lint_clean() {
     // Everything the generator emits for a rich host set must pass its own

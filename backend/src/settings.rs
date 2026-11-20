@@ -136,13 +136,19 @@ fn status_port(state: &AppState) -> u16 {
 /// Loopback `host:port` Angie uses to reach the panel's ACME hook. Angie and
 /// the panel share a host; a wildcard/loopback bind is reached via 127.0.0.1.
 fn hook_target(state: &AppState) -> String {
-    let bind = state.cfg.bind_addr.as_str();
+    hook_authority(&state.cfg.bind_addr, state.cfg.port)
+}
+
+/// [`hook_target`] on plain values. A panel bound to a specific IPv6 address is
+/// reached at that address, bracketed — it lands in a `proxy_pass`, where a
+/// bare IPv6 literal with a port does not parse.
+fn hook_authority(bind: &str, port: u16) -> String {
     let host = if matches!(bind, "0.0.0.0" | "::" | "127.0.0.1" | "localhost") {
         "127.0.0.1"
     } else {
         bind
     };
-    format!("{host}:{}", state.cfg.port)
+    crate::model::forward_authority(host, port)
 }
 
 /// Get-or-create the ACME hook shared secret. Generated once (32 random bytes,
@@ -417,4 +423,21 @@ pub async fn build_fileset(state: &Arc<AppState>) -> ApiResult<FileSet> {
         ));
     }
     Ok(wrapped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hook_authority;
+
+    #[test]
+    fn hook_target_follows_the_bind_address() {
+        // Wildcard and loopback binds are reached over IPv4 loopback.
+        for bind in ["0.0.0.0", "::", "127.0.0.1", "localhost"] {
+            assert_eq!(hook_authority(bind, 8080), "127.0.0.1:8080", "{bind}");
+        }
+        assert_eq!(hook_authority("192.168.1.2", 8080), "192.168.1.2:8080");
+        // A specific IPv6 bind is bracketed: the value goes into a proxy_pass.
+        assert_eq!(hook_authority("::1", 8080), "[::1]:8080");
+        assert_eq!(hook_authority("fd00::2", 9443), "[fd00::2]:9443");
+    }
 }

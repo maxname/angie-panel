@@ -30,8 +30,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy, HeaderDirection, ProxyHost,
-    RateLimit, RedirectHost, Scheme, SniRouter, Stream, StreamTls,
+    forward_authority, Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy,
+    HeaderDirection, ProxyHost, RateLimit, RedirectHost, Scheme, SniRouter, Stream, StreamTls,
 };
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
@@ -300,8 +300,8 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
         // forward_host/port were validated (bare IP/hostname + u16).
         let _ = writeln!(
             body,
-            "    proxy_pass {}:{};",
-            s.forward_host, s.forward_port
+            "    proxy_pass {};",
+            forward_authority(&s.forward_host, s.forward_port)
         );
         let _ = writeln!(body, "}}");
         files.insert(format!("{STREAM_PREFIX}stream-{}.conf", s.id), body);
@@ -376,15 +376,18 @@ fn gen_sni_router(r: &SniRouter) -> String {
     for (i, route) in r.routes.iter().enumerate() {
         let _ = writeln!(
             out,
-            "upstream sni_{}_{} {{ server {}:{}; }}",
-            r.id, i, route.forward_host, route.forward_port
+            "upstream sni_{}_{} {{ server {}; }}",
+            r.id,
+            i,
+            forward_authority(&route.forward_host, route.forward_port)
         );
     }
     if r.has_default() {
         let _ = writeln!(
             out,
-            "upstream sni_{}_default {{ server {}:{}; }}",
-            r.id, r.default_host, r.default_port
+            "upstream sni_{}_default {{ server {}; }}",
+            r.id,
+            forward_authority(&r.default_host, r.default_port)
         );
     }
     let _ = writeln!(out, "server {{");
@@ -1115,7 +1118,10 @@ fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
         String::new()
     };
     // Primary server (never backup/down — it is the host's main target).
-    let mut primary = format!("    server {}:{}", host.forward_host, host.forward_port);
+    let mut primary = format!(
+        "    server {}",
+        forward_authority(&host.forward_host, host.forward_port)
+    );
     if up.primary_weight != 1 {
         let _ = write!(primary, " weight={}", up.primary_weight);
     }
@@ -1124,7 +1130,7 @@ fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
     let _ = writeln!(out, "{primary}");
     // Extra pool members.
     for s in &up.servers {
-        let mut line = format!("    server {}:{}", s.host, s.port);
+        let mut line = format!("    server {}", forward_authority(&s.host, s.port));
         if s.weight != 1 {
             let _ = write!(line, " weight={}", s.weight);
         }
@@ -1613,7 +1619,7 @@ fn host_upstream_ref(host: &ProxyHost) -> String {
 /// (they don't get their own metrics zone in v1). The host/port were validated
 /// to a safe charset upstream.
 fn location_upstream_ref(loc: &CustomLocation) -> String {
-    format!("{}:{}", loc.forward_host, loc.forward_port)
+    forward_authority(&loc.forward_host, loc.forward_port)
 }
 
 /// Emit the standard proxy_pass + proxy_set_header set into an open `location`

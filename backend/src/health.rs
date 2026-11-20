@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::net::TcpStream;
 
-use crate::model::{HealthCheck, HealthCheckKind, ProxyHost};
+use crate::model::{forward_authority, HealthCheck, HealthCheckKind, ProxyHost};
 use crate::state::AppState;
 use crate::{repo, settings};
 
@@ -253,13 +253,20 @@ async fn https_host_ids(state: &AppState) -> std::collections::HashSet<i64> {
 /// Open a socket to the host's backend. Answers "is my upstream listening",
 /// nothing more — no bytes are exchanged.
 async fn probe_tcp(host: &ProxyHost, check: &HealthCheck, timeout: Duration) -> anyhow::Result<()> {
-    let port = check.port.unwrap_or(host.forward_port);
-    let addr = format!("{}:{}", host.forward_host, port);
+    let addr = tcp_target(host, check);
     let stream = tokio::time::timeout(timeout, TcpStream::connect(&addr))
         .await
         .map_err(|_| anyhow::anyhow!("timed out after {}s", timeout.as_secs()))??;
     drop(stream);
     Ok(())
+}
+
+/// The `host:port` a TCP check connects to: the host's own backend, on the
+/// check's port when it overrides the forward port. An IPv6 literal comes out
+/// bracketed, so the string is a socket address in its own right rather than
+/// something the resolver has to pick apart at the last colon.
+fn tcp_target(host: &ProxyHost, check: &HealthCheck) -> String {
+    forward_authority(&host.forward_host, check.port.unwrap_or(host.forward_port))
 }
 
 async fn defaults(state: &AppState) -> Defaults {
@@ -380,6 +387,33 @@ mod tests {
         // Failures carry no latency — timing an error is not timing the service.
         assert_eq!(beat.latency_ms, None);
         assert!(beat.error.is_some());
+    }
+
+    /// A bare IPv6 backend has to be bracketed before the port goes on, or the
+    /// result is not a socket address at all. Asserted on the string and on the
+    /// parse rather than by connecting: a CI box need not have IPv6.
+    #[test]
+    fn tcp_target_brackets_an_ipv6_backend() {
+        let mut h = host(8080);
+        h.forward_host = "2a01:4f8::1".into();
+        let mut c = check(HealthCheckKind::Tcp);
+
+        let target = tcp_target(&h, &c);
+        assert_eq!(target, "[2a01:4f8::1]:8080");
+        assert_eq!(
+            target.parse::<SocketAddr>().unwrap(),
+            SocketAddr::from(("2a01:4f8::1".parse::<std::net::Ipv6Addr>().unwrap(), 8080))
+        );
+
+        // The check's own port wins over the forward port, bracketed the same.
+        c.port = Some(9000);
+        assert_eq!(tcp_target(&h, &c), "[2a01:4f8::1]:9000");
+
+        // IPv4 and hostnames are left exactly as they were.
+        h.forward_host = "192.168.1.10".into();
+        assert_eq!(tcp_target(&h, &c), "192.168.1.10:9000");
+        h.forward_host = "nas.lan".into();
+        assert_eq!(tcp_target(&h, &c), "nas.lan:9000");
     }
 
     /// The whole HTTP probe rests on reqwest's resolve() overriding the address

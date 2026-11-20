@@ -1070,6 +1070,22 @@ pub fn validate_forward_host(raw: &str, policy: &UpstreamPolicy) -> Result<Strin
     Ok(s)
 }
 
+/// Render a validated forward host + port as the `host:port` authority that
+/// Angie's `server` / `proxy_pass` and a socket connect all parse.
+///
+/// [`validate_forward_host`] stores an IPv6 literal bare (`2a01:4f8::1`) and
+/// rejects brackets in the input, so the brackets have to be added wherever a
+/// port is appended: Angie reads everything after the *first* colon as the
+/// port, and `2a01:4f8::1:8080` fails `angie -t` with "invalid port in
+/// upstream" (verified on 1.11.8). IPv4 literals and hostnames pass through.
+pub fn forward_authority(host: &str, port: u16) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 /// SSRF guard for upstream IPs (PLAN.md §7): loopback and link-local targets
 /// expose panel/status management endpoints; require an explicit opt-in.
 pub struct UpstreamPolicy {
@@ -2355,6 +2371,24 @@ mod tests {
                 "should reject {evil:?}"
             );
         }
+    }
+
+    #[test]
+    fn forward_authority_brackets_only_ipv6() {
+        // What the validator hands back for an IPv6 literal is bare; the
+        // authority is where it gains its brackets.
+        let v6 = validate_forward_host("2A01:4F8::1", &policy()).unwrap();
+        assert_eq!(forward_authority(&v6, 8080), "[2a01:4f8::1]:8080");
+        assert_eq!(forward_authority("fd00::3", 443), "[fd00::3]:443");
+        assert_eq!(
+            forward_authority("::ffff:10.0.0.1", 80),
+            "[::ffff:10.0.0.1]:80"
+        );
+        // IPv4 and hostnames are untouched — including a hostname made only of
+        // hex digits, which is not an address.
+        assert_eq!(forward_authority("192.168.1.10", 8080), "192.168.1.10:8080");
+        assert_eq!(forward_authority("nas.lan", 443), "nas.lan:443");
+        assert_eq!(forward_authority("cafe", 80), "cafe:80");
     }
 
     #[test]
