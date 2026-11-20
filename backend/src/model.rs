@@ -343,9 +343,12 @@ const MAX_HEADER_VALUE_LEN: usize = 1024;
 
 /// Validate a host's custom headers. Each name is an HTTP token; each value is
 /// bounded printable ASCII with the characters that could terminate the quoted
-/// directive value or inject an nginx variable (`"`, `\`, `$`, control/CR-LF)
-/// rejected. An empty value is allowed — for a request header that strips the
-/// header from the upstream request.
+/// directive value or break out of it (`"`, `\`, control/CR-LF) rejected. A `$`
+/// is allowed only where it introduces an nginx variable (`$remote_addr`,
+/// `${host}`) — the value is emitted inside a quoted `proxy_set_header` /
+/// `add_header`, so the variable is interpolated at request time and cannot
+/// restructure the config. An empty value is allowed — for a request header
+/// that strips the header from the upstream request.
 pub fn validate_custom_headers(headers: Vec<CustomHeader>) -> Result<Vec<CustomHeader>, ApiError> {
     if headers.len() > MAX_CUSTOM_HEADERS {
         return Err(bad("invalid_header", "too many custom headers"));
@@ -368,17 +371,54 @@ fn validate_header_value(raw: &str) -> Result<String, ApiError> {
     if s.len() > MAX_HEADER_VALUE_LEN {
         return Err(bad("invalid_header", "header value is too long"));
     }
-    let ok = s
-        .bytes()
-        .all(|b| (0x20..=0x7e).contains(&b) && !matches!(b, b'"' | b'\\' | b'$'));
-    if !ok {
-        return Err(bad(
-            "invalid_header",
-            "header value contains invalid characters (no quotes, backslash, $, or control characters)",
-        ));
+    // The value is emitted inside a quoted `proxy_set_header`/`add_header`, so
+    // `"` and `\` (quote / escape) and any control char are always rejected —
+    // they are the only way to terminate the string or break out of it. A `$`
+    // is allowed, but only where it introduces an nginx variable so that a
+    // stray `$` is caught here with a clear per-field error instead of making
+    // the whole config fail `angie -t` at apply time.
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !(0x20..=0x7e).contains(&b) || matches!(b, b'"' | b'\\') {
+            return Err(bad(
+                "invalid_header",
+                "header value contains invalid characters (no quotes, backslash, or control characters)",
+            ));
+        }
+        if b == b'$' {
+            // `$name` or `${name}`, where name is a non-empty run of
+            // [A-Za-z0-9_] (nginx variable names, incl. regex captures like $1).
+            let var_char = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+            let (name_start, braced) = match bytes.get(i + 1) {
+                Some(b'{') => (i + 2, true),
+                Some(&c) if var_char(c) => (i + 1, false),
+                _ => return Err(bad("invalid_header", INVALID_HEADER_VAR)),
+            };
+            let mut j = name_start;
+            while j < bytes.len() && var_char(bytes[j]) {
+                j += 1;
+            }
+            if j == name_start {
+                return Err(bad("invalid_header", INVALID_HEADER_VAR));
+            }
+            if braced {
+                if bytes.get(j) != Some(&b'}') {
+                    return Err(bad("invalid_header", INVALID_HEADER_VAR));
+                }
+                j += 1;
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
     }
     Ok(s.to_string())
 }
+
+const INVALID_HEADER_VAR: &str =
+    "'$' must introduce an nginx variable, e.g. $remote_addr or ${host}";
 
 /// Per-host maintenance mode. When enabled, the host stops proxying and serves a
 /// styled `503 Service Unavailable` page instead — a graceful way to take a
@@ -2813,13 +2853,44 @@ mod tests {
         assert_eq!(ok[0].value, "SAMEORIGIN");
         assert_eq!(ok[2].direction, HeaderDirection::Request);
 
+        // nginx variables are allowed in the value (e.g. forwarding the real
+        // client IP to the upstream). `$name`, `${name}`, regex captures and a
+        // mix with literal text all pass and are kept verbatim.
+        let ok = validate_custom_headers(vec![
+            CustomHeader {
+                name: "CF-Connecting-IP".into(),
+                value: "$remote_addr".into(),
+                direction: HeaderDirection::Request,
+            },
+            CustomHeader {
+                name: "X-Forwarded-For".into(),
+                value: "$proxy_add_x_forwarded_for".into(),
+                direction: HeaderDirection::Request,
+            },
+            CustomHeader {
+                name: "X-Origin".into(),
+                value: "${scheme}://${host}:$server_port".into(),
+                direction: HeaderDirection::Request,
+            },
+        ])
+        .unwrap();
+        assert_eq!(ok[0].value, "$remote_addr");
+        assert_eq!(ok[2].value, "${scheme}://${host}:$server_port");
+
         // Injection in the name or value is rejected.
         for (name, value) in [
             ("X Frame", "ok"),
             ("X-Evil", "a\"; add_header Evil 1"),
             ("X-Evil", "back\\slash"),
-            ("X-Var", "$request_uri"),
             ("X-Nl", "line1\nline2"),
+            // A `$` that does not introduce a variable: dangling, followed by
+            // whitespace/punctuation, an unclosed or empty `${…}`.
+            ("X-Var", "$"),
+            ("X-Var", "price is $ now"),
+            ("X-Var", "trailing$"),
+            ("X-Var", "${host"),
+            ("X-Var", "${}"),
+            ("X-Var", "$-nope"),
         ] {
             assert!(
                 validate_custom_headers(vec![CustomHeader {

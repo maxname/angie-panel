@@ -1065,6 +1065,31 @@ fn golden_custom_headers() {
 }
 
 #[test]
+fn custom_header_value_may_carry_nginx_variable() {
+    // A request header whose value is an nginx variable (e.g. forwarding the
+    // real client IP to the upstream, as Cloudflare's CF-Connecting-IP) is
+    // emitted verbatim inside the quoted proxy_set_header, so Angie
+    // interpolates it per request. Regression test for issue #5 item 1.
+    let mut host = base_host(16, "app.example.com");
+    host.custom_headers = vec![CustomHeader {
+        name: "CF-Connecting-IP".into(),
+        value: "$remote_addr".into(),
+        direction: HeaderDirection::Request,
+    }];
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(
+        body.contains("proxy_set_header CF-Connecting-IP \"$remote_addr\";"),
+        "variable header should render verbatim, got:\n{body}"
+    );
+}
+
+#[test]
 fn forward_auth_omitted_when_disabled() {
     // A host without forward auth emits no auth_request / verify location.
     let host = base_host(15, "plain.example.com");

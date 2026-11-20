@@ -814,8 +814,9 @@ fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
 
 /// Custom response headers (`add_header … always`), server scope. Emitted next
 /// to HSTS; locations define no `add_header` of their own, so they inherit
-/// these. Name is an HTTP token, value is bounded printable ASCII with quote /
-/// backslash / `$` rejected (see `model::validate_custom_headers`).
+/// these. Name is an HTTP token; value is bounded printable ASCII with quote /
+/// backslash rejected and `$` allowed only as an nginx variable (see
+/// `model::validate_custom_headers`).
 fn emit_response_headers(out: &mut String, host: &ProxyHost) {
     for h in header_iter(host, HeaderDirection::Response) {
         let _ = writeln!(out, "    add_header {} \"{}\" always;", h.name, h.value);
