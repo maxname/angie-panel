@@ -97,6 +97,15 @@ create further tokens — a leaked secret cannot mint successors that outlive re
 | `apctl import <file>` | Load a dump (`-` reads stdin) |
 | `apctl completions <shell>` | Completion script for bash/zsh/fish/elvish/powershell |
 
+`--to` is `http://` or `https://` plus a host and an optional port (80 or 443 when left
+out). An IPv6 upstream goes in brackets, as in any URL — without them the port cannot be
+told from the address, and the command says so instead of guessing. Quote it: square
+brackets are glob characters, and zsh refuses the bare form with "no matches found".
+
+```bash
+apctl host add app.example.com --to 'http://[2a01:4f8::1]:8080'
+```
+
 Editing a host is not in the CLI: the host editor has thirteen sections, and mapping all
 of them onto flags would be worse than the UI at the job. Use `export`, edit the JSON,
 and `import` it.

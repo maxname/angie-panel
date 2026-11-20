@@ -85,7 +85,7 @@ pub enum HostCommand {
         /// Domain(s) served by this host
         #[arg(required = true)]
         domains: Vec<String>,
-        /// Upstream, e.g. http://127.0.0.1:3000
+        /// Upstream, e.g. http://127.0.0.1:3000 or http://[2a01:4f8::1]:3000
         #[arg(long, value_name = "URL")]
         to: String,
         /// Bind an existing certificate by id (see `apctl cert ls`)
@@ -256,6 +256,9 @@ fn s(v: &Value, key: &str) -> String {
 }
 
 /// Parse `--to http://host:port` into the three fields the API wants.
+///
+/// An IPv6 literal takes the URL form, `http://[2a01:4f8::1]:8080`. The API
+/// stores the address bare and rejects brackets, so they come off here.
 fn parse_upstream(raw: &str) -> anyhow::Result<(String, String, u16)> {
     let (scheme, rest) = raw
         .split_once("://")
@@ -264,18 +267,55 @@ fn parse_upstream(raw: &str) -> anyhow::Result<(String, String, u16)> {
         bail!("--to scheme must be http or https (got {scheme:?})");
     }
     let rest = rest.trim_end_matches('/');
-    let (host, port) = match rest.rsplit_once(':') {
-        Some((h, p)) => (
-            h.to_string(),
-            p.parse::<u16>()
-                .with_context(|| format!("bad port in --to: {p:?}"))?,
-        ),
-        None => (rest.to_string(), if scheme == "https" { 443 } else { 80 }),
+    let (host, port) = if let Some(bracketed) = rest.strip_prefix('[') {
+        let (addr, tail) = bracketed
+            .split_once(']')
+            .ok_or_else(|| anyhow::anyhow!("--to has '[' without a closing ']' (got {raw:?})"))?;
+        if addr.parse::<std::net::Ipv6Addr>().is_err() {
+            bail!("--to has brackets around {addr:?}, which is not an IPv6 address");
+        }
+        let port = match tail.strip_prefix(':') {
+            Some(p) => Some(p),
+            None if tail.is_empty() => None,
+            None => bail!("--to has {tail:?} after ']' where :port was expected (got {raw:?})"),
+        };
+        (addr, port)
+    } else if rest.matches(':').count() > 1 {
+        // No hostname or IPv4 address has a colon, so this is an IPv6 literal.
+        // Where it ends and a port begins cannot be told apart — the whole of
+        // `2a01:4f8::1:8080` is itself a valid address — so ask for brackets
+        // rather than guess.
+        bail!(
+            "an IPv6 address in --to needs brackets, like http://[2a01:4f8::1]:8080 (got {raw:?})"
+        );
+    } else {
+        match rest.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (rest, None),
+        }
+    };
+    let port = match port {
+        Some(p) => p
+            .parse::<u16>()
+            .with_context(|| format!("bad port in --to: {p:?}"))?,
+        None if scheme == "https" => 443,
+        None => 80,
     };
     if host.is_empty() {
         bail!("--to has no host: {raw:?}");
     }
-    Ok((scheme.to_string(), host, port))
+    Ok((scheme.to_string(), host.to_string(), port))
+}
+
+/// `host:port` for display. The API returns an IPv6 address bare, so it gets
+/// its brackets back here — the same form `--to` takes — or the port would be
+/// unreadable: `2a01:4f8::1:8080`.
+fn authority(host: &str, port: u64) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 /// Write a completion script for `cmd` to stdout. Dispatched from each binary's
@@ -525,10 +565,12 @@ async fn host(c: &Client, cmd: HostCommand) -> anyhow::Result<()> {
                     })
                     .unwrap_or_default();
                 let upstream = format!(
-                    "{}://{}:{}",
+                    "{}://{}",
                     s(h, "forward_scheme"),
-                    s(h, "forward_host"),
-                    h["forward_port"].as_u64().unwrap_or(0)
+                    authority(
+                        &s(h, "forward_host"),
+                        h["forward_port"].as_u64().unwrap_or(0)
+                    )
                 );
                 let mut state = if h["enabled"].as_bool().unwrap_or(true) {
                     "enabled".to_string()
@@ -676,6 +718,66 @@ mod tests {
         for bad in ["127.0.0.1:3000", "ftp://x:1", "http://:80", "http://x:abc"] {
             assert!(parse_upstream(bad).is_err(), "{bad} must be rejected");
         }
+
+        // IPv6 takes the URL form; the host goes to the API without brackets.
+        assert_eq!(
+            parse_upstream("http://[2a01:4f8::1]:8080").unwrap(),
+            ("http".into(), "2a01:4f8::1".into(), 8080)
+        );
+        assert_eq!(
+            parse_upstream("http://[2a01:4f8::1]").unwrap(),
+            ("http".into(), "2a01:4f8::1".into(), 80)
+        );
+        assert_eq!(
+            parse_upstream("https://[fd00::3]/").unwrap(),
+            ("https".into(), "fd00::3".into(), 443)
+        );
+        assert_eq!(
+            parse_upstream("http://[::ffff:10.0.0.1]:3000/").unwrap(),
+            ("http".into(), "::ffff:10.0.0.1".into(), 3000)
+        );
+
+        // Without brackets the address and the port cannot be told apart, so
+        // it is refused rather than split at a guessed colon — even when the
+        // tail looks like a port: `2a01:4f8::1:8080` is a valid address whole.
+        for bare in [
+            "http://2a01:4f8::1",
+            "http://2a01:4f8::1:8080",
+            "http://::1",
+            "https://fd00::3:443/",
+        ] {
+            let err = parse_upstream(bare).unwrap_err().to_string();
+            assert!(err.contains("needs brackets"), "{bare}: {err}");
+        }
+
+        // Brackets are for IPv6 only, and must be closed and followed by
+        // nothing but a port.
+        for bad in [
+            "http://[2a01:4f8::1",
+            "http://[2a01:4f8::1]8080",
+            "http://[2a01:4f8::1]:",
+            "http://[2a01:4f8::1]:http",
+            "http://[2a01:4f8::1]:99999",
+            "http://[]:80",
+            "http://[app]:80",
+            "http://[127.0.0.1]:80",
+            "http://[2a01:4f8::zz]:80",
+        ] {
+            assert!(parse_upstream(bad).is_err(), "{bad} must be rejected");
+        }
+    }
+
+    #[test]
+    fn authority_brackets_only_ipv6() {
+        assert_eq!(authority("2a01:4f8::1", 8080), "[2a01:4f8::1]:8080");
+        assert_eq!(authority("127.0.0.1", 3000), "127.0.0.1:3000");
+        assert_eq!(authority("backend.internal", 443), "backend.internal:443");
+        // What `host ls` prints is what `--to` accepts.
+        let shown = format!("http://{}", authority("2a01:4f8::1", 8080));
+        assert_eq!(
+            parse_upstream(&shown).unwrap(),
+            ("http".into(), "2a01:4f8::1".into(), 8080)
+        );
     }
 
     fn endpoint(bind: &str, port: u16, url: Option<&str>) -> Endpoint {
