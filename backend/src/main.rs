@@ -32,7 +32,9 @@ mod state;
 mod streams;
 mod system;
 mod systemd;
+mod templates;
 mod tokens;
+mod upstream_pools;
 mod users;
 
 #[cfg(test)]

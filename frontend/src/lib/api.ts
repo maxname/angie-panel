@@ -131,6 +131,31 @@ export interface Upstream {
   fail_timeout_secs: number
 }
 
+/** A shared upstream pool: named backend servers (with balancing and passive
+ *  health) defined once and referenced by any number of proxy hosts. Unlike a
+ *  host's own `Upstream` it has no separate primary — every member is in
+ *  `servers`. */
+export interface UpstreamPool {
+  id: number
+  name: string
+  servers: UpstreamServer[]
+  method: BalanceMethod
+  max_fails: number
+  fail_timeout_secs: number
+  /** Unix timestamps, seconds. */
+  created_at: number
+  updated_at: number
+}
+
+/** UpstreamPool without id/timestamps — the create/update payload. */
+export interface UpstreamPoolInput {
+  name: string
+  servers: UpstreamServer[]
+  method?: BalanceMethod
+  max_fails?: number
+  fail_timeout_secs?: number
+}
+
 export interface Ban {
   id: number
   /** Bare IP or IP/CIDR (v4 or v6). */
@@ -267,6 +292,7 @@ export interface Host {
   id: number
   domains: string[]
   forward_scheme: ForwardScheme
+  /** Empty (and the port 0) when the host proxies to a shared pool instead. */
   forward_host: string
   forward_port: number
   websockets_upgrade: boolean
@@ -285,6 +311,9 @@ export interface Host {
   advanced_snippet: string | null
   rate_limit: RateLimit
   upstream: Upstream
+  /** Shared upstream pool this host proxies to, instead of its own
+   *  forward_host:forward_port (+ `upstream`). null = the host's own. */
+  upstream_pool_id: number | null
   mtls: Mtls
   forward_auth: ForwardAuth
   custom_headers: CustomHeader[]
@@ -321,6 +350,9 @@ export interface HostInput {
   advanced_snippet?: string | null
   rate_limit?: RateLimit
   upstream?: Upstream
+  /** When set, the server ignores (and clears) forward_host / forward_port /
+   *  upstream: the pool is the backend. */
+  upstream_pool_id?: number | null
   mtls?: Mtls
   forward_auth?: ForwardAuth
   custom_headers?: CustomHeader[]
@@ -400,6 +432,69 @@ export interface StreamInput {
   certificate_id?: number | null
   enabled?: boolean
 }
+
+export type TemplateKind = 'proxy_host' | 'stream'
+
+/** A proxy-host template's settings: everything a host is created with except
+ *  its domains. The forward target may be blank ("ask when creating"), and
+ *  `new_certificate` asks for a certificate for the new host's own domains. */
+export type HostTemplateConfig = Omit<
+  Host,
+  'id' | 'domains' | 'enabled' | 'created_at' | 'updated_at'
+> & {
+  new_certificate: {
+    challenge: AcmeChallenge | null
+    dns_provider: string | null
+    ca: string | null
+    key_type: AcmeKeyType | null
+    email: string | null
+    staging: boolean
+  } | null
+}
+
+/** A stream template's settings: a stream without its incoming port. The
+ *  forward target may be blank (and the port then 0). */
+export type StreamTemplateConfig = Omit<
+  Stream,
+  'id' | 'incoming_port' | 'enabled' | 'created_at' | 'updated_at'
+>
+
+interface TemplateMeta {
+  id: number
+  name: string
+  /** Unix timestamps, seconds. */
+  created_at: number
+  updated_at: number
+}
+
+/** A saved set of settings to start a new proxy host from. A preset, not a
+ *  link: hosts created from it are ordinary hosts and do not follow later
+ *  edits to it. */
+export interface HostTemplate extends TemplateMeta {
+  kind: 'proxy_host'
+  config: HostTemplateConfig
+}
+
+export interface StreamTemplate extends TemplateMeta {
+  kind: 'stream'
+  config: StreamTemplateConfig
+}
+
+export type Template = HostTemplate | StreamTemplate
+
+/** Create/update payload: the settings are the create payload of that kind,
+ *  minus what a template does not carry. */
+export type TemplateInput =
+  | {
+      kind: 'proxy_host'
+      name: string
+      config: Omit<HostInput, 'domains' | 'enabled'>
+    }
+  | {
+      kind: 'stream'
+      name: string
+      config: Omit<StreamInput, 'incoming_port' | 'enabled'>
+    }
 
 /** One SNI → backend route inside an SNI router. */
 export interface SniRoute {
@@ -754,7 +849,10 @@ export interface DashboardHost {
   id: number
   domains: string[]
   enabled: boolean
+  /** `scheme://host:port`, or `scheme://<pool name>` when `upstream_pool` is set. */
   forward: string
+  /** The shared upstream pool the host proxies to, if any. */
+  upstream_pool: { id: number; name: string } | null
   certificate_id: number | null
   https_active: boolean
   /** null when the host has no traffic yet or Angie's status API is down. */
@@ -1138,6 +1236,30 @@ export const api = {
   deleteAccessList: (id: number) =>
     request<OkResponse>('DELETE', `/api/access-lists/${id}`),
 
+  listUpstreamPools: () =>
+    request<{ upstream_pools: UpstreamPool[] }>('GET', '/api/upstream-pools'),
+
+  createUpstreamPool: (body: UpstreamPoolInput) =>
+    request<UpstreamPool>('POST', '/api/upstream-pools', body),
+
+  updateUpstreamPool: (id: number, body: UpstreamPoolInput) =>
+    request<UpstreamPool>('PUT', `/api/upstream-pools/${id}`, body),
+
+  deleteUpstreamPool: (id: number) =>
+    request<OkResponse>('DELETE', `/api/upstream-pools/${id}`),
+
+  listTemplates: () =>
+    request<{ templates: Template[] }>('GET', '/api/templates'),
+
+  createTemplate: (body: TemplateInput) =>
+    request<Template>('POST', '/api/templates', body),
+
+  updateTemplate: (id: number, body: TemplateInput) =>
+    request<Template>('PUT', `/api/templates/${id}`, body),
+
+  deleteTemplate: (id: number) =>
+    request<OkResponse>('DELETE', `/api/templates/${id}`),
+
   exportConfig: () => request<unknown>('GET', '/api/export'),
 
   importConfig: (doc: unknown) =>
@@ -1149,6 +1271,8 @@ export interface ImportResult {
   imported: {
     certificates: number
     access_lists: number
+    upstream_pools: number
+    templates: number
     hosts: number
     redirect_hosts: number
     dead_hosts: number

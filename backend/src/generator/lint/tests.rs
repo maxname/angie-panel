@@ -12,7 +12,19 @@ fn policy(allow_snippets: bool) -> LintPolicy {
         public_dir: PathBuf::from("/var/lib/angie-panel/public"),
         allow_advanced_snippets: allow_snippets,
         acme_account_key: PathBuf::from("/var/lib/angie/acme/angie-panel-account.key"),
+        allow_loopback_upstreams: false,
     }
+}
+
+/// Lint one file under root's loopback opt-in (`allow_loopback_upstreams`).
+fn lint_one_with_loopback(body: &str) -> Vec<LintViolation> {
+    let mut files = FileSet::new();
+    files.insert("20-host-1-x.conf".to_string(), body.to_string());
+    let policy = LintPolicy {
+        allow_loopback_upstreams: true,
+        ..policy(true)
+    };
+    check_fileset(&files, &policy)
 }
 
 /// Lint a single-file fileset and return the violations.
@@ -76,6 +88,55 @@ fn denies_proxy_pass_to_management_port() {
     // unix sockets.
     assert_violates("proxy_pass http://unix:/var/run/x.sock;", "unix socket");
     assert_violates("proxy_pass unix:/var/run/docker.sock:;", "unix socket");
+}
+
+#[test]
+fn loopback_opt_in_lifts_the_loopback_rule_but_not_the_management_ports() {
+    // With `allow_loopback_upstreams` a service on this machine is a
+    // legitimate target, spelled any way the default policy refuses it.
+    for ok in [
+        "proxy_pass http://127.0.0.1:3000;",
+        "proxy_pass http://127.0.0.1;",
+        "proxy_pass http://[::1]:9000;",
+        "proxy_pass http://localhost:3000;",
+        "proxy_pass http://169.254.1.1:80;",
+        "proxy_pass http://[::ffff:127.0.0.1]:3000;",
+        "proxy_pass http://127.0.0.1:9091/api/verify;",
+    ] {
+        let v = lint_one_with_loopback(ok);
+        assert!(v.is_empty(), "{ok} must pass with the opt-in: {v:?}");
+    }
+    // The status API and the panel are still never a proxy target…
+    for denied in [
+        "proxy_pass http://127.0.0.1:8100;",
+        "proxy_pass http://localhost:8080;",
+        "proxy_pass http://[::1]:8100/status/;",
+        "proxy_pass http://[::ffff:127.0.0.1]:8100;",
+    ] {
+        let v = lint_one_with_loopback(denied);
+        assert!(
+            v.iter().any(|x| x.message.contains("management port")),
+            "{denied} must stay refused with the opt-in: {v:?}"
+        );
+    }
+    // …and neither is a unix socket.
+    let v = lint_one_with_loopback("proxy_pass http://unix:/var/run/x.sock;");
+    assert!(v.iter().any(|x| x.message.contains("unix socket")), "{v:?}");
+}
+
+#[test]
+fn local_management_port_names_what_no_policy_lets_through() {
+    assert_eq!(local_management_port("127.0.0.1", Some(8100)), Some(8100));
+    assert_eq!(local_management_port("LOCALHOST", Some(8080)), Some(8080));
+    assert_eq!(local_management_port("::1", Some(8100)), Some(8100));
+    assert_eq!(
+        local_management_port("::ffff:127.0.0.1", Some(8080)),
+        Some(8080)
+    );
+    // Another port on this machine, the same ports elsewhere, no port at all.
+    assert_eq!(local_management_port("127.0.0.1", Some(3000)), None);
+    assert_eq!(local_management_port("192.168.1.5", Some(8080)), None);
+    assert_eq!(local_management_port("127.0.0.1", None), None);
 }
 
 #[test]

@@ -3,6 +3,11 @@ import { Loader2, MoreHorizontal, Plus, X, Zap } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -40,7 +45,15 @@ import {
   type SniRouterInput,
 } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const ROUTER_BULK_ACTIONS = lifecycleActions<SniRouter>({
+  enable: api.enableSniRouter,
+  disable: api.disableSniRouter,
+  remove: api.deleteSniRouter,
+})
 
 export function SniRoutersPage() {
   const { t } = useTranslation()
@@ -52,6 +65,8 @@ export function SniRoutersPage() {
     queryKey: ['sni-routers'],
     queryFn: () => api.listSniRouters(),
   })
+  const queryClient = useQueryClient()
+  const selection = useSelection(routersQuery.data?.sni_routers ?? [])
   // Routers live in the stream {} context, so reuse the dashboard's view of
   // whether it's active to show the one-time enable banner.
   const dashboardQuery = useQuery({
@@ -124,6 +139,7 @@ export function SniRoutersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('sniRouters.table.name')}</TableHead>
                   <TableHead>{t('sniRouters.table.port')}</TableHead>
                   <TableHead>{t('sniRouters.table.routes')}</TableHead>
@@ -140,6 +156,7 @@ export function SniRoutersPage() {
                   <RouterRow
                     key={router.id}
                     router={router}
+                    selection={selection}
                     onEdit={() => openEdit(router)}
                     onDelete={() => setDeleteTarget(router)}
                   />
@@ -149,6 +166,14 @@ export function SniRoutersPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(router) => router.name}
+        actions={ROUTER_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['sni-routers'] })}
+        successNote={t('streams.unappliedBody')}
+      />
 
       <RouterEditorDialog
         open={editorOpen}
@@ -213,11 +238,12 @@ function EnableContextBanner() {
 
 interface RouterRowProps {
   router: SniRouter
+  selection: Selection<SniRouter>
   onEdit: () => void
   onDelete: () => void
 }
 
-function RouterRow({ router, onEdit, onDelete }: RouterRowProps) {
+function RouterRow({ router, selection, onEdit, onDelete }: RouterRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -245,7 +271,8 @@ function RouterRow({ router, onEdit, onDelete }: RouterRowProps) {
   const routeCount = router.routes.length + (router.default_host ? 1 : 0)
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(router.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={router} name={router.name} />
       <TableCell className="font-medium">{router.name}</TableCell>
       <TableCell>
         <span className="font-mono text-sm">{router.incoming_port}</span>

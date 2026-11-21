@@ -238,6 +238,10 @@ fn validate_http_url(raw: &str, ssrf: Option<&UpstreamPolicy>) -> Result<String,
         allow_loopback: true,
     };
     let host_norm = validate_forward_host(&host, ssrf.unwrap_or(&permissive))?;
+    // Only a URL that Angie itself fetches ends up in a `proxy_pass`.
+    if ssrf.is_some() {
+        refuse_local_management_port(&host_norm, port)?;
+    }
     if !path.is_empty() {
         validate_url_path(path)?;
     }
@@ -343,9 +347,12 @@ const MAX_HEADER_VALUE_LEN: usize = 1024;
 
 /// Validate a host's custom headers. Each name is an HTTP token; each value is
 /// bounded printable ASCII with the characters that could terminate the quoted
-/// directive value or inject an nginx variable (`"`, `\`, `$`, control/CR-LF)
-/// rejected. An empty value is allowed — for a request header that strips the
-/// header from the upstream request.
+/// directive value or break out of it (`"`, `\`, control/CR-LF) rejected. A `$`
+/// is allowed only where it introduces an nginx variable (`$remote_addr`,
+/// `${host}`) — the value is emitted inside a quoted `proxy_set_header` /
+/// `add_header`, so the variable is interpolated at request time and cannot
+/// restructure the config. An empty value is allowed — for a request header
+/// that strips the header from the upstream request.
 pub fn validate_custom_headers(headers: Vec<CustomHeader>) -> Result<Vec<CustomHeader>, ApiError> {
     if headers.len() > MAX_CUSTOM_HEADERS {
         return Err(bad("invalid_header", "too many custom headers"));
@@ -368,17 +375,54 @@ fn validate_header_value(raw: &str) -> Result<String, ApiError> {
     if s.len() > MAX_HEADER_VALUE_LEN {
         return Err(bad("invalid_header", "header value is too long"));
     }
-    let ok = s
-        .bytes()
-        .all(|b| (0x20..=0x7e).contains(&b) && !matches!(b, b'"' | b'\\' | b'$'));
-    if !ok {
-        return Err(bad(
-            "invalid_header",
-            "header value contains invalid characters (no quotes, backslash, $, or control characters)",
-        ));
+    // The value is emitted inside a quoted `proxy_set_header`/`add_header`, so
+    // `"` and `\` (quote / escape) and any control char are always rejected —
+    // they are the only way to terminate the string or break out of it. A `$`
+    // is allowed, but only where it introduces an nginx variable so that a
+    // stray `$` is caught here with a clear per-field error instead of making
+    // the whole config fail `angie -t` at apply time.
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !(0x20..=0x7e).contains(&b) || matches!(b, b'"' | b'\\') {
+            return Err(bad(
+                "invalid_header",
+                "header value contains invalid characters (no quotes, backslash, or control characters)",
+            ));
+        }
+        if b == b'$' {
+            // `$name` or `${name}`, where name is a non-empty run of
+            // [A-Za-z0-9_] (nginx variable names, incl. regex captures like $1).
+            let var_char = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+            let (name_start, braced) = match bytes.get(i + 1) {
+                Some(b'{') => (i + 2, true),
+                Some(&c) if var_char(c) => (i + 1, false),
+                _ => return Err(bad("invalid_header", INVALID_HEADER_VAR)),
+            };
+            let mut j = name_start;
+            while j < bytes.len() && var_char(bytes[j]) {
+                j += 1;
+            }
+            if j == name_start {
+                return Err(bad("invalid_header", INVALID_HEADER_VAR));
+            }
+            if braced {
+                if bytes.get(j) != Some(&b'}') {
+                    return Err(bad("invalid_header", INVALID_HEADER_VAR));
+                }
+                j += 1;
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
     }
     Ok(s.to_string())
 }
+
+const INVALID_HEADER_VAR: &str =
+    "'$' must introduce an nginx variable, e.g. $remote_addr or ${host}";
 
 /// Per-host maintenance mode. When enabled, the host stops proxying and serves a
 /// styled `503 Service Unavailable` page instead — a graceful way to take a
@@ -596,6 +640,24 @@ impl BalanceMethod {
             BalanceMethod::IpHash => Some("ip_hash"),
         }
     }
+
+    /// The stored / wire spelling (matches the serde representation).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BalanceMethod::RoundRobin => "round_robin",
+            BalanceMethod::LeastConn => "least_conn",
+            BalanceMethod::IpHash => "ip_hash",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`]; an unknown value reads as the default.
+    pub fn from_db(s: &str) -> Self {
+        match s {
+            "least_conn" => BalanceMethod::LeastConn,
+            "ip_hash" => BalanceMethod::IpHash,
+            _ => BalanceMethod::RoundRobin,
+        }
+    }
 }
 
 /// One additional backend server beyond the host's primary
@@ -752,8 +814,7 @@ pub fn validate_upstream(mut up: Upstream, policy: &UpstreamPolicy) -> Result<Up
     if up.servers.len() > MAX_UPSTREAM_SERVERS {
         return Err(bad("invalid_upstream", "too many backend servers"));
     }
-    let weight_ok = |w: u32| (1..=MAX_WEIGHT).contains(&w);
-    if !weight_ok(up.primary_weight) {
+    if !(1..=MAX_WEIGHT).contains(&up.primary_weight) {
         return Err(bad("invalid_upstream", "primary weight out of range"));
     }
     if up.max_fails > MAX_FAILS {
@@ -762,23 +823,125 @@ pub fn validate_upstream(mut up: Upstream, policy: &UpstreamPolicy) -> Result<Up
     if up.fail_timeout_secs == 0 || up.fail_timeout_secs > MAX_FAIL_TIMEOUT {
         return Err(bad("invalid_upstream", "fail_timeout out of range"));
     }
-    for s in &mut up.servers {
+    validate_upstream_servers(&mut up.servers, up.method, policy)?;
+    Ok(up)
+}
+
+/// Validate + normalize a list of pool members — shared by a host's own extra
+/// servers and by a shared [`UpstreamPool`]. Each host runs through the SAME
+/// SSRF-guarded validation as a host's primary upstream.
+fn validate_upstream_servers(
+    servers: &mut [UpstreamServer],
+    method: BalanceMethod,
+    policy: &UpstreamPolicy,
+) -> Result<(), ApiError> {
+    for s in servers {
         s.host = validate_forward_host(&s.host, policy)?;
         if s.port == 0 {
             return Err(bad("invalid_upstream", "server port must be 1-65535"));
         }
-        if !weight_ok(s.weight) {
+        if !(1..=MAX_WEIGHT).contains(&s.weight) {
             return Err(bad("invalid_upstream", "server weight out of range"));
         }
         // ip_hash cannot be combined with backup servers (Angie rejects it).
-        if up.method == BalanceMethod::IpHash && s.backup {
+        if method == BalanceMethod::IpHash && s.backup {
             return Err(bad(
                 "invalid_upstream",
                 "ip_hash balancing cannot be combined with backup servers",
             ));
         }
     }
-    Ok(up)
+    Ok(())
+}
+
+/// A shared upstream pool: a named set of backend servers with a balancing
+/// method and passive health, defined once and referenced by any number of
+/// proxy hosts through `upstream_pool_id`. Unlike a host's own [`Upstream`]
+/// there is no separate "primary" — every member is listed in `servers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpstreamPool {
+    pub id: i64,
+    pub name: String,
+    pub servers: Vec<UpstreamServer>,
+    pub method: BalanceMethod,
+    pub max_fails: u32,
+    pub fail_timeout_secs: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl UpstreamPool {
+    /// The name of the generated `upstream` block (and its metrics zone). Keyed
+    /// by id so renaming a pool never touches the hosts that proxy to it.
+    pub fn zone(id: i64) -> String {
+        format!("pool_{id}")
+    }
+}
+
+/// Create/update payload for a shared upstream pool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpstreamPoolInput {
+    pub name: String,
+    pub servers: Vec<UpstreamServer>,
+    #[serde(default)]
+    pub method: BalanceMethod,
+    #[serde(default = "default_max_fails")]
+    pub max_fails: u32,
+    #[serde(default = "default_fail_timeout")]
+    pub fail_timeout_secs: u32,
+}
+
+pub const MAX_UPSTREAM_POOL_NAME_LEN: usize = 64;
+/// A host's own pool is its primary plus `MAX_UPSTREAM_SERVERS` extras; a shared
+/// pool may hold as many members as that, so any host's servers fit in one.
+pub const MAX_UPSTREAM_POOL_SERVERS: usize = MAX_UPSTREAM_SERVERS + 1;
+
+/// Validate + normalize a shared upstream pool. The name is a UI label that is
+/// also written as a config comment, so it must stay on one line; servers get
+/// the same SSRF-guarded validation as any other upstream target.
+pub fn validate_upstream_pool_input(
+    mut input: UpstreamPoolInput,
+    policy: &UpstreamPolicy,
+) -> Result<UpstreamPoolInput, ApiError> {
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty() {
+        return Err(bad("invalid_name", "pool name must not be empty"));
+    }
+    if input.name.chars().count() > MAX_UPSTREAM_POOL_NAME_LEN {
+        return Err(bad("invalid_name", "pool name is too long"));
+    }
+    if input.name.chars().any(|c| c.is_control()) {
+        return Err(bad(
+            "invalid_name",
+            "pool name must not contain control characters",
+        ));
+    }
+    if input.servers.is_empty() {
+        return Err(bad(
+            "invalid_upstream",
+            "a pool needs at least one backend server",
+        ));
+    }
+    if input.servers.len() > MAX_UPSTREAM_POOL_SERVERS {
+        return Err(bad("invalid_upstream", "too many backend servers"));
+    }
+    if input.max_fails > MAX_FAILS {
+        return Err(bad("invalid_upstream", "max_fails is too high"));
+    }
+    if input.fail_timeout_secs == 0 || input.fail_timeout_secs > MAX_FAIL_TIMEOUT {
+        return Err(bad("invalid_upstream", "fail_timeout out of range"));
+    }
+    validate_upstream_servers(&mut input.servers, input.method, policy)?;
+    // Angie refuses an upstream made only of backup servers ("no servers in
+    // upstream") — a host's own pool can't hit this because its primary is
+    // never a backup, but a shared pool has no primary.
+    if input.servers.iter().all(|s| s.backup) {
+        return Err(bad(
+            "invalid_upstream",
+            "a pool needs at least one server that is not a backup",
+        ));
+    }
+    Ok(input)
 }
 
 /// Validate + normalize a rate-limit config. When disabled it is flattened to
@@ -835,6 +998,10 @@ pub struct ProxyHost {
     /// Availability checks. Empty = the host is not probed.
     pub health_checks: Vec<HealthCheck>,
     pub upstream: Upstream,
+    /// Shared [`UpstreamPool`] this host proxies to. When set, the pool IS the
+    /// backend: `forward_host` is empty, `forward_port` is 0 and `upstream` is
+    /// at its defaults (see [`validate_host_input`]).
+    pub upstream_pool_id: Option<i64>,
     pub mtls: Mtls,
     pub forward_auth: ForwardAuth,
     pub custom_headers: Vec<CustomHeader>,
@@ -904,11 +1071,16 @@ pub fn validate_proxy_tuning(mut p: ProxyTuning) -> Result<ProxyTuning, ApiError
 }
 
 /// Create/update payload; validation normalizes it in place.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyHostInput {
     pub domains: Vec<String>,
     pub forward_scheme: Scheme,
+    // Optional in the payload only so a host that references a shared pool can
+    // leave them out; without `upstream_pool_id` both are still required (an
+    // absent host / port fails validation like an empty one always did).
+    #[serde(default)]
     pub forward_host: String,
+    #[serde(default)]
     pub forward_port: u16,
     #[serde(default)]
     pub websockets_upgrade: bool,
@@ -946,6 +1118,10 @@ pub struct ProxyHostInput {
     pub rate_limit: RateLimit,
     #[serde(default)]
     pub upstream: Upstream,
+    /// Proxy to this shared upstream pool instead of the host's own
+    /// `forward_host:forward_port` (+ `upstream` extras).
+    #[serde(default)]
+    pub upstream_pool_id: Option<i64>,
     #[serde(default)]
     pub mtls: Mtls,
     #[serde(default)]
@@ -1070,6 +1246,25 @@ pub fn validate_forward_host(raw: &str, policy: &UpstreamPolicy) -> Result<Strin
     Ok(s)
 }
 
+/// A custom location and an auth endpoint are written to the config as a
+/// literal `proxy_pass` target, and the root helper's linter never lets one of
+/// those reach Angie's status API or the panel on this machine — not even with
+/// `allow_loopback_upstreams`. Such a target is turned down here, on its own
+/// field: once saved it would fail every apply until someone tracked it down.
+/// The linter answers the question itself, so the two cannot drift apart.
+fn refuse_local_management_port(host: &str, port: Option<u16>) -> Result<(), ApiError> {
+    match crate::generator::lint::local_management_port(host, port) {
+        Some(port) => Err(bad(
+            "forbidden_forward_host",
+            format!(
+                "{host}:{port} is a management port of this machine (Angie's status API \
+                 or the panel); a location or an auth endpoint cannot proxy to it"
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// SSRF guard for upstream IPs (PLAN.md §7): loopback and link-local targets
 /// expose panel/status management endpoints; require an explicit opt-in.
 pub struct UpstreamPolicy {
@@ -1186,9 +1381,21 @@ pub fn validate_host_input(
     }
     input.domains = domains;
 
-    input.forward_host = validate_forward_host(&input.forward_host, upstream_policy)?;
-    if input.forward_port == 0 {
-        return Err(bad("invalid_forward_port", "port must be 1-65535"));
+    if input.upstream_pool_id.is_some() {
+        // The shared pool is the backend. The host's own target and balancing
+        // config would never be used, so they are cleared rather than kept as
+        // stale values that every reader (list, health probe, CLI) could mistake
+        // for where the traffic goes. Whether the pool exists is checked by the
+        // caller, which has the database.
+        input.forward_host = String::new();
+        input.forward_port = 0;
+        input.upstream = Upstream::default();
+    } else {
+        input.forward_host = validate_forward_host(&input.forward_host, upstream_policy)?;
+        if input.forward_port == 0 {
+            return Err(bad("invalid_forward_port", "port must be 1-65535"));
+        }
+        input.upstream = validate_upstream(input.upstream, upstream_policy)?;
     }
 
     if input.locations.len() > MAX_LOCATIONS_PER_HOST {
@@ -1207,6 +1414,7 @@ pub fn validate_host_input(
         if loc.forward_port == 0 {
             return Err(bad("invalid_forward_port", "port must be 1-65535"));
         }
+        refuse_local_management_port(&loc.forward_host, Some(loc.forward_port))?;
         if let Some(r) = &loc.rewrite {
             if r.trim().is_empty() {
                 loc.rewrite = None;
@@ -1232,7 +1440,6 @@ pub fn validate_host_input(
     }
 
     input.rate_limit = validate_rate_limit(input.rate_limit)?;
-    input.upstream = validate_upstream(input.upstream, upstream_policy)?;
     input.mtls = validate_mtls(input.mtls)?;
     input.forward_auth = validate_forward_auth(input.forward_auth, upstream_policy)?;
     input.custom_headers = validate_custom_headers(input.custom_headers)?;
@@ -1244,6 +1451,26 @@ pub fn validate_host_input(
     // hsts_subdomains only makes sense with hsts, http2/force_ssl only with
     // TLS — kept as-is in the DB; the generator applies the actual gating.
     Ok(input)
+}
+
+/// How to issue the certificate a host asks for in the same request that
+/// creates it. The domains are the host's; everything omitted falls back to
+/// the global ACME settings (default CA, contact email) or the certificate
+/// defaults — at the time the certificate is created, not before.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewCertificate {
+    #[serde(default)]
+    pub challenge: Option<Challenge>,
+    #[serde(default)]
+    pub dns_provider: Option<String>,
+    #[serde(default)]
+    pub ca: Option<String>,
+    #[serde(default)]
+    pub key_type: Option<KeyType>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub staging: bool,
 }
 
 // ============================================================ certificates
@@ -2068,7 +2295,7 @@ pub struct Stream {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamInput {
     pub incoming_port: u16,
     pub forward_host: String,
@@ -2286,6 +2513,313 @@ fn validate_sni_hostname(raw: &str) -> Result<String, ApiError> {
     Ok(s)
 }
 
+// =============================================================== templates
+
+/// What a template is a template of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateKind {
+    ProxyHost,
+    Stream,
+}
+
+impl TemplateKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TemplateKind::ProxyHost => "proxy_host",
+            TemplateKind::Stream => "stream",
+        }
+    }
+
+    pub fn from_db(s: &str) -> Option<Self> {
+        match s {
+            "proxy_host" => Some(TemplateKind::ProxyHost),
+            "stream" => Some(TemplateKind::Stream),
+            _ => None,
+        }
+    }
+}
+
+/// A saved set of settings to start a new proxy host or stream from. A preset,
+/// not a link: what is created from it is an ordinary host/stream, and later
+/// edits to the template do not reach it.
+///
+/// `config` is the create payload of the template's kind, already normalized
+/// by [`validate_template_input`], minus what makes each one unique — a host's
+/// `domains`, a stream's `incoming_port` — and minus `enabled`. A proxy-host
+/// template may also carry `new_certificate`: "request a certificate for the
+/// new host's domains" (see [`NewCertificate`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct Template {
+    pub id: i64,
+    pub kind: TemplateKind,
+    pub name: String,
+    pub config: serde_json::Value,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TemplateInput {
+    pub kind: TemplateKind,
+    pub name: String,
+    #[serde(default)]
+    pub config: serde_json::Value,
+}
+
+/// A proxy-host template's settings: everything a host create request carries.
+#[derive(Deserialize)]
+struct HostTemplateConfig {
+    #[serde(flatten)]
+    host: ProxyHostInput,
+    #[serde(default)]
+    new_certificate: Option<NewCertificate>,
+}
+
+pub const MAX_TEMPLATE_NAME_LEN: usize = 64;
+
+/// Stand-in for what a template leaves open — the domain a host will bring,
+/// and a forward target it may not fix — so that its settings can go through
+/// the very validators a real host or stream goes through. `.invalid` is
+/// reserved (RFC 6761): it never resolves and is never anyone's backend, and
+/// the stand-in is taken out again before anything is stored.
+const TEMPLATE_STAND_IN: &str = "template.invalid";
+
+/// Validate + normalize a template. Its settings are held to exactly the rules
+/// of the thing it creates (same allowlists, same SSRF guard, same snippet
+/// opt-in), so a template can never hold a setting that creating from it would
+/// then refuse — and nothing unvalidated is parked in the database on its way
+/// to a host. That references (certificate, access list, pool, DNS profile)
+/// exist is checked by the caller, which has the database.
+pub fn validate_template_input(
+    mut input: TemplateInput,
+    allow_advanced_snippets: bool,
+    policy: &UpstreamPolicy,
+) -> Result<TemplateInput, ApiError> {
+    input.name = input.name.trim().to_string();
+    if input.name.is_empty() {
+        return Err(bad("invalid_name", "template name must not be empty"));
+    }
+    if input.name.chars().count() > MAX_TEMPLATE_NAME_LEN {
+        return Err(bad("invalid_name", "template name is too long"));
+    }
+    if input.name.chars().any(|c| c.is_control()) {
+        return Err(bad(
+            "invalid_name",
+            "template name must not contain control characters",
+        ));
+    }
+    let serde_json::Value::Object(settings) = input.config else {
+        return Err(bad(
+            "invalid_template",
+            "template settings must be an object",
+        ));
+    };
+    input.config = match input.kind {
+        TemplateKind::ProxyHost => host_template(settings, allow_advanced_snippets, policy)?,
+        TemplateKind::Stream => stream_template(settings, policy)?,
+    };
+    Ok(input)
+}
+
+type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+/// Whether the settings leave the forward target open, and the port they give
+/// for it (0 = none). A blank host is the one thing a template may hold that
+/// a real host/stream may not.
+fn template_target(settings: &JsonObject) -> (bool, u64) {
+    let blank = settings
+        .get("forward_host")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|h| h.trim().is_empty());
+    let port = settings
+        .get("forward_port")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    (blank, port)
+}
+
+fn invalid_template(what: &str, err: impl std::fmt::Display) -> ApiError {
+    bad(
+        "invalid_template",
+        format!("invalid {what} settings: {err}"),
+    )
+}
+
+fn host_template(
+    mut settings: JsonObject,
+    allow_advanced_snippets: bool,
+    policy: &UpstreamPolicy,
+) -> Result<serde_json::Value, ApiError> {
+    use serde_json::json;
+
+    let on_pool = settings
+        .get("upstream_pool_id")
+        .is_some_and(|v| !v.is_null());
+    let (blank_host, port) = template_target(&settings);
+    let open_target = blank_host && !on_pool;
+
+    // Not a template's to carry: the host brings its own domains, and is
+    // created enabled.
+    settings.remove("enabled");
+    settings.insert("domains".into(), json!([TEMPLATE_STAND_IN]));
+    if open_target {
+        settings.insert("forward_host".into(), json!(TEMPLATE_STAND_IN));
+        if port == 0 {
+            settings.insert("forward_port".into(), json!(80));
+        }
+    }
+
+    let parsed: HostTemplateConfig =
+        serde_json::from_value(settings.into()).map_err(|e| invalid_template("proxy host", e))?;
+    let mut host = validate_host_input(parsed.host, allow_advanced_snippets, policy)?;
+    let new_certificate = parsed
+        .new_certificate
+        .map(validate_new_certificate)
+        .transpose()?;
+    if host.certificate_id.is_some() && new_certificate.is_some() {
+        return Err(bad(
+            "conflicting_certificate",
+            "pick an existing certificate or request a new one, not both",
+        ));
+    }
+
+    // The stand-ins come back out; the port the template gave (if any) stays.
+    if open_target {
+        host.forward_host.clear();
+        host.forward_port = port as u16;
+    }
+    let mut out = match serde_json::to_value(&host) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => return Err(ApiError::internal("serializing a host template")),
+    };
+    out.remove("domains");
+    out.remove("enabled");
+    out.insert("new_certificate".into(), json!(new_certificate));
+    Ok(out.into())
+}
+
+/// A template's "request a certificate" settings, through the certificate
+/// validator — with stand-ins for the name and the domains, which only exist
+/// once a host is created. What was left to the defaults stays left to them:
+/// the default CA is the one in force when the certificate is requested.
+fn validate_new_certificate(mut req: NewCertificate) -> Result<NewCertificate, ApiError> {
+    let checked = validate_cert_input(CertificateInput {
+        name: "template".into(),
+        domains: vec![TEMPLATE_STAND_IN.into()],
+        challenge: req.challenge.unwrap_or(Challenge::Http),
+        key_type: req.key_type.unwrap_or(KeyType::Ecdsa),
+        email: req.email.take(),
+        staging: req.staging,
+        dns_provider: req.dns_provider.take(),
+        ca: req.ca.clone().unwrap_or_else(default_ca),
+    })?;
+    req.email = checked.email;
+    req.dns_provider = checked.dns_provider;
+    Ok(req)
+}
+
+fn stream_template(
+    mut settings: JsonObject,
+    policy: &UpstreamPolicy,
+) -> Result<serde_json::Value, ApiError> {
+    use serde_json::json;
+
+    let (open_target, port) = template_target(&settings);
+
+    // Not a template's to carry: each stream has its own incoming port.
+    settings.remove("enabled");
+    settings.insert("incoming_port".into(), json!(1));
+    if open_target {
+        settings.insert("forward_host".into(), json!(TEMPLATE_STAND_IN));
+        if port == 0 {
+            settings.insert("forward_port".into(), json!(1));
+        }
+    }
+
+    let parsed: StreamInput =
+        serde_json::from_value(settings.into()).map_err(|e| invalid_template("stream", e))?;
+    let mut stream = validate_stream_input(parsed, policy)?;
+
+    if open_target {
+        stream.forward_host.clear();
+        stream.forward_port = port as u16;
+    }
+    let mut out = match serde_json::to_value(&stream) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => return Err(ApiError::internal("serializing a stream template")),
+    };
+    out.remove("incoming_port");
+    out.remove("enabled");
+    Ok(out.into())
+}
+
+/// The other rows a template's settings point at — for the caller to check
+/// they exist, and for a delete to find the templates that pointed at it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TemplateRefs {
+    pub certificate_id: Option<i64>,
+    pub access_list_id: Option<i64>,
+    pub upstream_pool_id: Option<i64>,
+    /// DNS credential profile of a `new_certificate` request (a profile is
+    /// referenced by its id, as a string).
+    pub dns_provider: Option<String>,
+}
+
+/// One of the references in [`TemplateRefs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateRef {
+    Certificate,
+    AccessList,
+    UpstreamPool,
+    DnsCredential,
+}
+
+impl TemplateRefs {
+    /// Whether this reference points at the row with `id`.
+    pub fn points_at(&self, what: TemplateRef, id: i64) -> bool {
+        match what {
+            TemplateRef::Certificate => self.certificate_id == Some(id),
+            TemplateRef::AccessList => self.access_list_id == Some(id),
+            TemplateRef::UpstreamPool => self.upstream_pool_id == Some(id),
+            TemplateRef::DnsCredential => {
+                self.dns_provider.as_deref() == Some(id.to_string().as_str())
+            }
+        }
+    }
+}
+
+/// Clear one reference in a template's settings: the template keeps
+/// everything else and just loses that default. For a DNS profile that means
+/// its certificate request falls back to Angie answering the challenge itself.
+pub fn clear_template_ref(config: &mut serde_json::Value, what: TemplateRef) {
+    let slot = match what {
+        TemplateRef::Certificate => config.get_mut("certificate_id"),
+        TemplateRef::AccessList => config.get_mut("access_list_id"),
+        TemplateRef::UpstreamPool => config.get_mut("upstream_pool_id"),
+        TemplateRef::DnsCredential => config
+            .get_mut("new_certificate")
+            .and_then(|nc| nc.get_mut("dns_provider")),
+    };
+    if let Some(slot) = slot {
+        *slot = serde_json::Value::Null;
+    }
+}
+
+pub fn template_refs(config: &serde_json::Value) -> TemplateRefs {
+    let id = |key: &str| config.get(key).and_then(serde_json::Value::as_i64);
+    TemplateRefs {
+        certificate_id: id("certificate_id"),
+        access_list_id: id("access_list_id"),
+        upstream_pool_id: id("upstream_pool_id"),
+        dns_provider: config
+            .get("new_certificate")
+            .and_then(|nc| nc.get("dns_provider"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2375,6 +2909,72 @@ mod tests {
         assert!(validate_forward_host("127.0.0.1", &permissive).is_ok());
         assert!(validate_forward_host("::ffff:127.0.0.1", &permissive).is_ok());
         assert!(validate_forward_host("localhost", &permissive).is_ok());
+    }
+
+    #[test]
+    fn loopback_opt_in_stops_short_of_the_management_ports() {
+        let permissive = UpstreamPolicy {
+            allow_loopback: true,
+        };
+        let location = |host: &str, port: u16| {
+            validate_host_input(
+                host_input(serde_json::json!({
+                    "forward_host": "10.0.0.5", "forward_port": 80,
+                    "locations": [{
+                        "path": "/api", "forward_scheme": "http",
+                        "forward_host": host, "forward_port": port,
+                    }],
+                })),
+                false,
+                &permissive,
+            )
+        };
+        let auth = |url: &str| {
+            validate_forward_auth(
+                ForwardAuth {
+                    enabled: true,
+                    verify_url: url.to_string(),
+                    ..ForwardAuth::default()
+                },
+                &permissive,
+            )
+        };
+
+        // A service on this machine is what the opt-in is for…
+        assert!(location("127.0.0.1", 3000).is_ok());
+        assert!(location("localhost", 9000).is_ok());
+        assert!(auth("http://127.0.0.1:9091/api/verify").is_ok());
+        assert!(auth("http://localhost/verify").is_ok());
+        // …but a location or an auth endpoint is a literal `proxy_pass`, which
+        // the linter never lets reach the status API or the panel. Saying so
+        // here keeps it from being saved and then failing every apply.
+        for (host, port) in [("127.0.0.1", 8100), ("localhost", 8080), ("::1", 8100)] {
+            let err = location(host, port).unwrap_err();
+            assert_eq!(err.code, "forbidden_forward_host", "{host}:{port}");
+            assert!(err.message.contains("management port"), "{}", err.message);
+        }
+        for url in [
+            "http://127.0.0.1:8100/status/",
+            "http://localhost:8080/verify",
+            "http://[::1]:8100/",
+        ] {
+            let err = auth(url).unwrap_err();
+            assert_eq!(err.code, "forbidden_forward_host", "{url}");
+        }
+        // The same ports on another machine are nobody's management ports.
+        assert!(location("192.168.1.5", 8080).is_ok());
+        assert!(auth("http://10.0.0.3:8100/verify").is_ok());
+        // Where the browser is sent to sign in is not a proxy target at all.
+        assert!(validate_forward_auth(
+            ForwardAuth {
+                enabled: true,
+                verify_url: "http://10.0.0.3:9091/verify".into(),
+                sign_in_url: Some("http://localhost:8080/login".into()),
+                ..ForwardAuth::default()
+            },
+            &permissive,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -2592,6 +3192,7 @@ mod tests {
             advanced_snippet: Some("client_max_body_size 100m;".into()),
             rate_limit: RateLimit::default(),
             upstream: Upstream::default(),
+            upstream_pool_id: None,
             mtls: Mtls::default(),
             forward_auth: ForwardAuth::default(),
             custom_headers: vec![],
@@ -2813,13 +3414,44 @@ mod tests {
         assert_eq!(ok[0].value, "SAMEORIGIN");
         assert_eq!(ok[2].direction, HeaderDirection::Request);
 
+        // nginx variables are allowed in the value (e.g. forwarding the real
+        // client IP to the upstream). `$name`, `${name}`, regex captures and a
+        // mix with literal text all pass and are kept verbatim.
+        let ok = validate_custom_headers(vec![
+            CustomHeader {
+                name: "CF-Connecting-IP".into(),
+                value: "$remote_addr".into(),
+                direction: HeaderDirection::Request,
+            },
+            CustomHeader {
+                name: "X-Forwarded-For".into(),
+                value: "$proxy_add_x_forwarded_for".into(),
+                direction: HeaderDirection::Request,
+            },
+            CustomHeader {
+                name: "X-Origin".into(),
+                value: "${scheme}://${host}:$server_port".into(),
+                direction: HeaderDirection::Request,
+            },
+        ])
+        .unwrap();
+        assert_eq!(ok[0].value, "$remote_addr");
+        assert_eq!(ok[2].value, "${scheme}://${host}:$server_port");
+
         // Injection in the name or value is rejected.
         for (name, value) in [
             ("X Frame", "ok"),
             ("X-Evil", "a\"; add_header Evil 1"),
             ("X-Evil", "back\\slash"),
-            ("X-Var", "$request_uri"),
             ("X-Nl", "line1\nline2"),
+            // A `$` that does not introduce a variable: dangling, followed by
+            // whitespace/punctuation, an unclosed or empty `${…}`.
+            ("X-Var", "$"),
+            ("X-Var", "price is $ now"),
+            ("X-Var", "trailing$"),
+            ("X-Var", "${host"),
+            ("X-Var", "${}"),
+            ("X-Var", "$-nope"),
         ] {
             assert!(
                 validate_custom_headers(vec![CustomHeader {
@@ -3079,6 +3711,423 @@ mod tests {
             &policy(),
         )
         .is_err());
+    }
+
+    fn pool_server(host: &str, port: u16) -> UpstreamServer {
+        UpstreamServer {
+            host: host.into(),
+            port,
+            ..Default::default()
+        }
+    }
+
+    fn pool_input(name: &str, servers: Vec<UpstreamServer>) -> UpstreamPoolInput {
+        UpstreamPoolInput {
+            name: name.into(),
+            servers,
+            method: BalanceMethod::RoundRobin,
+            max_fails: 1,
+            fail_timeout_secs: 10,
+        }
+    }
+
+    #[test]
+    fn upstream_pool_validation() {
+        // A valid pool: name trimmed, server hosts normalized.
+        let ok = validate_upstream_pool_input(
+            pool_input(
+                "  App backends  ",
+                vec![
+                    pool_server("APP.internal", 8080),
+                    pool_server("10.0.0.3", 8080),
+                ],
+            ),
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!(ok.name, "App backends");
+        assert_eq!(ok.servers[0].host, "app.internal");
+
+        // The name is written as a config comment: it must stay on one line.
+        for bad_name in ["", "   ", "a\nserver 127.0.0.1:8100;", &"x".repeat(65)] {
+            let err = validate_upstream_pool_input(
+                pool_input(bad_name, vec![pool_server("10.0.0.2", 80)]),
+                &policy(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "invalid_name", "name {bad_name:?}");
+        }
+
+        // A pool with no servers has nothing to proxy to.
+        let err = validate_upstream_pool_input(pool_input("empty", vec![]), &policy()).unwrap_err();
+        assert_eq!(err.code, "invalid_upstream");
+
+        // Servers go through the same SSRF-guarded validation as any upstream:
+        // injection and (without the opt-in) loopback are both refused.
+        assert!(validate_upstream_pool_input(
+            pool_input(
+                "evil",
+                vec![pool_server("1.2.3.4; } location /x { root /; ", 80)]
+            ),
+            &policy(),
+        )
+        .is_err());
+        let err = validate_upstream_pool_input(
+            pool_input("local", vec![pool_server("127.0.0.1", 8100)]),
+            &policy(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "forbidden_forward_host");
+
+        // Port 0 and an out-of-range weight are rejected per server.
+        assert!(validate_upstream_pool_input(
+            pool_input("p", vec![pool_server("10.0.0.2", 0)]),
+            &policy()
+        )
+        .is_err());
+        let mut heavy = pool_server("10.0.0.2", 80);
+        heavy.weight = MAX_WEIGHT + 1;
+        assert!(validate_upstream_pool_input(pool_input("p", vec![heavy]), &policy()).is_err());
+
+        // Angie rejects an upstream made only of backups, and ip_hash + backup.
+        let backup = UpstreamServer {
+            backup: true,
+            ..pool_server("10.0.0.2", 80)
+        };
+        let err = validate_upstream_pool_input(pool_input("p", vec![backup.clone()]), &policy())
+            .unwrap_err();
+        assert!(err.message.contains("not a backup"), "{}", err.message);
+        let mut ip_hash = pool_input("p", vec![pool_server("10.0.0.1", 80), backup]);
+        ip_hash.method = BalanceMethod::IpHash;
+        assert!(validate_upstream_pool_input(ip_hash, &policy()).is_err());
+
+        // Size and passive-health bounds.
+        let too_many = (0..=MAX_UPSTREAM_POOL_SERVERS)
+            .map(|i| pool_server(&format!("10.0.1.{i}"), 80))
+            .collect();
+        assert!(validate_upstream_pool_input(pool_input("p", too_many), &policy()).is_err());
+        let mut zero_timeout = pool_input("p", vec![pool_server("10.0.0.2", 80)]);
+        zero_timeout.fail_timeout_secs = 0;
+        assert!(validate_upstream_pool_input(zero_timeout, &policy()).is_err());
+    }
+
+    /// The JSON a client sends for a host; fields left out take their defaults.
+    fn host_input(extra: serde_json::Value) -> ProxyHostInput {
+        let mut body = serde_json::json!({
+            "domains": ["a.example.com"],
+            "forward_scheme": "http",
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(body).unwrap()
+    }
+
+    #[test]
+    fn host_on_a_shared_pool_needs_no_target_of_its_own() {
+        // With a pool, forward_host/port may be left out entirely…
+        let ok = validate_host_input(
+            host_input(serde_json::json!({ "upstream_pool_id": 3 })),
+            false,
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!(ok.upstream_pool_id, Some(3));
+        assert_eq!((ok.forward_host.as_str(), ok.forward_port), ("", 0));
+
+        // …and whatever the client still sends for the host's own upstream is
+        // cleared, not kept as stale data: the pool is the backend. That covers
+        // a target the SSRF guard would otherwise have refused — it is dropped,
+        // never stored, so it cannot come back to life when the pool is unset.
+        let ok = validate_host_input(
+            host_input(serde_json::json!({
+                "upstream_pool_id": 3,
+                "forward_host": "127.0.0.1",
+                "forward_port": 8100,
+                "upstream": {
+                    "method": "least_conn",
+                    "primary_weight": 5,
+                    "servers": [{ "host": "10.0.0.9", "port": 80 }],
+                },
+            })),
+            false,
+            &policy(),
+        )
+        .unwrap();
+        assert_eq!((ok.forward_host.as_str(), ok.forward_port), ("", 0));
+        assert_eq!(ok.upstream, Upstream::default());
+
+        // Without a pool the target is as mandatory as it ever was.
+        let err =
+            validate_host_input(host_input(serde_json::json!({})), false, &policy()).unwrap_err();
+        assert_eq!(err.code, "invalid_forward_host");
+        let err = validate_host_input(
+            host_input(serde_json::json!({ "forward_host": "10.0.0.1" })),
+            false,
+            &policy(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_forward_port");
+    }
+
+    fn template(kind: TemplateKind, config: serde_json::Value) -> TemplateInput {
+        TemplateInput {
+            kind,
+            name: "t".into(),
+            config,
+        }
+    }
+
+    fn host_tpl(config: serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        validate_template_input(template(TemplateKind::ProxyHost, config), true, &policy())
+            .map(|t| t.config)
+    }
+
+    fn stream_tpl(config: serde_json::Value) -> Result<serde_json::Value, ApiError> {
+        validate_template_input(template(TemplateKind::Stream, config), true, &policy())
+            .map(|t| t.config)
+    }
+
+    #[test]
+    fn host_template_holds_settings_but_not_what_makes_a_host_unique() {
+        use serde_json::json;
+
+        // The least a template can say: a scheme. No domains (the host brings
+        // them), no target (asked for when creating).
+        let bare = host_tpl(json!({ "forward_scheme": "http" })).unwrap();
+        assert_eq!(bare["forward_host"], json!(""));
+        assert_eq!(bare["forward_port"], json!(0));
+        assert_eq!(bare["new_certificate"], json!(null));
+        // Normalized to the full shape, so a reader never has to guess a default…
+        assert_eq!(bare["http2"], json!(true));
+        assert_eq!(bare["rate_limit"]["enabled"], json!(false));
+        // …and never the stand-ins the validation ran with, nor the fields a
+        // template has no business carrying.
+        assert!(bare.get("domains").is_none());
+        assert!(bare.get("enabled").is_none());
+        assert!(!bare.to_string().contains("template.invalid"), "{bare}");
+
+        // A port without a host is a default worth keeping ("always :8080").
+        let port_only = host_tpl(json!({ "forward_scheme": "http", "forward_port": 8080 }));
+        assert_eq!(port_only.unwrap()["forward_port"], json!(8080));
+
+        // A full target is normalized like a host's.
+        let full = host_tpl(json!({
+            "forward_scheme": "https", "forward_host": "APP.internal", "forward_port": 8443,
+            "websockets_upgrade": true,
+            "custom_headers": [{ "name": "X-Real-IP", "value": "$remote_addr", "direction": "request" }],
+            // Whatever a client sends for these is not the template's to keep.
+            "domains": ["sneaky.example.com"], "enabled": false,
+        }))
+        .unwrap();
+        assert_eq!(full["forward_host"], json!("app.internal"));
+        assert_eq!(full["websockets_upgrade"], json!(true));
+        assert_eq!(full["custom_headers"][0]["value"], json!("$remote_addr"));
+        assert!(full.get("domains").is_none() && full.get("enabled").is_none());
+
+        // On a shared pool the template has no target of its own, like a host.
+        let pooled = host_tpl(json!({
+            "forward_scheme": "http", "forward_host": "10.0.0.5", "forward_port": 80,
+            "upstream_pool_id": 3,
+        }))
+        .unwrap();
+        assert_eq!(pooled["upstream_pool_id"], json!(3));
+        assert_eq!(pooled["forward_host"], json!(""));
+    }
+
+    #[test]
+    fn host_template_is_held_to_the_rules_of_a_host() {
+        use serde_json::json;
+
+        // A template is on its way to becoming a host: nothing a host would be
+        // refused may be parked in one. Injection, the SSRF guard…
+        assert!(host_tpl(json!({
+            "forward_scheme": "http",
+            "forward_host": "1.2.3.4; } location /x { root /; ", "forward_port": 80,
+        }))
+        .is_err());
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "forward_host": "127.0.0.1", "forward_port": 8100,
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "forbidden_forward_host");
+        // …a host that is given needs its port…
+        let err =
+            host_tpl(json!({ "forward_scheme": "http", "forward_host": "10.0.0.5" })).unwrap_err();
+        assert_eq!(err.code, "invalid_forward_port");
+        // …nested settings are validated too…
+        let err = host_tpl(json!({
+            "forward_scheme": "http",
+            "custom_headers": [{ "name": "X-Evil", "value": "a\"; evil", "direction": "request" }],
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_header");
+        // …and the snippet opt-in applies.
+        let snippet = json!({ "forward_scheme": "http", "advanced_snippet": "gzip on;" });
+        assert!(host_tpl(snippet.clone()).is_ok());
+        let err =
+            validate_template_input(template(TemplateKind::ProxyHost, snippet), false, &policy())
+                .unwrap_err();
+        assert_eq!(err.code, "snippets_disabled");
+
+        // Settings must at least parse as a host's.
+        for junk in [json!("nope"), json!([1, 2]), json!(null)] {
+            assert_eq!(host_tpl(junk).unwrap_err().code, "invalid_template");
+        }
+        let err = host_tpl(json!({ "forward_scheme": "gopher" })).unwrap_err();
+        assert_eq!(err.code, "invalid_template");
+        let err = host_tpl(json!({ "forward_scheme": "http", "forward_port": 70000 })).unwrap_err();
+        assert_eq!(err.code, "invalid_template");
+    }
+
+    #[test]
+    fn host_template_can_ask_for_a_certificate_per_host() {
+        use serde_json::json;
+
+        // "Request a certificate for the new host's domains" — the setting that
+        // makes creating from a template one field long.
+        let tpl = host_tpl(json!({
+            "forward_scheme": "http",
+            "new_certificate": { "challenge": "dns", "dns_provider": "3", "email": " Ops@Example.com " },
+        }))
+        .unwrap();
+        assert_eq!(tpl["new_certificate"]["challenge"], json!("dns"));
+        assert_eq!(tpl["new_certificate"]["dns_provider"], json!("3"));
+        assert_eq!(tpl["new_certificate"]["email"], json!("ops@example.com"));
+        // Left to the default stays left to the default: the CA in force when
+        // the certificate is requested, not the one in force today.
+        assert_eq!(tpl["new_certificate"]["ca"], json!(null));
+
+        // A DNS profile means nothing outside DNS-01 and is dropped, as for a
+        // certificate.
+        let tpl = host_tpl(json!({
+            "forward_scheme": "http",
+            "new_certificate": { "challenge": "http", "dns_provider": "3" },
+        }))
+        .unwrap();
+        assert_eq!(tpl["new_certificate"]["dns_provider"], json!(null));
+
+        // The request is validated like a certificate…
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "new_certificate": { "ca": "not-a-ca" },
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_ca");
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "new_certificate": { "email": "a;b@c" },
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_email");
+        // …and is an alternative to naming an existing one, not an addition.
+        let err = host_tpl(json!({
+            "forward_scheme": "http", "certificate_id": 5, "new_certificate": {},
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "conflicting_certificate");
+    }
+
+    #[test]
+    fn stream_template_validation() {
+        use serde_json::json;
+
+        // Nothing but the defaults: plain TCP, target asked for when creating.
+        let bare = stream_tpl(json!({})).unwrap();
+        assert_eq!(bare["tcp"], json!(true));
+        assert_eq!(bare["udp"], json!(false));
+        assert_eq!(bare["tls"], json!("none"));
+        assert_eq!(bare["forward_host"], json!(""));
+        assert_eq!(bare["forward_port"], json!(0));
+        // Each stream has its own incoming port: not a template's to carry.
+        assert!(bare.get("incoming_port").is_none());
+        assert!(bare.get("enabled").is_none());
+        assert!(!bare.to_string().contains("template.invalid"), "{bare}");
+
+        let full = stream_tpl(json!({
+            "incoming_port": 5432, "forward_host": "DB.internal", "forward_port": 5432,
+            "tls": "terminate", "certificate_id": 7,
+        }))
+        .unwrap();
+        assert_eq!(full["forward_host"], json!("db.internal"));
+        assert_eq!(full["certificate_id"], json!(7));
+        assert!(full.get("incoming_port").is_none());
+
+        // The rules of a stream apply: a protocol, TLS needs a certificate and
+        // TCP alone, the SSRF guard, a port for a host that is given.
+        assert_eq!(
+            stream_tpl(json!({ "tcp": false, "udp": false }))
+                .unwrap_err()
+                .code,
+            "no_protocol"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "tls": "terminate" })).unwrap_err().code,
+            "cert_required"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "tls": "terminate", "certificate_id": 1, "udp": true }))
+                .unwrap_err()
+                .code,
+            "tls_tcp_only"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "forward_host": "127.0.0.1", "forward_port": 22 }))
+                .unwrap_err()
+                .code,
+            "forbidden_forward_host"
+        );
+        assert_eq!(
+            stream_tpl(json!({ "forward_host": "10.0.0.5" }))
+                .unwrap_err()
+                .code,
+            "invalid_template"
+        );
+    }
+
+    #[test]
+    fn template_name_and_references() {
+        use serde_json::json;
+
+        let named = |name: &str| {
+            validate_template_input(
+                TemplateInput {
+                    kind: TemplateKind::Stream,
+                    name: name.into(),
+                    config: json!({}),
+                },
+                false,
+                &policy(),
+            )
+        };
+        assert_eq!(named("  Web apps  ").unwrap().name, "Web apps");
+        for bad_name in ["", "   ", "a\nb", &"x".repeat(MAX_TEMPLATE_NAME_LEN + 1)] {
+            assert_eq!(named(bad_name).unwrap_err().code, "invalid_name");
+        }
+
+        // What a template points at, and clearing one such pointer without
+        // disturbing the rest.
+        let mut config = host_tpl(json!({
+            "forward_scheme": "http", "access_list_id": 2, "upstream_pool_id": 3,
+            "new_certificate": { "challenge": "dns", "dns_provider": "4" },
+        }))
+        .unwrap();
+        let refs = template_refs(&config);
+        assert_eq!(refs.access_list_id, Some(2));
+        assert_eq!(refs.upstream_pool_id, Some(3));
+        assert_eq!(refs.dns_provider.as_deref(), Some("4"));
+        assert_eq!(refs.certificate_id, None);
+        assert!(refs.points_at(TemplateRef::UpstreamPool, 3));
+        assert!(!refs.points_at(TemplateRef::UpstreamPool, 4));
+        assert!(refs.points_at(TemplateRef::DnsCredential, 4));
+        assert!(!refs.points_at(TemplateRef::Certificate, 3));
+
+        clear_template_ref(&mut config, TemplateRef::UpstreamPool);
+        clear_template_ref(&mut config, TemplateRef::DnsCredential);
+        let refs = template_refs(&config);
+        assert_eq!(refs.upstream_pool_id, None);
+        assert_eq!(refs.dns_provider, None);
+        assert_eq!(refs.access_list_id, Some(2));
+        // The certificate request itself survives losing its DNS profile.
+        assert_eq!(config["new_certificate"]["challenge"], json!("dns"));
     }
 
     #[test]

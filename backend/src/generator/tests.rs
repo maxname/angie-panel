@@ -10,7 +10,7 @@ use crate::model::{
     BalanceMethod, CustomHeader, CustomLocation, DeadHost, ErrorPage, ErrorPages, ForwardAuth,
     GeoMode, GeoPolicy, Gzip, HeaderDirection, Maintenance, Mtls, ProxyHost, ProxyTuning,
     RateLimit, RedirectHost, RedirectScheme, Scheme, SniRoute, SniRouter, Stream, StreamTls,
-    Upstream, UpstreamServer,
+    Upstream, UpstreamPool, UpstreamServer,
 };
 
 // --------------------------------------------------------------- fixtures
@@ -58,6 +58,7 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         advanced_snippet: None,
         rate_limit: RateLimit::default(),
         upstream: Upstream::default(),
+        upstream_pool_id: None,
         mtls: Mtls::default(),
         forward_auth: ForwardAuth::default(),
         custom_headers: vec![],
@@ -67,6 +68,40 @@ fn base_host(id: i64, domain: &str) -> ProxyHost {
         proxy_tuning: ProxyTuning::default(),
         health_checks: vec![],
         enabled: true,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+/// A host that proxies to shared pool `pool_id` — stored the way validation
+/// leaves it: no target of its own.
+fn pooled_host(id: i64, domain: &str, pool_id: i64) -> ProxyHost {
+    let mut host = base_host(id, domain);
+    host.forward_host = String::new();
+    host.forward_port = 0;
+    host.upstream_pool_id = Some(pool_id);
+    host
+}
+
+fn pool_server(host: &str, port: u16) -> UpstreamServer {
+    UpstreamServer {
+        host: host.into(),
+        port,
+        weight: 1,
+        backup: false,
+        down: false,
+    }
+}
+
+/// A round-robin pool at the passive-health defaults.
+fn base_pool(id: i64, name: &str, servers: Vec<UpstreamServer>) -> UpstreamPool {
+    UpstreamPool {
+        id,
+        name: name.into(),
+        servers,
+        method: BalanceMethod::RoundRobin,
+        max_fails: 1,
+        fail_timeout_secs: 10,
         created_at: 0,
         updated_at: 0,
     }
@@ -97,6 +132,7 @@ fn input_acl(
         acme_hook_target: "127.0.0.1:8080".into(),
         acme_hook_token: "testtoken".into(),
         access_lists,
+        upstream_pools: vec![],
         http_d_dir: PathBuf::from("/etc/angie/http.d"),
         redirect_hosts: vec![],
         dead_hosts: vec![],
@@ -250,6 +286,7 @@ fn acme_client_carries_ca_account_key_and_eab() {
         public_dir: public_dir(),
         allow_advanced_snippets: true,
         acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
     };
     let violations = lint::check_fileset(&files, &policy);
     assert!(violations.is_empty(), "{violations:#?}");
@@ -297,6 +334,7 @@ fn golden_acme_dns_provider_hook() {
         public_dir: public_dir(),
         allow_advanced_snippets: true,
         acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
     };
     let violations = lint::check_fileset(&files, &policy);
     assert!(
@@ -400,6 +438,120 @@ fn golden_host_load_balanced() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-load-balanced.conf", body);
+}
+
+#[test]
+fn golden_shared_upstream_pool() {
+    // Two hosts proxy to the same pool: it is defined ONCE, in its own file,
+    // and each host's proxy_pass names it — no per-host upstream block. The
+    // pool carries everything a host's own upstream can: method, weights, a
+    // backup, a down peer, tuned passive health.
+    let mut tuned = base_pool(
+        3,
+        "app backends",
+        vec![
+            UpstreamServer {
+                weight: 3,
+                ..pool_server("10.0.0.2", 8080)
+            },
+            UpstreamServer {
+                backup: true,
+                ..pool_server("10.0.0.3", 8080)
+            },
+            UpstreamServer {
+                down: true,
+                ..pool_server("app.internal", 9000)
+            },
+        ],
+    );
+    tuned.method = BalanceMethod::LeastConn;
+    tuned.max_fails = 2;
+    tuned.fail_timeout_secs = 20;
+    let plain = base_pool(5, "api", vec![pool_server("10.0.1.1", 3000)]);
+
+    let mut https_host = pooled_host(12, "b.example.com", 3);
+    https_host.forward_scheme = Scheme::Https;
+    let mut inp = input(
+        vec![
+            pooled_host(11, "a.example.com", 3),
+            https_host,
+            pooled_host(13, "api.example.com", 5),
+        ],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    );
+    inp.upstream_pools = vec![plain, tuned];
+    let files = generate(&inp).unwrap();
+
+    // Sorted by id whatever order the pools arrive in, one block each.
+    assert_golden("17-upstream-pools.conf", &files["17-upstream-pools.conf"]);
+    assert_golden(
+        "20-host-shared-pool.conf",
+        &files["20-host-11-a-example-com.conf"],
+    );
+    // The scheme stays the host's: the same pool can be reached over TLS.
+    let b = &files["20-host-12-b-example-com.conf"];
+    assert!(b.contains("proxy_pass https://pool_3;"), "{b}");
+    assert!(!b.contains("upstream host_12"), "{b}");
+
+    let policy = lint::LintPolicy {
+        snippets_dir: snippets_dir(),
+        public_dir: public_dir(),
+        allow_advanced_snippets: false,
+        acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
+    };
+    let violations = lint::check_fileset(&files, &policy);
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn upstream_pool_emitted_only_while_an_enabled_host_uses_it() {
+    // An `upstream` block resolves its hostnames when the config loads, so a
+    // pool nothing proxies to must not be emitted: a stale hostname in a parked
+    // pool would fail `angie -t` and block every apply.
+    let pools = vec![
+        base_pool(1, "used", vec![pool_server("10.0.0.2", 80)]),
+        base_pool(2, "parked", vec![pool_server("gone.internal", 80)]),
+        base_pool(3, "only-disabled", vec![pool_server("10.0.0.4", 80)]),
+    ];
+    let mut disabled = pooled_host(22, "off.example.com", 3);
+    disabled.enabled = false;
+    let mut inp = input(
+        vec![pooled_host(21, "on.example.com", 1), disabled],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    );
+    inp.upstream_pools = pools.clone();
+    let files = generate(&inp).unwrap();
+    let body = &files["17-upstream-pools.conf"];
+    assert!(body.contains("upstream pool_1 {"), "{body}");
+    assert!(!body.contains("pool_2"), "{body}");
+    assert!(!body.contains("pool_3"), "{body}");
+
+    // No host on a pool at all → no file, like the other optional ones.
+    let mut inp = input(
+        vec![base_host(23, "own.example.com")],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    );
+    inp.upstream_pools = pools;
+    let files = generate(&inp).unwrap();
+    assert!(!files.contains_key("17-upstream-pools.conf"));
+}
+
+#[test]
+fn dangling_upstream_pool_reference_fails_generation() {
+    // Cannot happen through the API (checked on write, held by a foreign key).
+    // If it does, refuse to generate: emitting `proxy_pass http://pool_9` with
+    // no such upstream would make Angie resolve "pool_9" as a hostname.
+    let inp = input(
+        vec![pooled_host(31, "lost.example.com", 9)],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    );
+    let err = generate(&inp).unwrap_err().to_string();
+    assert!(err.contains("upstream pool #9"), "{err}");
 }
 
 #[test]
@@ -793,9 +945,9 @@ fn mtls_only_over_tls_and_omitted_when_inactive() {
 
 #[test]
 fn golden_forward_auth() {
-    // Forward auth: the internal verify location, a 401 → sign-in redirect, and
-    // per-location auth_request + identity-header copy. Verified by angie -t
-    // (and runtime: deny→401/redirect, allow→backend) on real Angie.
+    // Forward auth: the internal verify location (with its own header set), a
+    // 401 → sign-in redirect, per-location auth_request + identity capture, and
+    // the captured identity headers in the host's server-scope set.
     let mut host = base_host(14, "app.example.com");
     host.forward_auth = ForwardAuth {
         enabled: true,
@@ -1034,8 +1186,8 @@ fn geo_allow_defaults_inverted_and_inert_without_cidrs() {
 #[test]
 fn golden_custom_headers() {
     // Response headers → add_header at server scope; request headers →
-    // proxy_set_header inside the location, after the standard ones. Verified
-    // by angie -t on real Angie.
+    // proxy_set_header at server scope too, after the standard ones, where
+    // every location inherits the one set.
     let mut host = base_host(16, "app.example.com");
     host.custom_headers = vec![
         CustomHeader {
@@ -1062,6 +1214,343 @@ fn golden_custom_headers() {
     .unwrap();
     let (_, body) = only_host_file(&files);
     assert_golden("20-host-custom-headers.conf", body);
+}
+
+#[test]
+fn custom_header_value_may_carry_nginx_variable() {
+    // A request header whose value is an nginx variable (e.g. forwarding the
+    // real client IP to the upstream, as Cloudflare's CF-Connecting-IP) is
+    // emitted verbatim inside the quoted proxy_set_header, so Angie
+    // interpolates it per request. Regression test for issue #5 item 1.
+    let mut host = base_host(16, "app.example.com");
+    host.custom_headers = vec![CustomHeader {
+        name: "CF-Connecting-IP".into(),
+        value: "$remote_addr".into(),
+        direction: HeaderDirection::Request,
+    }];
+    let files = generate(&input(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let (_, body) = only_host_file(&files);
+    assert!(
+        body.contains("proxy_set_header CF-Connecting-IP \"$remote_addr\";"),
+        "variable header should render verbatim, got:\n{body}"
+    );
+}
+
+// ------------------------------------------------- request header scope
+
+/// The text of one generated `location` block, from its opening line to the
+/// closing brace at the same indent.
+fn location_block<'a>(body: &'a str, opening: &str) -> &'a str {
+    let start = body
+        .find(opening)
+        .unwrap_or_else(|| panic!("no `{opening}` in:\n{body}"));
+    let end = body[start..]
+        .find("\n    }\n")
+        .unwrap_or_else(|| panic!("`{opening}` is never closed in:\n{body}"));
+    &body[start..start + end]
+}
+
+/// `proxy_set_header` lines written at server scope (four-space indent), i.e.
+/// not inside any location.
+fn server_scope_headers(body: &str) -> Vec<&str> {
+    body.lines()
+        .filter(|l| l.starts_with("    proxy_set_header "))
+        .map(str::trim)
+        .collect()
+}
+
+fn custom_location(path: &str, snippet: Option<&str>) -> CustomLocation {
+    CustomLocation {
+        path: path.into(),
+        forward_scheme: Scheme::Http,
+        forward_host: "10.0.0.2".into(),
+        forward_port: 9000,
+        rewrite: None,
+        snippet: snippet.map(str::to_string),
+    }
+}
+
+fn request_header(name: &str, value: &str) -> CustomHeader {
+    CustomHeader {
+        name: name.into(),
+        value: value.into(),
+        direction: HeaderDirection::Request,
+    }
+}
+
+fn host_body(host: ProxyHost, acls: Vec<AccessList>) -> String {
+    let files = generate(&input_acl(
+        vec![host],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+        acls,
+    ))
+    .unwrap();
+    only_host_file(&files).1.clone()
+}
+
+#[test]
+fn request_headers_are_declared_once_per_host_at_server_scope() {
+    // Everything that sets a request header at once: websockets, an access
+    // list that strips Authorization, forward auth identity headers, a custom
+    // header — and three proxy locations to share them. Issue #5 item 3.
+    let mut host = base_host(40, "app.example.com");
+    host.websockets_upgrade = true;
+    host.access_list_id = Some(5);
+    host.forward_auth = ForwardAuth {
+        enabled: true,
+        verify_url: "http://10.0.0.9:9091/api/verify".into(),
+        sign_in_url: None,
+        copy_headers: vec!["Remote-User".into()],
+    };
+    host.custom_headers = vec![request_header("X-Tenant", "acme")];
+    host.locations = vec![
+        custom_location("/api", None),
+        // A snippet that has nothing to do with headers does not need them.
+        custom_location("/upload", Some("client_max_body_size 1g;")),
+    ];
+    let acl = AccessList {
+        id: 5,
+        satisfy: "all".into(),
+        pass_auth: false,
+        users: vec![("alice".into(), "$2b$10$abcdefghijklmnopqrstuv".into())],
+        clients: vec![],
+    };
+    let body = host_body(host, vec![acl]);
+
+    // One set, in one place, in a fixed order: standard, then what the host's
+    // features add, then the operator's own.
+    assert_eq!(
+        server_scope_headers(&body),
+        vec![
+            "proxy_set_header Host $host;",
+            "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+            "proxy_set_header X-Forwarded-Proto $scheme;",
+            "proxy_set_header Upgrade $http_upgrade;",
+            "proxy_set_header Connection $connection_upgrade;",
+            "proxy_set_header Authorization \"\";",
+            "proxy_set_header Remote-User $fa_0;",
+            "proxy_set_header X-Tenant \"acme\";",
+        ],
+        "{body}"
+    );
+
+    // The proxy locations carry none of their own — that is what lets them
+    // inherit. What stays per location is what is not a header: the proxy
+    // target, HTTP/1.1 for the upgrade, and the auth subrequest with the
+    // capture of its identity header.
+    for opening in ["location / {", "location /api {", "location /upload {"] {
+        let block = location_block(&body, opening);
+        assert!(!block.contains("proxy_set_header"), "{opening}:\n{block}");
+        assert!(block.contains("proxy_pass http"), "{block}");
+        assert!(block.contains("proxy_http_version 1.1;"), "{block}");
+        assert!(block.contains("auth_request /_forward_auth;"), "{block}");
+        assert!(
+            block.contains("auth_request_set $fa_0 $upstream_http_remote_user;"),
+            "{block}"
+        );
+    }
+
+    // The auth subrequest location is the deliberate exception: it declares
+    // its own headers, so it inherits none of the host's — the identity
+    // service is not sent the upstream's header set.
+    let verify = location_block(&body, "location = /_forward_auth {");
+    assert!(
+        verify.contains("proxy_set_header X-Original-URL"),
+        "{verify}"
+    );
+    assert!(!verify.contains("X-Tenant"), "{verify}");
+}
+
+#[test]
+fn custom_request_header_replaces_the_standard_one_it_names() {
+    // Angie sends every proxy_set_header it is given, so a second line for a
+    // name puts the header on the wire twice. An override must therefore
+    // REPLACE the generated line, not follow it.
+    let mut host = base_host(41, "app.example.com");
+    host.websockets_upgrade = true;
+    host.custom_headers = vec![
+        // Behind another TLS terminator: assert https whatever $scheme says.
+        request_header("X-Forwarded-Proto", "https"),
+        // Header names are case-insensitive; so is the match.
+        request_header("host", "$http_host"),
+        // An empty value drops the header from the upstream request.
+        request_header("X-Forwarded-For", ""),
+        // Not a generated name: added as-is, and kept as entered even twice.
+        request_header("X-Trace", "a"),
+        request_header("X-Trace", "b"),
+        // A response header of the same name is a different header entirely.
+        CustomHeader {
+            name: "Connection".into(),
+            value: "keep-alive".into(),
+            direction: HeaderDirection::Response,
+        },
+    ];
+    let body = host_body(host, vec![]);
+
+    assert_eq!(
+        server_scope_headers(&body),
+        vec![
+            // Untouched generated headers first…
+            "proxy_set_header Upgrade $http_upgrade;",
+            "proxy_set_header Connection $connection_upgrade;",
+            // …then the operator's, in the order they were entered.
+            "proxy_set_header X-Forwarded-Proto \"https\";",
+            "proxy_set_header host \"$http_host\";",
+            "proxy_set_header X-Forwarded-For \"\";",
+            "proxy_set_header X-Trace \"a\";",
+            "proxy_set_header X-Trace \"b\";",
+        ],
+        "{body}"
+    );
+    for gone in [
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+        "$proxy_add_x_forwarded_for",
+    ] {
+        assert!(!body.contains(gone), "`{gone}` should be replaced:\n{body}");
+    }
+}
+
+#[test]
+fn location_whose_snippet_sets_headers_carries_the_shared_set_too() {
+    // A level that declares any proxy_set_header inherits none from above. A
+    // custom location whose snippet sets one (directly, or through an include)
+    // would be cut off from the server's set and reach its upstream with the
+    // snippet's header alone — no Host, no X-Forwarded-*, no Authorization
+    // strip. So that location gets the full set written into it as well.
+    let mut host = base_host(42, "app.example.com");
+    host.custom_headers = vec![request_header("X-Tenant", "acme")];
+    host.locations = vec![
+        custom_location("/own", Some("proxy_set_header X-Real-IP $remote_addr;")),
+        custom_location(
+            "/inc",
+            Some("include /usr/share/angie-panel/snippets/extra.conf;"),
+        ),
+        custom_location("/plain", Some("client_max_body_size 1g;")),
+        custom_location("/bare", None),
+    ];
+    let body = host_body(host, vec![]);
+
+    let full_set = [
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+        "proxy_set_header X-Tenant \"acme\";",
+    ];
+    // The server still declares the set for everything that inherits.
+    assert_eq!(server_scope_headers(&body), full_set, "{body}");
+
+    for opening in ["location /own {", "location /inc {"] {
+        let block = location_block(&body, opening);
+        for line in full_set {
+            assert!(block.contains(line), "{opening} lacks `{line}`:\n{block}");
+        }
+    }
+    // The snippet's own header comes after the set it adds to.
+    let own = location_block(&body, "location /own {");
+    assert!(
+        own.find("X-Tenant").unwrap() < own.find("X-Real-IP").unwrap(),
+        "{own}"
+    );
+
+    for opening in ["location / {", "location /plain {", "location /bare {"] {
+        let block = location_block(&body, opening);
+        assert!(!block.contains("proxy_set_header"), "{opening}:\n{block}");
+    }
+}
+
+#[test]
+fn advanced_snippet_that_touches_proxying_keeps_headers_per_location() {
+    // The advanced snippet is inserted verbatim at server scope. With a header
+    // set next to it, three things in it would start to mean something else:
+    // its own proxy_set_header (merged in, where it has been inert), a raw
+    // location (would inherit Host $host and the rest), an include (could be
+    // either). Config is re-applied unreviewed when the generator changes, so
+    // such hosts keep every header inside the generated locations and nothing
+    // at server scope — exactly the layout from before headers were shared.
+    for snippet in [
+        "proxy_set_header X-Real-IP $remote_addr;",
+        "location /raw {\n    proxy_pass http://10.0.0.9:8000;\n}",
+        "include /usr/share/angie-panel/snippets/extra.conf;",
+        // Matched on the bare word, whatever the case or the context.
+        "# see LOCATION notes\nclient_max_body_size 100m;",
+    ] {
+        let mut host = base_host(43, "app.example.com");
+        host.advanced_snippet = Some(snippet.into());
+        host.custom_headers = vec![request_header("X-Tenant", "acme")];
+        host.locations = vec![custom_location("/api", None)];
+        let body = host_body(host, vec![]);
+
+        // Nothing of ours at server scope (the snippet's own line, if it has
+        // one, is the snippet's).
+        let ours: Vec<&str> = server_scope_headers(&body)
+            .into_iter()
+            .filter(|l| !l.contains("X-Real-IP"))
+            .collect();
+        assert!(ours.is_empty(), "snippet {snippet:?}: {ours:?}\n{body}");
+
+        for opening in ["location / {", "location /api {"] {
+            let block = location_block(&body, opening);
+            for line in [
+                "proxy_set_header Host $host;",
+                "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+                "proxy_set_header X-Forwarded-Proto $scheme;",
+                "proxy_set_header X-Tenant \"acme\";",
+            ] {
+                assert!(
+                    block.contains(line),
+                    "snippet {snippet:?}: {opening} lacks `{line}`:\n{block}"
+                );
+            }
+        }
+        // A raw location in the snippet is left exactly as written.
+        if snippet.contains("/raw") {
+            let raw = location_block(&body, "location /raw {");
+            assert!(!raw.contains("proxy_set_header"), "{raw}");
+        }
+    }
+
+    // A snippet that cannot be affected does not hold the host back.
+    let mut host = base_host(43, "app.example.com");
+    host.advanced_snippet = Some("client_max_body_size 100m;\nproxy_read_timeout 300s;".into());
+    let body = host_body(host, vec![]);
+    assert_eq!(server_scope_headers(&body).len(), 3, "{body}");
+    assert!(!location_block(&body, "location / {").contains("proxy_set_header"));
+}
+
+#[test]
+fn shared_request_headers_pass_the_linter() {
+    // Both layouts, with a snippet in play, through the output linter.
+    let mut shared = base_host(44, "a.example.com");
+    shared.websockets_upgrade = true;
+    shared.custom_headers = vec![request_header("CF-Connecting-IP", "$remote_addr")];
+    shared.locations = vec![custom_location(
+        "/own",
+        Some("proxy_set_header X-Real-IP $remote_addr;"),
+    )];
+    let mut per_location = base_host(45, "b.example.com");
+    per_location.advanced_snippet = Some("proxy_set_header X-Real-IP $remote_addr;".into());
+    let files = generate(&input(
+        vec![shared, per_location],
+        vec![],
+        settings(DefaultSite::NotFound, false),
+    ))
+    .unwrap();
+    let policy = lint::LintPolicy {
+        snippets_dir: snippets_dir(),
+        public_dir: public_dir(),
+        allow_advanced_snippets: true,
+        acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
+    };
+    let violations = lint::check_fileset(&files, &policy);
+    assert!(violations.is_empty(), "{violations:#?}");
 }
 
 #[test]
@@ -1574,6 +2063,7 @@ fn full_fileset_is_lint_clean() {
             public_dir: public_dir(),
             allow_advanced_snippets: true,
             acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+            allow_loopback_upstreams: false,
         };
         let violations = lint::check_fileset(&files, &policy);
         assert!(

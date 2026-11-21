@@ -83,7 +83,10 @@ Steps: [docs/installation.md](docs/installation.md#verifying-artifacts).
 **Hosts.** Proxy hosts, redirection hosts, 404 hosts, TCP/UDP streams and SNI routers.
 Per host: websockets, HTTP/2 and HTTP/3, HSTS, custom locations, upstreams with load
 balancing, rate limits, custom headers, gzip, error pages, maintenance mode, mTLS, forward
-auth, and a raw snippet escape hatch.
+auth, and a raw snippet escape hatch. Backends used by several hosts can live in a shared
+upstream pool: defined once, picked per host, and edited in one place. Settings you keep
+repeating can be saved as a template, for proxy hosts and streams alike: a new one then
+starts from it with only its own domains (or port) left to fill in.
 
 **Certificates.** Issued and renewed by Angie. DNS-01 works through provider APIs via a
 vendored `acme.sh` (Cloudflare, reg.ru, Route 53, and others); the hook waits for the TXT
@@ -98,7 +101,8 @@ nothing running on the box can.
 an audit log, and role-based users.
 
 **Operations.** Config export/import as JSON, apply history, drift detection, and a
-dashboard fed by Angie's own status API.
+dashboard fed by Angie's own status API. Lists take several rows at once: tick them to
+enable, disable or delete in one go, with a per-row report of anything that was refused.
 
 ## Architecture
 

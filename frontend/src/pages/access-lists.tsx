@@ -3,6 +3,11 @@ import { Info, Loader2, MoreHorizontal, Plus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -50,7 +55,11 @@ import {
   type AccessListUserInput,
 } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
+import { deleteAction } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const ACCESS_LIST_BULK_ACTIONS = deleteAction<AccessList>(api.deleteAccessList)
 
 export function AccessListsPage() {
   const { t } = useTranslation()
@@ -62,6 +71,8 @@ export function AccessListsPage() {
     queryKey: ['access-lists'],
     queryFn: () => api.listAccessLists(),
   })
+  const queryClient = useQueryClient()
+  const selection = useSelection(listsQuery.data?.access_lists ?? [])
 
   const openCreate = () => {
     setEditing(null)
@@ -124,6 +135,7 @@ export function AccessListsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('accessLists.table.name')}</TableHead>
                   <TableHead>{t('accessLists.table.summary')}</TableHead>
                   <TableHead>{t('accessLists.table.match')}</TableHead>
@@ -140,6 +152,7 @@ export function AccessListsPage() {
                   <AccessListRow
                     key={list.id}
                     list={list}
+                    selection={selection}
                     onEdit={() => openEdit(list)}
                     onDelete={() => setDeleteTarget(list)}
                   />
@@ -149,6 +162,14 @@ export function AccessListsPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(list) => list.name}
+        actions={ACCESS_LIST_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['access-lists'] })}
+        successNote={t('accessLists.unappliedBody')}
+      />
 
       <AccessListEditorDialog
         open={editorOpen}
@@ -169,15 +190,17 @@ export function AccessListsPage() {
 
 interface AccessListRowProps {
   list: AccessList
+  selection: Selection<AccessList>
   onEdit: () => void
   onDelete: () => void
 }
 
-function AccessListRow({ list, onEdit, onDelete }: AccessListRowProps) {
+function AccessListRow({ list, selection, onEdit, onDelete }: AccessListRowProps) {
   const { t } = useTranslation()
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(list.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={list} name={list.name} />
       <TableCell>
         <span className="font-mono text-xs">{list.name}</span>
       </TableCell>

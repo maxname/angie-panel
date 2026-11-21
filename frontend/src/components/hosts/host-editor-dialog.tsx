@@ -29,6 +29,10 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { DomainChipsField } from '@/components/hosts/host-editor-fields'
+import {
+  PoolServerList,
+  UpstreamPoolEditorDialog,
+} from '@/components/upstream-pools/upstream-pool-editor'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -74,8 +78,13 @@ import {
   type HealthCheck,
   type Host,
   type HostInput,
+  type HostTemplate,
+  type HostTemplateConfig,
+  type NewCertificateRequest,
+  type UpstreamPool,
 } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { omit } from '@/lib/utils'
 
 interface LocationDraft {
   path: string
@@ -95,6 +104,9 @@ interface ServerDraft {
 }
 
 interface FormState {
+  /** The template's own name. Only used while editing a template, where it
+   *  takes the place of the domains. */
+  template_name: string
   domains: string[]
   forward_scheme: ForwardScheme
   forward_host: string
@@ -115,6 +127,10 @@ interface FormState {
   new_cert_challenge: AcmeChallenge
   /** DNS-01 only: credential-profile id, or null = Angie answers itself. */
   new_cert_dns_provider: string | null
+  /** Certificate-request options this form has no controls for (CA, key type,
+   *  email, staging). A template made through the API can set them; they ride
+   *  along untouched rather than being dropped by a round trip through here. */
+  new_cert_extra: NewCertificateRequest
   access_list_id: number | null
   locations: LocationDraft[]
   advanced_snippet: string
@@ -123,6 +139,10 @@ interface FormState {
   rate_limit_burst: string
   rate_limit_nodelay: boolean
   rate_limit_conn: string
+  /** Shared upstream pool the host proxies to, or null for its own servers.
+   *  While set, forward_host/port and the fields below are kept in the form
+   *  (so switching back restores them) but are not sent. */
+  upstream_pool_id: number | null
   balance_method: BalanceMethod
   primary_weight: string
   max_fails: string
@@ -228,6 +248,7 @@ function initialState(host: Host | null): FormState {
 
   if (host === null) {
     return {
+      template_name: '',
       domains: [],
       forward_scheme: 'http',
       forward_host: '',
@@ -245,6 +266,7 @@ function initialState(host: Host | null): FormState {
       new_cert: false,
       new_cert_challenge: 'http',
       new_cert_dns_provider: null,
+      new_cert_extra: {},
       access_list_id: null,
       locations: [],
       advanced_snippet: '',
@@ -253,6 +275,7 @@ function initialState(host: Host | null): FormState {
       rate_limit_burst: '',
       rate_limit_nodelay: false,
       rate_limit_conn: '',
+      upstream_pool_id: null,
       balance_method: 'round_robin',
       primary_weight: '1',
       max_fails: '1',
@@ -301,10 +324,13 @@ function initialState(host: Host | null): FormState {
   const up = host.upstream
   const pt = host.proxy_tuning
   return {
+    template_name: '',
     domains: [...host.domains],
     forward_scheme: host.forward_scheme,
     forward_host: host.forward_host,
-    forward_port: String(host.forward_port),
+    // A host on a shared pool is stored with port 0; offer the usual default
+    // instead should the user switch it back to its own servers.
+    forward_port: host.forward_port > 0 ? String(host.forward_port) : '80',
     websockets_upgrade: host.websockets_upgrade,
     block_exploits: host.block_exploits,
     cache_assets: host.cache_assets,
@@ -318,6 +344,7 @@ function initialState(host: Host | null): FormState {
     new_cert: false,
     new_cert_challenge: 'http',
     new_cert_dns_provider: null,
+    new_cert_extra: {},
     access_list_id: host.access_list_id,
     locations: host.locations.map((location) => ({
       path: location.path,
@@ -333,6 +360,7 @@ function initialState(host: Host | null): FormState {
     rate_limit_burst: rl.burst > 0 ? String(rl.burst) : '',
     rate_limit_nodelay: rl.nodelay,
     rate_limit_conn: rl.conn > 0 ? String(rl.conn) : '',
+    upstream_pool_id: host.upstream_pool_id,
     balance_method: up.method,
     primary_weight: String(up.primary_weight),
     max_fails: String(up.max_fails),
@@ -384,11 +412,70 @@ function initialState(host: Host | null): FormState {
   }
 }
 
+/** The form a template's settings open as. A template's settings are a
+ *  host's minus its domains, so they map through the same function a host
+ *  does; what a host has no field for — "request a certificate for the new
+ *  host" — is laid on top. */
+function formFromTemplate(config: HostTemplateConfig): FormState {
+  const base = initialState({
+    ...config,
+    id: 0,
+    domains: [],
+    enabled: true,
+    created_at: 0,
+    updated_at: 0,
+  })
+  const request = config.new_certificate
+  if (request === null) {
+    return base
+  }
+  return {
+    ...base,
+    certificate_id: null,
+    new_cert: true,
+    new_cert_challenge: request.challenge ?? 'http',
+    new_cert_dns_provider: request.dns_provider,
+    new_cert_extra: {
+      ...(request.ca !== null && { ca: request.ca }),
+      ...(request.key_type !== null && { key_type: request.key_type }),
+      ...(request.email !== null && { email: request.email }),
+      ...(request.staging && { staging: true }),
+    },
+  }
+}
+
+/** The form a new template opens as when it is made from an existing host:
+ *  that host's settings, without its domains — and without its certificate.
+ *  A certificate belongs to the names it was issued for; carried into a
+ *  template it would be attached to every host made from it, whatever their
+ *  domain. Asking for a certificate per host is the safe reading of "like
+ *  this host", and the SSL section is there to say otherwise (a wildcard). */
+function formFromHost(host: Host): FormState {
+  return {
+    ...initialState(host),
+    domains: [],
+    certificate_id: null,
+    new_cert: host.certificate_id !== null,
+  }
+}
+
+/** Editing a template instead of a host. */
+export interface HostTemplateEdit {
+  /** The template being edited, or null when creating a new one. */
+  template: HostTemplate | null
+  /** For a new template: the host whose settings it starts from. */
+  seed?: Host | null
+}
+
 interface HostEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** The host being edited, or null when creating a new one. */
   host: Host | null
+  /** For a new host: the template whose settings it starts from. */
+  fromTemplate?: HostTemplate | null
+  /** Edit a template rather than a host; `host` is then ignored. */
+  templateEdit?: HostTemplateEdit
 }
 
 /** The editor's sections, in sidebar order. `key` is both the tab value and the
@@ -413,8 +500,11 @@ export function HostEditorDialog({
   open,
   onOpenChange,
   host,
+  fromTemplate = null,
+  templateEdit,
 }: HostEditorDialogProps) {
   const { t } = useTranslation()
+  const titles = editorTitles(host, templateEdit)
   // Fed by the form; guards accidental closes (Escape / overlay / ✕ / Cancel)
   // when there are unsaved edits.
   const dirtyRef = useRef(false)
@@ -438,17 +528,21 @@ export function HostEditorDialog({
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-3xl">
         {/* Accessible title for the dialog; the visible one is in the form. */}
         <DialogHeader className="sr-only">
-          <DialogTitle>
-            {host === null
-              ? t('hosts.editor.createTitle')
-              : t('hosts.editor.editTitle')}
-          </DialogTitle>
-          <DialogDescription>{t('hosts.editor.description')}</DialogDescription>
+          <DialogTitle>{t(titles.title)}</DialogTitle>
+          <DialogDescription>{t(titles.description)}</DialogDescription>
         </DialogHeader>
-        {/* Remount the form whenever the target host changes so state resets. */}
+        {/* Remount the form whenever what it works on changes — another host,
+            another template to start from or to edit — so state resets. */}
         <HostEditorForm
-          key={host?.id ?? 'new'}
+          key={[
+            host?.id ?? 'new',
+            fromTemplate?.id ?? '',
+            templateEdit?.template?.id ?? (templateEdit ? 'new' : ''),
+            templateEdit?.seed?.id ?? '',
+          ].join(':')}
           host={host}
+          fromTemplate={fromTemplate}
+          templateEdit={templateEdit}
           onDirtyChange={handleDirtyChange}
           onCancel={() => guardedClose(false)}
           onDone={() => {
@@ -462,8 +556,30 @@ export function HostEditorDialog({
   )
 }
 
+/** Heading and blurb of the editor, by what it is working on. */
+function editorTitles(
+  host: Host | null,
+  templateEdit: HostTemplateEdit | undefined,
+): { title: string; description: string } {
+  if (templateEdit !== undefined) {
+    return {
+      title:
+        templateEdit.template === null
+          ? 'templates.editor.hostCreateTitle'
+          : 'templates.editor.hostEditTitle',
+      description: 'templates.editor.hostDescription',
+    }
+  }
+  return {
+    title: host === null ? 'hosts.editor.createTitle' : 'hosts.editor.editTitle',
+    description: 'hosts.editor.description',
+  }
+}
+
 interface HostEditorFormProps {
   host: Host | null
+  fromTemplate?: HostTemplate | null
+  templateEdit?: HostTemplateEdit
   onDone: () => void
   /** Called when the "close" action (Cancel) is requested; the parent decides
    *  whether to confirm discarding unsaved changes. */
@@ -474,12 +590,20 @@ interface HostEditorFormProps {
 
 export function HostEditorForm({
   host,
+  fromTemplate = null,
+  templateEdit,
   onDone,
   onCancel,
   onDirtyChange,
 }: HostEditorFormProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  // Editing a template uses this same form: its settings ARE a host's, so
+  // every section applies. What differs is the identity — a name instead of
+  // domains — an optional forward target, and where Save sends it.
+  const isTemplate = templateEdit !== undefined
+  const editedTemplate = templateEdit?.template ?? null
+  const titles = editorTitles(host, templateEdit)
 
   // Kept fresh via the shared ['certificates'] key so newly created certs appear.
   const certsQuery = useQuery({
@@ -509,10 +633,48 @@ export function HostEditorForm({
   })
   const accessLists = accessListsQuery.data?.access_lists ?? []
 
-  const [initialForm] = useState(() => initialState(host))
+  // Shares the ['upstream-pools'] key so pools created on that page appear here.
+  const poolsQuery = useQuery({
+    queryKey: ['upstream-pools'],
+    queryFn: () => api.listUpstreamPools(),
+  })
+  // A pool created from this editor becomes the host's backend the moment it
+  // is saved — before the refetched list can contain it. Holding it here until
+  // then keeps it from reading as "no longer exists" in between.
+  const [createdPool, setCreatedPool] = useState<UpstreamPool | null>(null)
+  const listedPools = poolsQuery.data?.upstream_pools
+  const pools = useMemo(() => {
+    const listed = listedPools ?? []
+    return createdPool !== null &&
+      !listed.some((pool) => pool.id === createdPool.id)
+      ? [...listed, createdPool]
+      : listed
+  }, [listedPools, createdPool])
+
+  const [initialForm] = useState<FormState>(() => {
+    if (templateEdit !== undefined) {
+      if (templateEdit.template !== null) {
+        return {
+          ...formFromTemplate(templateEdit.template.config),
+          template_name: templateEdit.template.name,
+        }
+      }
+      return templateEdit.seed ? formFromHost(templateEdit.seed) : initialState(null)
+    }
+    // A new host can start from a template; an existing one is what it is.
+    return host === null && fromTemplate !== null
+      ? formFromTemplate(fromTemplate.config)
+      : initialState(host)
+  })
   const [form, setForm] = useState<FormState>(initialForm)
   const [formError, setFormError] = useState<string | null>(null)
   const [tab, setTab] = useState('details')
+  const [poolEditorOpen, setPoolEditorOpen] = useState(false)
+
+  // The pool the host proxies to, once the list has loaded (undefined until
+  // then, or if the pool has since been deleted elsewhere).
+  const usesPool = form.upstream_pool_id !== null
+  const selectedPool = pools.find((pool) => pool.id === form.upstream_pool_id)
 
   const patch = (partial: Partial<FormState>) =>
     setForm((prev) => ({ ...prev, ...partial }))
@@ -540,22 +702,42 @@ export function HostEditorForm({
   // definition, and its Save is what tells you which fields are missing.
   // Deliberately not folded into isDirty: that one guards the close warning,
   // and an untouched new host must not ask whether to discard anything.
-  const canSave = isDirty || host === null
+  const creating = isTemplate ? editedTemplate === null : host === null
+  const canSave = isDirty || creating
 
   useEffect(() => {
     onDirtyChange?.(isDirty)
   }, [isDirty, onDirtyChange])
 
   const mutation = useMutation({
-    mutationFn: (input: HostInput) =>
-      host === null ? api.createHost(input) : api.updateHost(host.id, input),
+    mutationFn: (input: HostInput): Promise<unknown> => {
+      if (isTemplate) {
+        // The same payload a host would send, minus what a template does not
+        // carry: the server validates it by the same rules.
+        const body = {
+          kind: 'proxy_host' as const,
+          name: form.template_name.trim(),
+          config: omit(input, 'domains', 'enabled'),
+        }
+        return editedTemplate === null
+          ? api.createTemplate(body)
+          : api.updateTemplate(editedTemplate.id, body)
+      }
+      return host === null ? api.createHost(input) : api.updateHost(host.id, input)
+    },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['hosts'] })
-      void queryClient.invalidateQueries({ queryKey: ['certificates'] })
-      toast({
-        title: t('hosts.unappliedTitle'),
-        description: t('hosts.unappliedBody'),
-      })
+      if (isTemplate) {
+        // Nothing to apply: a template changes no generated config.
+        void queryClient.invalidateQueries({ queryKey: ['templates'] })
+        toast({ title: t('templates.editor.savedToast') })
+      } else {
+        void queryClient.invalidateQueries({ queryKey: ['hosts'] })
+        void queryClient.invalidateQueries({ queryKey: ['certificates'] })
+        toast({
+          title: t('hosts.unappliedTitle'),
+          description: t('hosts.unappliedBody'),
+        })
+      }
       onDone()
     },
   })
@@ -587,18 +769,28 @@ export function HostEditorForm({
       }
     }
 
-    if (form.domains.length === 0) {
+    if (isTemplate) {
+      if (form.template_name.trim() === '') {
+        fail('details', t('templates.editor.noName'), 'host-template-name')
+        return
+      }
+    } else if (form.domains.length === 0) {
       fail('details', t('hosts.editor.noDomains'), 'host-domain-input')
       return
     }
-    if (form.forward_host.trim() === '') {
-      fail('details', t('hosts.editor.noForwardHost'), 'host-forward-host')
-      return
-    }
+    // A host on a shared pool has no target of its own to validate: the pool
+    // carries the servers.
     const port = Number.parseInt(form.forward_port, 10)
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      fail('details', t('hosts.editor.invalidPort'), 'host-forward-port')
-      return
+    if (!usesPool) {
+      // A template may leave the host open, to be filled in for each host.
+      if (form.forward_host.trim() === '' && !isTemplate) {
+        fail('details', t('hosts.editor.noForwardHost'), 'host-forward-host')
+        return
+      }
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        fail('details', t('hosts.editor.invalidPort'), 'host-forward-port')
+        return
+      }
     }
     const rlRps = Number.parseInt(form.rate_limit_rps, 10) || 0
     const rlConn = Number.parseInt(form.rate_limit_conn, 10) || 0
@@ -608,8 +800,9 @@ export function HostEditorForm({
     }
 
     // Additional upstream servers: each needs a host and a valid port; ip_hash
-    // forbids backup peers (Angie rejects the combo).
-    for (const [index, s] of form.servers.entries()) {
+    // forbids backup peers (Angie rejects the combo). Not checked while the
+    // host is on a shared pool — those rows are hidden and will not be sent.
+    for (const [index, s] of usesPool ? [] : form.servers.entries()) {
       const sp = Number.parseInt(s.port, 10)
       if (s.host.trim() === '' || !Number.isInteger(sp) || sp < 1 || sp > 65535) {
         fail(
@@ -651,8 +844,10 @@ export function HostEditorForm({
     const input: HostInput = {
       domains: form.domains,
       forward_scheme: form.forward_scheme,
-      forward_host: form.forward_host.trim(),
-      forward_port: port,
+      // On a shared pool the host has no target of its own; the server stores
+      // it empty either way, so send what will be stored.
+      forward_host: usesPool ? '' : form.forward_host.trim(),
+      forward_port: usesPool ? 0 : port,
       websockets_upgrade: form.websockets_upgrade,
       block_exploits: form.block_exploits,
       cache_assets: form.cache_assets,
@@ -665,6 +860,7 @@ export function HostEditorForm({
       certificate_id: form.new_cert ? null : form.certificate_id,
       new_certificate: form.new_cert
         ? {
+            ...form.new_cert_extra,
             challenge: newCertChallenge,
             dns_provider:
               newCertChallenge === 'dns' ? form.new_cert_dns_provider : null,
@@ -681,19 +877,23 @@ export function HostEditorForm({
         nodelay: form.rate_limit_nodelay,
         conn: rlConn,
       },
-      upstream: {
-        method: form.balance_method,
-        primary_weight: Number.parseInt(form.primary_weight, 10) || 1,
-        max_fails: Number.parseInt(form.max_fails, 10) || 0,
-        fail_timeout_secs: Number.parseInt(form.fail_timeout_secs, 10) || 10,
-        servers: form.servers.map((s) => ({
-          host: s.host.trim(),
-          port: Number.parseInt(s.port, 10) || 0,
-          weight: Number.parseInt(s.weight, 10) || 1,
-          backup: s.backup,
-          down: s.down,
-        })),
-      },
+      upstream_pool_id: form.upstream_pool_id,
+      // Omitted on a shared pool: balancing and servers are the pool's.
+      upstream: usesPool
+        ? undefined
+        : {
+            method: form.balance_method,
+            primary_weight: Number.parseInt(form.primary_weight, 10) || 1,
+            max_fails: Number.parseInt(form.max_fails, 10) || 0,
+            fail_timeout_secs: Number.parseInt(form.fail_timeout_secs, 10) || 10,
+            servers: form.servers.map((s) => ({
+              host: s.host.trim(),
+              port: Number.parseInt(s.port, 10) || 0,
+              weight: Number.parseInt(s.weight, 10) || 1,
+              backup: s.backup,
+              down: s.down,
+            })),
+          },
       mtls: {
         ca_pem: form.mtls_ca_pem.trim() === '' ? null : form.mtls_ca_pem,
         optional: form.mtls_optional,
@@ -779,6 +979,7 @@ export function HostEditorForm({
     })
 
   return (
+    <>
     <form className="flex flex-col overflow-hidden" onSubmit={handleSubmit} noValidate>
       <Tabs
         value={tab}
@@ -840,12 +1041,10 @@ export function HostEditorForm({
           <div className="flex h-[70vh] max-h-[560px] min-w-0 flex-1 flex-col">
             <div className="px-6 pt-6 pb-4">
               <h2 className="font-heading text-base leading-none font-medium">
-                {host === null
-                  ? t('hosts.editor.createTitle')
-                  : t('hosts.editor.editTitle')}
+                {t(titles.title)}
               </h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                {t('hosts.editor.description')}
+                {t(titles.description)}
               </p>
             </div>
             {/* The sidebar is gone below md, so the sections need another way
@@ -868,12 +1067,32 @@ export function HostEditorForm({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
         <TabsContent value="details" className="space-y-4">
-          {/* Keeps the id: submitting with no domains focuses it (see fail()). */}
-          <DomainChipsField
-            id="host-domain-input"
-            domains={form.domains}
-            onChange={(domains) => patch({ domains })}
-          />
+          {isTemplate ? (
+            // A template has a name where a host has domains: the domains are
+            // the one thing every host made from it brings itself.
+            <div className="space-y-2">
+              <Label htmlFor="host-template-name">
+                {t('templates.editor.name')}
+              </Label>
+              <Input
+                id="host-template-name"
+                value={form.template_name}
+                autoComplete="off"
+                placeholder={t('templates.editor.hostNamePlaceholder')}
+                onChange={(event) => patch({ template_name: event.target.value })}
+              />
+              <p className="text-sm text-muted-foreground">
+                {t('templates.editor.hostNameHelp')}
+              </p>
+            </div>
+          ) : (
+            // Keeps the id: submitting with no domains focuses it (see fail()).
+            <DomainChipsField
+              id="host-domain-input"
+              domains={form.domains}
+              onChange={(domains) => patch({ domains })}
+            />
+          )}
 
           <div className="grid gap-4 sm:grid-cols-[8rem_1fr_7rem]">
             <div className="space-y-2">
@@ -893,27 +1112,62 @@ export function HostEditorForm({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="host-forward-host">{t('hosts.editor.forwardHost')}</Label>
-              <Input
-                id="host-forward-host"
-                value={form.forward_host}
-                placeholder="10.0.0.5"
-                onChange={(event) => patch({ forward_host: event.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="host-forward-port">{t('hosts.editor.forwardPort')}</Label>
-              <Input
-                id="host-forward-port"
-                type="number"
-                min={1}
-                max={65535}
-                value={form.forward_port}
-                onChange={(event) => patch({ forward_port: event.target.value })}
-              />
-            </div>
+            {usesPool ? (
+              // On a shared pool there is no host:port to type — show where the
+              // traffic goes instead, and the way to the section that sets it.
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="host-forward-pool">
+                  {t('hosts.editor.forwardPool')}
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="host-forward-pool"
+                    readOnly
+                    value={selectedPool?.name ?? ''}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setTab('upstreams')}
+                  >
+                    {t('hosts.editor.forwardPoolChange')}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="host-forward-host">
+                    {t('hosts.editor.forwardHost')}
+                  </Label>
+                  <Input
+                    id="host-forward-host"
+                    value={form.forward_host}
+                    placeholder="10.0.0.5"
+                    onChange={(event) => patch({ forward_host: event.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="host-forward-port">
+                    {t('hosts.editor.forwardPort')}
+                  </Label>
+                  <Input
+                    id="host-forward-port"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={form.forward_port}
+                    onChange={(event) => patch({ forward_port: event.target.value })}
+                  />
+                </div>
+              </>
+            )}
           </div>
+          {isTemplate && !usesPool && (
+            <p className="text-sm text-muted-foreground">
+              {t('templates.editor.targetHelp')}
+            </p>
+          )}
 
           <div className="space-y-3 rounded-lg border p-3">
             <ToggleRow
@@ -1419,6 +1673,92 @@ export function HostEditorForm({
             {t('hosts.editor.upstreams.description')}
           </p>
 
+          {/* Where the backend servers come from: this host's own list (below),
+              or a shared pool defined once and used by any number of hosts. */}
+          <div className="space-y-2">
+            <Label htmlFor="host-upstream-source">
+              {t('hosts.editor.upstreams.source')}
+            </Label>
+            <div className="flex gap-2">
+              <Select
+                value={usesPool ? String(form.upstream_pool_id) : 'own'}
+                onValueChange={(value) => {
+                  // Inside a <form>, Radix mirrors the Select into a hidden
+                  // native <select>, and reports '' for a value whose option
+                  // has not registered yet — which is the case for a pool
+                  // created a moment ago and selected in the same render.
+                  // That echo is not a choice; taking it would turn the pool
+                  // id into NaN.
+                  if (value === '') return
+                  patch({
+                    upstream_pool_id:
+                      value === 'own' ? null : Number.parseInt(value, 10),
+                  })
+                }}
+              >
+                <SelectTrigger id="host-upstream-source" className="flex-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="own">
+                    {t('hosts.editor.upstreams.sourceOwn')}
+                  </SelectItem>
+                  {pools.map((pool) => (
+                    <SelectItem key={pool.id} value={String(pool.id)}>
+                      {t('hosts.editor.upstreams.sourcePool', { name: pool.name })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setPoolEditorOpen(true)}
+              >
+                <Plus aria-hidden="true" />
+                {t('hosts.editor.upstreams.newPool')}
+              </Button>
+            </div>
+            {poolsQuery.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                {t('hosts.editor.upstreams.poolsLoadFailed')}
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {t('hosts.editor.upstreams.sourceHelp')}
+            </p>
+          </div>
+
+          {usesPool ? (
+            <div className="space-y-3 rounded-lg border p-3">
+              {selectedPool === undefined ? (
+                // Nothing to show while the list loads (or failed to — said
+                // above). Loaded and still absent: the pool was deleted since
+                // this host was opened.
+                poolsQuery.isSuccess && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {t('hosts.editor.upstreams.poolMissing')}
+                  </p>
+                )
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium">
+                      {selectedPool.name}
+                    </span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {selectedPool.method}
+                    </span>
+                  </div>
+                  <PoolServerList servers={selectedPool.servers} />
+                  <p className="text-xs text-muted-foreground">
+                    {t('hosts.editor.upstreams.poolShared')}
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
           <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
             <div className="space-y-2">
               <Label htmlFor="host-balance-method">
@@ -1632,6 +1972,8 @@ export function HostEditorForm({
               {t('hosts.editor.upstreams.healthHint')}
             </p>
           </div>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="rateLimit" className="space-y-4">
@@ -1729,7 +2071,12 @@ export function HostEditorForm({
                 <HealthNumber
                   id="host-health-tcp-port"
                   label={t('hosts.editor.health.tcpPort')}
-                  placeholder={String(form.forward_port || t('hosts.editor.health.samePort'))}
+                  placeholder={
+                    // On a shared pool each server is probed on its own port.
+                    usesPool
+                      ? t('hosts.editor.health.samePort')
+                      : String(form.forward_port || t('hosts.editor.health.samePort'))
+                  }
                   value={form.health_tcp_port}
                   onChange={(v) => patch({ health_tcp_port: v })}
                 />
@@ -2304,6 +2651,20 @@ export function HostEditorForm({
         </DialogFooter>
       </div>
     </form>
+    {/* "Set new": create a pool without leaving the host being edited, and
+        select it straight away. A sibling of the form, not a child — a dialog
+        portal still bubbles React events to its parent in the component tree,
+        and a pool's Save must not submit the host. */}
+    <UpstreamPoolEditorDialog
+      open={poolEditorOpen}
+      onOpenChange={setPoolEditorOpen}
+      pool={null}
+      onSaved={(pool) => {
+        setCreatedPool(pool)
+        patch({ upstream_pool_id: pool.id })
+      }}
+    />
+    </>
   )
 }
 

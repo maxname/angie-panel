@@ -4,6 +4,11 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
+import {
   DomainChipsField,
   HostAdvancedField,
   HostSslFields,
@@ -41,7 +46,15 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, ApiError, type DeadHost, type DeadHostInput } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const DEAD_HOST_BULK_ACTIONS = lifecycleActions<DeadHost>({
+  enable: api.enableDeadHost,
+  disable: api.disableDeadHost,
+  remove: api.deleteDeadHost,
+})
 
 export function DeadHostsPage() {
   const { t } = useTranslation()
@@ -53,6 +66,8 @@ export function DeadHostsPage() {
     queryKey: ['dead-hosts'],
     queryFn: () => api.listDeadHosts(),
   })
+  const queryClient = useQueryClient()
+  const selection = useSelection(hostsQuery.data?.dead_hosts ?? [])
 
   const openCreate = () => {
     setEditing(null)
@@ -104,6 +119,7 @@ export function DeadHostsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('deadHosts.table.domains')}</TableHead>
                   <TableHead>{t('deadHosts.table.behaviour')}</TableHead>
                   <TableHead>{t('deadHosts.table.ssl')}</TableHead>
@@ -118,6 +134,7 @@ export function DeadHostsPage() {
                   <DeadHostRow
                     key={host.id}
                     host={host}
+                    selection={selection}
                     onEdit={() => openEdit(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
@@ -127,6 +144,14 @@ export function DeadHostsPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(host) => host.domains[0] ?? `#${host.id}`}
+        actions={DEAD_HOST_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['dead-hosts'] })}
+        successNote={t('deadHosts.unappliedBody')}
+      />
 
       <DeadHostEditorDialog open={editorOpen} onOpenChange={setEditorOpen} host={editing} />
       <DeleteDeadHostDialog
@@ -143,11 +168,12 @@ export function DeadHostsPage() {
 
 interface DeadHostRowProps {
   host: DeadHost
+  selection: Selection<DeadHost>
   onEdit: () => void
   onDelete: () => void
 }
 
-function DeadHostRow({ host, onEdit, onDelete }: DeadHostRowProps) {
+function DeadHostRow({ host, selection, onEdit, onDelete }: DeadHostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -171,7 +197,8 @@ function DeadHostRow({ host, onEdit, onDelete }: DeadHostRowProps) {
   })
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(host.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={host} name={host.domains[0] ?? `#${host.id}`} />
       <TableCell>
         <DomainBadges
           domains={host.domains}

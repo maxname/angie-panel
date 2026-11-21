@@ -222,15 +222,26 @@ server {
     ssl_certificate_key $acme_cert_key_<name>;
     # hsts → add_header Strict-Transport-Security (+ preload не ставим);
     # block_exploits/cache_assets → include /usr/share/angie-panel/snippets/...
+    # Заголовки запроса — ОДИН набор на хост, на уровне server: его наследуют все
+    # location. proxy_set_header наследуется «всё или ничего» (уровень, объявивший
+    # хоть один свой, не получает ничего сверху), поэтому они собраны в одном месте.
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;   # trust_forwarded_proto=true →
+    # websockets → + Upgrade/Connection                прокидываем входящий
+    # свой заголовок запроса с тем же именем ЗАМЕНЯЕТ стандартный, а не дублирует
     location / {
         proxy_pass http://host_<id>;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;   # trust_forwarded_proto=true →
-        # websockets → proxy_http_version 1.1 + Upgrade/Connection    прокидываем входящий
+        # websockets → proxy_http_version 1.1
     }
 }
 ```
+
+Исключения из «один набор на уровне server»: location, чей сниппет сам объявляет
+`proxy_set_header` (или делает `include`), получает полный набор внутрь — иначе он остался бы
+только со сниппетным заголовком; а хост, чей advanced_snippet содержит `proxy_set_header`,
+`location` или `include`, целиком остаётся на раскладке «заголовки в каждом location», чтобы
+смысл уже написанного сниппета не изменился при перегенерации.
 
 Семантика `enabled=false`: файл хоста просто не генерируется, трафик падает в default_server;
 SAN сертификата не затрагивается (см. §3); на дашборде хост показан как выключенный.

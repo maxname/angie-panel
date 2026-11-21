@@ -1,10 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, Loader2, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Server,
+  ShieldCheck,
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllCheckbox,
+  SelectRowCheckbox,
+} from '@/components/bulk-actions'
 import { DomainBadges } from '@/components/domain-badges'
 import { HostEditorDialog } from '@/components/hosts/host-editor-dialog'
+import { TemplateMenu } from '@/components/template-menu'
 import { UptimeBar } from '@/components/hosts/uptime-bar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,13 +38,36 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, ApiError, type Cert, type Host } from '@/lib/api'
+import {
+  api,
+  ApiError,
+  type Cert,
+  type Host,
+  type HostTemplate,
+  type UpstreamPool,
+} from '@/lib/api'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const HOST_BULK_ACTIONS = lifecycleActions<Host>({
+  enable: api.enableHost,
+  disable: api.disableHost,
+  remove: api.deleteHost,
+})
 
 export function HostsPage() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Host | null>(null)
+  // The template a new host starts from, when one was picked.
+  const [fromTemplate, setFromTemplate] = useState<HostTemplate | null>(null)
+  // "Save as template": the host a new template starts from. Kept apart from
+  // whether its editor is open, so the editor does not blank out while it
+  // fades away.
+  const [templateSeed, setTemplateSeed] = useState<Host | null>(null)
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Host | null>(null)
 
   const hostsQuery = useQuery({
@@ -59,28 +96,48 @@ export function HostsPage() {
     })
   }, [hostsQuery.data?.hosts, sortAsc])
 
+  const selection = useSelection(sortedHosts)
+
   const certsById = new Map(
     (certsQuery.data?.certificates ?? []).map((cert) => [cert.id, cert]),
   )
+  // Needed to name the shared pool a host proxies to (it has no host:port).
+  const poolsQuery = useQuery({
+    queryKey: ['upstream-pools'],
+    queryFn: () => api.listUpstreamPools(),
+  })
+  const poolsById = new Map(
+    (poolsQuery.data?.upstream_pools ?? []).map((pool) => [pool.id, pool]),
+  )
 
-  const openCreate = () => {
+  const openCreate = (template: HostTemplate | null = null) => {
     setEditing(null)
+    setFromTemplate(template)
     setEditorOpen(true)
   }
 
   const openEdit = (host: Host) => {
     setEditing(host)
+    setFromTemplate(null)
     setEditorOpen(true)
+  }
+
+  const saveAsTemplate = (host: Host) => {
+    setTemplateSeed(host)
+    setTemplateEditorOpen(true)
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">{t('hosts.title')}</h1>
-        <Button onClick={openCreate}>
-          <Plus aria-hidden="true" />
-          {t('hosts.add')}
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <TemplateMenu kind="proxy_host" onPick={openCreate} />
+          <Button onClick={() => openCreate()}>
+            <Plus aria-hidden="true" />
+            {t('hosts.add')}
+          </Button>
+        </div>
       </div>
 
       {hostsQuery.isPending ? (
@@ -110,7 +167,13 @@ export function HostsPage() {
           {/* Sort used to live in the column header; the card layout has none,
               so it moves to a control over the list. Still by first domain —
               the field operators scan. */}
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between pl-4">
+            {/* A label, not a bare box: with no column headers above the
+                cards, nothing else says what this one ticks. */}
+            <label className="flex cursor-pointer items-center gap-3 text-sm text-muted-foreground">
+              <SelectAllCheckbox selection={selection} />
+              {t('bulk.selectAll')}
+            </label>
             <Button
               variant="ghost"
               size="sm"
@@ -137,7 +200,14 @@ export function HostsPage() {
                         ? certsById.get(host.certificate_id)
                         : undefined
                     }
+                    pool={
+                      host.upstream_pool_id != null
+                        ? poolsById.get(host.upstream_pool_id)
+                        : undefined
+                    }
+                    selection={selection}
                     onEdit={() => openEdit(host)}
+                    onSaveAsTemplate={() => saveAsTemplate(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
               ))}
@@ -146,7 +216,26 @@ export function HostsPage() {
         </div>
       )}
 
-      <HostEditorDialog open={editorOpen} onOpenChange={setEditorOpen} host={editing} />
+      <BulkActionsBar
+        selection={selection}
+        label={(host) => host.domains[0] ?? `#${host.id}`}
+        actions={HOST_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['hosts'] })}
+        successNote={t('hosts.unappliedBody')}
+      />
+
+      <HostEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        host={editing}
+        fromTemplate={fromTemplate}
+      />
+      <HostEditorDialog
+        open={templateEditorOpen}
+        onOpenChange={setTemplateEditorOpen}
+        host={null}
+        templateEdit={{ template: null, seed: templateSeed }}
+      />
       <DeleteHostDialog
         host={deleteTarget}
         onOpenChange={(open) => {
@@ -162,11 +251,24 @@ export function HostsPage() {
 interface HostRowProps {
   host: Host
   cert: Cert | undefined
+  /** The shared pool the host proxies to; undefined for a host with its own
+   *  target, and while the pool list is still loading. */
+  pool: UpstreamPool | undefined
+  selection: Selection<Host>
   onEdit: () => void
+  onSaveAsTemplate: () => void
   onDelete: () => void
 }
 
-function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
+function HostRow({
+  host,
+  cert,
+  pool,
+  selection,
+  onEdit,
+  onSaveAsTemplate,
+  onDelete,
+}: HostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -189,15 +291,28 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
     },
   })
 
-  const target = `${host.forward_scheme}://${host.forward_host}:${host.forward_port}`
+  // A host on a shared pool has no host:port of its own — name the pool.
+  const onPool = host.upstream_pool_id !== null
+  const target = onPool
+    ? `${host.forward_scheme}://${pool?.name ?? '…'}`
+    : `${host.forward_scheme}://${host.forward_host}:${host.forward_port}`
   // Only probed hosts get a bar. Config toggled off is not "down".
   const probed = host.enabled && host.health_checks.some((c) => c.enabled)
 
   return (
     <div className="space-y-2 p-4">
       {/* Line 1: the domains, and the actions menu pinned right. */}
-      <div className="flex items-start justify-between gap-2">
-        <DomainBadges domains={host.domains} secure={cert !== undefined} />
+      <div className="flex items-start gap-3">
+        <div className="pt-1">
+          <SelectRowCheckbox
+            selection={selection}
+            item={host}
+            name={host.domains[0] ?? `#${host.id}`}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <DomainBadges domains={host.domains} secure={cert !== undefined} />
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -221,6 +336,9 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
             <DropdownMenuItem onSelect={() => toggleMutation.mutate()}>
               {host.enabled ? t('hosts.actions.disable') : t('hosts.actions.enable')}
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={onSaveAsTemplate}>
+              {t('templates.saveAs')}
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={onDelete}>
               {t('hosts.actions.delete')}
@@ -232,7 +350,7 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
       {/* Line 2: status → target → certificate → uptime. Wraps on narrow
           screens rather than overflowing — what the columnar table could not
           do on a phone. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-7 text-sm">
         {host.enabled ? (
           <Badge variant="success">{t('hosts.status.enabled')}</Badge>
         ) : (
@@ -241,7 +359,19 @@ function HostRow({ host, cert, onEdit, onDelete }: HostRowProps) {
           </Badge>
         )}
 
-        <span className="font-mono text-xs text-muted-foreground">{target}</span>
+        <span
+          className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground"
+          title={onPool ? t('hosts.table.pool') : undefined}
+        >
+          {onPool && (
+            <Server
+              className="size-3.5 shrink-0"
+              role="img"
+              aria-label={t('hosts.table.pool')}
+            />
+          )}
+          {target}
+        </span>
 
         {cert && (
           <span

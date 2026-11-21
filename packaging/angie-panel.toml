@@ -40,6 +40,9 @@ allow_advanced_snippets = false
 # 169.254/16, fe80::/10). Disabled by default: such targets can expose the
 # panel itself or Angie's status API (an SSRF risk). Enable only if you
 # knowingly proxy to a service on this same machine.
+# Custom locations and forward-auth endpoints are covered as well, with one
+# exception: on this machine they can never target port 8100 (Angie's status
+# API) or 8080 (the panel's default port).
 allow_loopback_upstreams = false
 
 # Add the `Secure` attribute to the session cookie so browsers never send it

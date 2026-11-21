@@ -3,6 +3,11 @@ import { Loader2, Plus, X } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,7 +31,11 @@ import {
 } from '@/components/ui/table'
 import { api, ApiError, type Ban, type GeoMode, type GeoPolicy } from '@/lib/api'
 import { COUNTRIES, countryName } from '@/lib/countries'
+import { deleteAction } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const BAN_BULK_ACTIONS = deleteAction<Ban>(api.deleteBan)
 
 export function BlocklistPage() {
   const { t } = useTranslation()
@@ -36,6 +45,7 @@ export function BlocklistPage() {
   const [error, setError] = useState<string | null>(null)
 
   const bansQuery = useQuery({ queryKey: ['bans'], queryFn: () => api.listBans() })
+  const selection = useSelection(bansQuery.data?.bans ?? [])
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['bans'] })
   const unapplied = () =>
@@ -144,6 +154,7 @@ export function BlocklistPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('blocklist.table.address')}</TableHead>
                   <TableHead>{t('blocklist.table.reason')}</TableHead>
                   <TableHead className="w-0 text-right">
@@ -153,13 +164,26 @@ export function BlocklistPage() {
               </TableHeader>
               <TableBody>
                 {bansQuery.data.bans.map((ban) => (
-                  <BanRow key={ban.id} ban={ban} onRemoved={unapplied} />
+                  <BanRow
+                    key={ban.id}
+                    ban={ban}
+                    selection={selection}
+                    onRemoved={unapplied}
+                  />
                 ))}
               </TableBody>
             </Table>
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(ban) => ban.address}
+        actions={BAN_BULK_ACTIONS}
+        onChanged={() => void invalidate()}
+        successNote={t('blocklist.unappliedBody')}
+      />
     </div>
   )
 }
@@ -302,7 +326,15 @@ function CountryPolicyCard() {
   )
 }
 
-function BanRow({ ban, onRemoved }: { ban: Ban; onRemoved: () => void }) {
+function BanRow({
+  ban,
+  selection,
+  onRemoved,
+}: {
+  ban: Ban
+  selection: Selection<Ban>
+  onRemoved: () => void
+}) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -321,7 +353,8 @@ function BanRow({ ban, onRemoved }: { ban: Ban; onRemoved: () => void }) {
   })
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(ban.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={ban} name={ban.address} />
       <TableCell className="font-mono text-sm">{ban.address}</TableCell>
       <TableCell className="text-sm text-muted-foreground">
         {ban.reason ?? '—'}

@@ -3,6 +3,12 @@ import { Loader2, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { TemplateMenu } from '@/components/template-menu'
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
 import { ToggleRow } from '@/components/hosts/host-editor-fields'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -45,21 +51,41 @@ import {
   ApiError,
   type Stream,
   type StreamInput,
+  type StreamTemplate,
+  type StreamTemplateConfig,
   type StreamTls,
 } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection, type Selection } from '@/lib/use-selection'
+import { omit } from '@/lib/utils'
+
+const STREAM_BULK_ACTIONS = lifecycleActions<Stream>({
+  enable: api.enableStream,
+  disable: api.disableStream,
+  remove: api.deleteStream,
+})
 
 export function StreamsPage() {
   const { t } = useTranslation()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Stream | null>(null)
+  // The template a new stream starts from, when one was picked.
+  const [fromTemplate, setFromTemplate] = useState<StreamTemplate | null>(null)
+  // "Save as template": the stream a new template starts from. Kept apart
+  // from whether its editor is open, so the editor does not blank out while
+  // it fades away.
+  const [templateSeed, setTemplateSeed] = useState<Stream | null>(null)
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Stream | null>(null)
 
   const streamsQuery = useQuery({
     queryKey: ['streams'],
     queryFn: () => api.listStreams(),
   })
+  const queryClient = useQueryClient()
+  const selection = useSelection(streamsQuery.data?.streams ?? [])
   // The dashboard is the source of truth for whether the stream {} context is
   // active; reuse it so the enable banner shows only when it's actually off.
   const dashboardQuery = useQuery({
@@ -67,14 +93,21 @@ export function StreamsPage() {
     queryFn: () => api.getDashboard(),
   })
 
-  const openCreate = () => {
+  const openCreate = (template: StreamTemplate | null = null) => {
     setEditing(null)
+    setFromTemplate(template)
     setEditorOpen(true)
   }
 
   const openEdit = (stream: Stream) => {
     setEditing(stream)
+    setFromTemplate(null)
     setEditorOpen(true)
+  }
+
+  const saveAsTemplate = (stream: Stream) => {
+    setTemplateSeed(stream)
+    setTemplateEditorOpen(true)
   }
 
   const contextActive = dashboardQuery.data?.streams.context_active ?? true
@@ -88,10 +121,13 @@ export function StreamsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">
             {t('streams.title')}
           </h1>
-          <Button className="shrink-0" onClick={openCreate}>
-            <Plus aria-hidden="true" />
-            {t('streams.add')}
-          </Button>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <TemplateMenu kind="stream" onPick={openCreate} />
+            <Button onClick={() => openCreate()}>
+              <Plus aria-hidden="true" />
+              {t('streams.add')}
+            </Button>
+          </div>
         </div>
         <p className="text-sm text-muted-foreground">{t('streams.subtitle')}</p>
       </div>
@@ -130,6 +166,7 @@ export function StreamsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('streams.table.incomingPort')}</TableHead>
                   <TableHead>{t('streams.table.forward')}</TableHead>
                   <TableHead>{t('streams.table.protocol')}</TableHead>
@@ -144,7 +181,9 @@ export function StreamsPage() {
                   <StreamRow
                     key={stream.id}
                     stream={stream}
+                    selection={selection}
                     onEdit={() => openEdit(stream)}
+                    onSaveAsTemplate={() => saveAsTemplate(stream)}
                     onDelete={() => setDeleteTarget(stream)}
                   />
                 ))}
@@ -154,10 +193,25 @@ export function StreamsPage() {
         </Card>
       )}
 
+      <BulkActionsBar
+        selection={selection}
+        label={(stream) => `:${stream.incoming_port}`}
+        actions={STREAM_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['streams'] })}
+        successNote={t('streams.unappliedBody')}
+      />
+
       <StreamEditorDialog
         open={editorOpen}
         onOpenChange={setEditorOpen}
         stream={editing}
+        fromTemplate={fromTemplate}
+      />
+      <StreamEditorDialog
+        open={templateEditorOpen}
+        onOpenChange={setTemplateEditorOpen}
+        stream={null}
+        templateEdit={{ template: null, seed: templateSeed }}
       />
       <DeleteStreamDialog
         stream={deleteTarget}
@@ -226,11 +280,19 @@ function protocolLabel(stream: Stream, t: (key: string) => string): string {
 
 interface StreamRowProps {
   stream: Stream
+  selection: Selection<Stream>
   onEdit: () => void
+  onSaveAsTemplate: () => void
   onDelete: () => void
 }
 
-function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
+function StreamRow({
+  stream,
+  selection,
+  onEdit,
+  onSaveAsTemplate,
+  onDelete,
+}: StreamRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -254,7 +316,8 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
   })
 
   return (
-    <TableRow>
+    <TableRow data-state={selection.isSelected(stream.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={stream} name={`:${stream.incoming_port}`} />
       <TableCell>
         <span className="font-mono text-sm">{stream.incoming_port}</span>
       </TableCell>
@@ -308,6 +371,9 @@ function StreamRow({ stream, onEdit, onDelete }: StreamRowProps) {
               {stream.enabled
                 ? t('streams.actions.disable')
                 : t('streams.actions.enable')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={onSaveAsTemplate}>
+              {t('templates.saveAs')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={onDelete}>
@@ -384,35 +450,68 @@ export function DeleteStreamDialog({
   )
 }
 
+/** Editing a template instead of a stream. */
+export interface StreamTemplateEdit {
+  /** The template being edited, or null when creating a new one. */
+  template: StreamTemplate | null
+  /** For a new template: the stream whose settings it starts from. */
+  seed?: Stream | null
+}
+
 interface StreamEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** The stream being edited, or null when creating a new one. */
   stream: Stream | null
+  /** For a new stream: the template whose settings it starts from. */
+  fromTemplate?: StreamTemplate | null
+  /** Edit a template rather than a stream; `stream` is then ignored. */
+  templateEdit?: StreamTemplateEdit
 }
 
-function StreamEditorDialog({
+export function StreamEditorDialog({
   open,
   onOpenChange,
   stream,
+  fromTemplate = null,
+  templateEdit,
 }: StreamEditorDialogProps) {
   const { t } = useTranslation()
+  const title =
+    templateEdit !== undefined
+      ? templateEdit.template === null
+        ? 'templates.editor.streamCreateTitle'
+        : 'templates.editor.streamEditTitle'
+      : stream === null
+        ? 'streams.editor.createTitle'
+        : 'streams.editor.editTitle'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>
-            {stream === null
-              ? t('streams.editor.createTitle')
-              : t('streams.editor.editTitle')}
-          </DialogTitle>
-          <DialogDescription>{t('streams.editor.description')}</DialogDescription>
+          <DialogTitle>{t(title)}</DialogTitle>
+          <DialogDescription>
+            {t(
+              templateEdit !== undefined
+                ? 'templates.editor.streamDescription'
+                : 'streams.editor.description',
+            )}
+          </DialogDescription>
         </DialogHeader>
-        {/* Remount the form whenever the target stream changes so state resets. */}
+        {/* Remount the form whenever what it works on changes — another
+            stream, another template to start from or to edit — so state
+            resets. */}
         <StreamEditorForm
-          key={stream?.id ?? 'new'}
+          key={[
+            stream?.id ?? 'new',
+            fromTemplate?.id ?? '',
+            templateEdit?.template?.id ?? (templateEdit ? 'new' : ''),
+            templateEdit?.seed?.id ?? '',
+          ].join(':')}
           stream={stream}
+          fromTemplate={fromTemplate}
+          templateEdit={templateEdit}
           onDone={() => onOpenChange(false)}
         />
       </DialogContent>
@@ -421,6 +520,9 @@ function StreamEditorDialog({
 }
 
 interface FormState {
+  /** The template's own name. Only used while editing a template, where it
+   *  takes the place of the incoming port. */
+  template_name: string
   incoming_port: string
   forward_host: string
   forward_port: string
@@ -433,6 +535,7 @@ interface FormState {
 function initialState(stream: Stream | null): FormState {
   if (stream === null) {
     return {
+      template_name: '',
       incoming_port: '',
       forward_host: '',
       forward_port: '',
@@ -443,6 +546,7 @@ function initialState(stream: Stream | null): FormState {
     }
   }
   return {
+    template_name: '',
     incoming_port: String(stream.incoming_port),
     forward_host: stream.forward_host,
     forward_port: String(stream.forward_port),
@@ -453,7 +557,23 @@ function initialState(stream: Stream | null): FormState {
   }
 }
 
+/** The form a template's settings open as: a stream's, with the incoming port
+ *  left to fill in (and the forward port too, if the template gives none). */
+function formFromTemplate(config: StreamTemplateConfig): FormState {
+  return {
+    template_name: '',
+    incoming_port: '',
+    forward_host: config.forward_host,
+    forward_port: config.forward_port > 0 ? String(config.forward_port) : '',
+    tcp: config.tcp,
+    udp: config.udp,
+    tls: config.tls,
+    certificate_id: config.certificate_id,
+  }
+}
+
 interface FieldErrors {
+  name?: string
   incomingPort?: string
   forwardHost?: string
   forwardPort?: string
@@ -464,20 +584,50 @@ interface FieldErrors {
 
 interface StreamEditorFormProps {
   stream: Stream | null
+  fromTemplate?: StreamTemplate | null
+  templateEdit?: StreamTemplateEdit
   onDone: () => void
 }
 
-export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
+export function StreamEditorForm({
+  stream,
+  fromTemplate = null,
+  templateEdit,
+  onDone,
+}: StreamEditorFormProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  // Editing a template uses this same form. What differs is the identity — a
+  // name instead of the incoming port — an optional forward target, and where
+  // Save sends it.
+  const isTemplate = templateEdit !== undefined
+  const editedTemplate = templateEdit?.template ?? null
 
   // Keep the opening snapshot so the submit can tell whether there is
   // anything to save.
-  const [initialForm] = useState<FormState>(() => initialState(stream))
+  const [initialForm] = useState<FormState>(() => {
+    if (templateEdit !== undefined) {
+      if (templateEdit.template !== null) {
+        return {
+          ...formFromTemplate(templateEdit.template.config),
+          template_name: templateEdit.template.name,
+        }
+      }
+      // From an existing stream: everything but the port it listens on.
+      return templateEdit.seed
+        ? { ...initialState(templateEdit.seed), incoming_port: '' }
+        : initialState(null)
+    }
+    // A new stream can start from a template; an existing one is what it is.
+    return stream === null && fromTemplate !== null
+      ? formFromTemplate(fromTemplate.config)
+      : initialState(stream)
+  })
   const [form, setForm] = useState<FormState>(initialForm)
   // Only an edit can be "unchanged". A create form starts pristine by
   // definition, and its Save is what tells you which fields are missing.
-  const canSave = useIsDirty(form, initialForm) || stream === null
+  const creating = isTemplate ? editedTemplate === null : stream === null
+  const canSave = useIsDirty(form, initialForm) || creating
   const [clientErrors, setClientErrors] = useState<FieldErrors>({})
 
   // Shares the ['certificates'] key so certs created on that page appear here.
@@ -500,16 +650,35 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
     )
 
   const mutation = useMutation({
-    mutationFn: (input: StreamInput) =>
-      stream === null
+    mutationFn: (input: StreamInput): Promise<unknown> => {
+      if (isTemplate) {
+        // The same payload a stream would send, minus what a template does
+        // not carry: the server validates it by the same rules.
+        const body = {
+          kind: 'stream' as const,
+          name: form.template_name.trim(),
+          config: omit(input, 'incoming_port', 'enabled'),
+        }
+        return editedTemplate === null
+          ? api.createTemplate(body)
+          : api.updateTemplate(editedTemplate.id, body)
+      }
+      return stream === null
         ? api.createStream(input)
-        : api.updateStream(stream.id, input),
+        : api.updateStream(stream.id, input)
+    },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['streams'] })
-      toast({
-        title: t('streams.unappliedTitle'),
-        description: t('streams.unappliedBody'),
-      })
+      if (isTemplate) {
+        // Nothing to apply: a template changes no generated config.
+        void queryClient.invalidateQueries({ queryKey: ['templates'] })
+        toast({ title: t('templates.editor.savedToast') })
+      } else {
+        void queryClient.invalidateQueries({ queryKey: ['streams'] })
+        toast({
+          title: t('streams.unappliedTitle'),
+          description: t('streams.unappliedBody'),
+        })
+      }
       onDone()
     },
   })
@@ -535,6 +704,9 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
           return { tls: t('streams.editor.tls.tcpOnly') }
         case 'port_conflict':
           return { incomingPort: message }
+        case 'invalid_name':
+        case 'template_name_taken':
+          return { name: message }
         default:
           return { form: message }
       }
@@ -550,13 +722,24 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
     const incoming = Number.parseInt(form.incoming_port, 10)
     const forward = Number.parseInt(form.forward_port, 10)
     const next: FieldErrors = {}
-    if (!Number.isInteger(incoming) || incoming < 1 || incoming > 65535) {
+    // A template has a name where a stream has its incoming port, and may
+    // leave the forward target open to be filled in for each stream.
+    const openTarget = isTemplate && form.forward_host.trim() === ''
+    const openPort = openTarget && form.forward_port.trim() === ''
+    if (isTemplate) {
+      if (form.template_name.trim() === '') {
+        next.name = t('templates.editor.noName')
+      }
+    } else if (!Number.isInteger(incoming) || incoming < 1 || incoming > 65535) {
       next.incomingPort = t('streams.editor.noIncomingPort')
     }
-    if (form.forward_host.trim() === '') {
+    if (form.forward_host.trim() === '' && !openTarget) {
       next.forwardHost = t('streams.editor.noForwardHost')
     }
-    if (!Number.isInteger(forward) || forward < 1 || forward > 65535) {
+    if (
+      !openPort &&
+      (!Number.isInteger(forward) || forward < 1 || forward > 65535)
+    ) {
       next.forwardPort = t('streams.editor.noForwardPort')
     }
     if (!form.tcp && !form.udp) {
@@ -571,9 +754,9 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
     }
 
     const input: StreamInput = {
-      incoming_port: incoming,
+      incoming_port: isTemplate ? 0 : incoming,
       forward_host: form.forward_host.trim(),
-      forward_port: forward,
+      forward_port: openPort ? 0 : forward,
       tcp: form.tcp,
       udp: form.udp,
       tls: form.tls,
@@ -585,28 +768,51 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
-      <div className="space-y-2">
-        <Label htmlFor="stream-incoming-port">
-          {t('streams.editor.incomingPort')}
-        </Label>
-        <Input
-          id="stream-incoming-port"
-          inputMode="numeric"
-          value={form.incoming_port}
-          placeholder="5432"
-          onChange={(event) =>
-            patch({ incoming_port: event.target.value.replace(/[^0-9]/g, '') })
-          }
-        />
-        <p className="text-xs text-muted-foreground">
-          {t('streams.editor.incomingPortHint')}
-        </p>
-        {errors.incomingPort !== undefined && (
-          <p role="alert" className="text-sm text-destructive">
-            {errors.incomingPort}
+      {isTemplate ? (
+        <div className="space-y-2">
+          <Label htmlFor="stream-template-name">
+            {t('templates.editor.name')}
+          </Label>
+          <Input
+            id="stream-template-name"
+            value={form.template_name}
+            autoComplete="off"
+            placeholder={t('templates.editor.streamNamePlaceholder')}
+            onChange={(event) => patch({ template_name: event.target.value })}
+          />
+          <p className="text-xs text-muted-foreground">
+            {t('templates.editor.streamNameHelp')}
           </p>
-        )}
-      </div>
+          {errors.name !== undefined && (
+            <p role="alert" className="text-sm text-destructive">
+              {errors.name}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <Label htmlFor="stream-incoming-port">
+            {t('streams.editor.incomingPort')}
+          </Label>
+          <Input
+            id="stream-incoming-port"
+            inputMode="numeric"
+            value={form.incoming_port}
+            placeholder="5432"
+            onChange={(event) =>
+              patch({ incoming_port: event.target.value.replace(/[^0-9]/g, '') })
+            }
+          />
+          <p className="text-xs text-muted-foreground">
+            {t('streams.editor.incomingPortHint')}
+          </p>
+          {errors.incomingPort !== undefined && (
+            <p role="alert" className="text-sm text-destructive">
+              {errors.incomingPort}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
         <div className="space-y-2">
@@ -645,6 +851,11 @@ export function StreamEditorForm({ stream, onDone }: StreamEditorFormProps) {
           )}
         </div>
       </div>
+      {isTemplate && (
+        <p className="text-xs text-muted-foreground">
+          {t('templates.editor.targetHelp')}
+        </p>
+      )}
 
       <div className="space-y-3 rounded-lg border p-3">
         <span className="text-sm font-medium">{t('streams.editor.protocol')}</span>
