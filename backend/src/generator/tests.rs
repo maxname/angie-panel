@@ -286,6 +286,7 @@ fn acme_client_carries_ca_account_key_and_eab() {
         public_dir: public_dir(),
         allow_advanced_snippets: true,
         acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
     };
     let violations = lint::check_fileset(&files, &policy);
     assert!(violations.is_empty(), "{violations:#?}");
@@ -333,6 +334,7 @@ fn golden_acme_dns_provider_hook() {
         public_dir: public_dir(),
         allow_advanced_snippets: true,
         acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
     };
     let violations = lint::check_fileset(&files, &policy);
     assert!(
@@ -497,6 +499,7 @@ fn golden_shared_upstream_pool() {
         public_dir: public_dir(),
         allow_advanced_snippets: false,
         acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
     };
     let violations = lint::check_fileset(&files, &policy);
     assert!(violations.is_empty(), "{violations:#?}");
@@ -1544,6 +1547,7 @@ fn shared_request_headers_pass_the_linter() {
         public_dir: public_dir(),
         allow_advanced_snippets: true,
         acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+        allow_loopback_upstreams: false,
     };
     let violations = lint::check_fileset(&files, &policy);
     assert!(violations.is_empty(), "{violations:#?}");
@@ -2059,6 +2063,7 @@ fn full_fileset_is_lint_clean() {
             public_dir: public_dir(),
             allow_advanced_snippets: true,
             acme_account_key: PathBuf::from(TEST_ACCOUNT_KEY),
+            allow_loopback_upstreams: false,
         };
         let violations = lint::check_fileset(&files, &policy);
         assert!(

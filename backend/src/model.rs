@@ -238,6 +238,10 @@ fn validate_http_url(raw: &str, ssrf: Option<&UpstreamPolicy>) -> Result<String,
         allow_loopback: true,
     };
     let host_norm = validate_forward_host(&host, ssrf.unwrap_or(&permissive))?;
+    // Only a URL that Angie itself fetches ends up in a `proxy_pass`.
+    if ssrf.is_some() {
+        refuse_local_management_port(&host_norm, port)?;
+    }
     if !path.is_empty() {
         validate_url_path(path)?;
     }
@@ -1242,6 +1246,25 @@ pub fn validate_forward_host(raw: &str, policy: &UpstreamPolicy) -> Result<Strin
     Ok(s)
 }
 
+/// A custom location and an auth endpoint are written to the config as a
+/// literal `proxy_pass` target, and the root helper's linter never lets one of
+/// those reach Angie's status API or the panel on this machine — not even with
+/// `allow_loopback_upstreams`. Such a target is turned down here, on its own
+/// field: once saved it would fail every apply until someone tracked it down.
+/// The linter answers the question itself, so the two cannot drift apart.
+fn refuse_local_management_port(host: &str, port: Option<u16>) -> Result<(), ApiError> {
+    match crate::generator::lint::local_management_port(host, port) {
+        Some(port) => Err(bad(
+            "forbidden_forward_host",
+            format!(
+                "{host}:{port} is a management port of this machine (Angie's status API \
+                 or the panel); a location or an auth endpoint cannot proxy to it"
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// SSRF guard for upstream IPs (PLAN.md §7): loopback and link-local targets
 /// expose panel/status management endpoints; require an explicit opt-in.
 pub struct UpstreamPolicy {
@@ -1391,6 +1414,7 @@ pub fn validate_host_input(
         if loc.forward_port == 0 {
             return Err(bad("invalid_forward_port", "port must be 1-65535"));
         }
+        refuse_local_management_port(&loc.forward_host, Some(loc.forward_port))?;
         if let Some(r) = &loc.rewrite {
             if r.trim().is_empty() {
                 loc.rewrite = None;
@@ -2885,6 +2909,72 @@ mod tests {
         assert!(validate_forward_host("127.0.0.1", &permissive).is_ok());
         assert!(validate_forward_host("::ffff:127.0.0.1", &permissive).is_ok());
         assert!(validate_forward_host("localhost", &permissive).is_ok());
+    }
+
+    #[test]
+    fn loopback_opt_in_stops_short_of_the_management_ports() {
+        let permissive = UpstreamPolicy {
+            allow_loopback: true,
+        };
+        let location = |host: &str, port: u16| {
+            validate_host_input(
+                host_input(serde_json::json!({
+                    "forward_host": "10.0.0.5", "forward_port": 80,
+                    "locations": [{
+                        "path": "/api", "forward_scheme": "http",
+                        "forward_host": host, "forward_port": port,
+                    }],
+                })),
+                false,
+                &permissive,
+            )
+        };
+        let auth = |url: &str| {
+            validate_forward_auth(
+                ForwardAuth {
+                    enabled: true,
+                    verify_url: url.to_string(),
+                    ..ForwardAuth::default()
+                },
+                &permissive,
+            )
+        };
+
+        // A service on this machine is what the opt-in is for…
+        assert!(location("127.0.0.1", 3000).is_ok());
+        assert!(location("localhost", 9000).is_ok());
+        assert!(auth("http://127.0.0.1:9091/api/verify").is_ok());
+        assert!(auth("http://localhost/verify").is_ok());
+        // …but a location or an auth endpoint is a literal `proxy_pass`, which
+        // the linter never lets reach the status API or the panel. Saying so
+        // here keeps it from being saved and then failing every apply.
+        for (host, port) in [("127.0.0.1", 8100), ("localhost", 8080), ("::1", 8100)] {
+            let err = location(host, port).unwrap_err();
+            assert_eq!(err.code, "forbidden_forward_host", "{host}:{port}");
+            assert!(err.message.contains("management port"), "{}", err.message);
+        }
+        for url in [
+            "http://127.0.0.1:8100/status/",
+            "http://localhost:8080/verify",
+            "http://[::1]:8100/",
+        ] {
+            let err = auth(url).unwrap_err();
+            assert_eq!(err.code, "forbidden_forward_host", "{url}");
+        }
+        // The same ports on another machine are nobody's management ports.
+        assert!(location("192.168.1.5", 8080).is_ok());
+        assert!(auth("http://10.0.0.3:8100/verify").is_ok());
+        // Where the browser is sent to sign in is not a proxy target at all.
+        assert!(validate_forward_auth(
+            ForwardAuth {
+                enabled: true,
+                verify_url: "http://10.0.0.3:9091/verify".into(),
+                sign_in_url: Some("http://localhost:8080/login".into()),
+                ..ForwardAuth::default()
+            },
+            &permissive,
+        )
+        .is_ok());
     }
 
     #[test]

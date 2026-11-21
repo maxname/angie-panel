@@ -93,12 +93,21 @@ async fn authed_app(dir: &std::path::Path) -> (axum::Router, String) {
 
 /// [`authed_app`], also handing back the state (to inspect generated config).
 async fn authed_app_with_state(dir: &std::path::Path) -> (axum::Router, String, Arc<AppState>) {
+    authed_app_with_config(dir, "").await
+}
+
+/// [`authed_app_with_state`] on a panel whose root-owned config carries
+/// `extra` top-level settings (whole TOML lines).
+async fn authed_app_with_config(
+    dir: &std::path::Path,
+    extra: &str,
+) -> (axum::Router, String, Arc<AppState>) {
     let http_d = dir.join("http.d");
     std::fs::create_dir_all(&http_d).unwrap();
     // status_api_url points at a dead port so tests never depend on a real
     // Angie that happens to be listening on the default 8100.
     let cfg: config::PanelConfig = toml::from_str(&format!(
-        "bind_addr = \"127.0.0.1\"\ndata_dir = \"{}\"\n[angie]\nhttp_d_dir = \"{}\"\n\
+        "bind_addr = \"127.0.0.1\"\ndata_dir = \"{}\"\n{extra}\n[angie]\nhttp_d_dir = \"{}\"\n\
          status_api_url = \"http://127.0.0.1:9/status\"",
         dir.display(),
         http_d.display()
@@ -3464,4 +3473,75 @@ async fn export_import_carries_templates() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (_, list) = call(&app, &cookie, Method::GET, "/api/templates", None).await;
     assert_eq!(list["templates"], json!([]));
+}
+
+/// `allow_loopback_upstreams` used to stop at the save: a custom location or
+/// an auth endpoint on this machine was accepted, and then the output linter
+/// refused the whole configuration — every host's, on every apply.
+#[tokio::test]
+async fn loopback_opt_in_reaches_locations_and_auth_endpoints() {
+    let local_host = |location_port: u16| {
+        json!({
+            "domains": ["local.example.com"],
+            "forward_scheme": "http", "forward_host": "127.0.0.1", "forward_port": 3000,
+            "locations": [{
+                "path": "/api", "forward_scheme": "http",
+                "forward_host": "127.0.0.1", "forward_port": location_port,
+            }],
+            "forward_auth": { "enabled": true, "verify_url": "http://127.0.0.1:9091/api/verify" },
+        })
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie, state) =
+        authed_app_with_config(dir.path(), "allow_loopback_upstreams = true").await;
+
+    // What the linter refuses even with the opt-in is turned down on save, so
+    // it can never be stored and then block the apply.
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(local_host(8100)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("forbidden_forward_host"));
+
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(local_host(3001)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The config is generated and passes the panel's own linter (build_fileset
+    // fails otherwise), and so does the preview an apply starts from.
+    let files = crate::settings::build_fileset(&state).await.unwrap();
+    let conf = &files["20-host-1-local-example-com.conf"];
+    assert!(conf.contains("proxy_pass http://127.0.0.1:3001;"), "{conf}");
+    assert!(
+        conf.contains("proxy_pass http://127.0.0.1:9091/api/verify;"),
+        "{conf}"
+    );
+    let (status, body) = call(&app, &cookie, Method::GET, "/api/apply/preview", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Without the opt-in nothing has changed: the same host is refused on save.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cookie) = authed_app(dir.path()).await;
+    let (status, body) = call(
+        &app,
+        &cookie,
+        Method::POST,
+        "/api/hosts",
+        Some(local_host(3001)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("forbidden_forward_host"));
 }
