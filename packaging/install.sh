@@ -15,11 +15,13 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# The release version is substituted into this line by the release workflow
-# (packaging/install.sh is copied into each release with __PANEL_VERSION__
-# replaced by the tag). A checked-out copy keeps the sentinel, so the download
-# path below refuses to run and asks for a local .deb instead. {ARCH} is
-# substituted at runtime with arm64 or amd64.
+# Release version. The repository copy of this file holds the placeholder
+# __PANEL_VERSION__; the copy published with a release has the tag's version in
+# its place — in this one assignment only (scripts/stamp-install-sh.sh), so the
+# rest of the file, this comment included, is the same in both. A copy that
+# still holds the placeholder is a checkout, not a release: the download path
+# below refuses to run and asks for a local .deb instead. {ARCH} is substituted
+# at runtime with arm64 or amd64.
 PANEL_VERSION="__PANEL_VERSION__"
 PANEL_RELEASE_BASE="https://github.com/maxname/angie-panel/releases/download/v${PANEL_VERSION}"
 PANEL_DEB_URL_TEMPLATE="${PANEL_RELEASE_BASE}/angie-panel_${PANEL_VERSION}_{ARCH}.deb"
@@ -255,6 +257,10 @@ if [ -n "$DEB_PATH" ]; then
     warn "Его подпись и контрольная сумма не проверяются — проверьте сами:"
     warn "  docs/installation.md, раздел «Проверка подписи артефактов»"
 else
+    # Unstamped copy (see PANEL_VERSION at the top). Release stamping must leave
+    # this literal alone: when it rewrote it too, the published installer
+    # compared its version with itself and always stopped here.
+    # packaging/test-install-version.sh holds that in CI.
     if [ "$PANEL_VERSION" = "__PANEL_VERSION__" ]; then
         die "Эта копия install.sh не привязана к релизу (версия не подставлена).
 Запустите install.sh из релиза (releases/latest/download/install.sh) или

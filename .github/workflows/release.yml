@@ -347,12 +347,20 @@ jobs:
 
       - name: Add install.sh and generate checksums
         run: |
-          cp packaging/install.sh dist/
           # Pin the installer to this release's version so the documented
           # `releases/latest/download/install.sh` flow downloads the matching
-          # .deb (GITHUB_REF_NAME is the tag, e.g. v0.1.0).
-          sed -i "s/__PANEL_VERSION__/${GITHUB_REF_NAME#v}/g" dist/install.sh
-          if grep -q __PANEL_VERSION__ dist/install.sh; then
+          # .deb (GITHUB_REF_NAME is the tag, e.g. v0.1.0). The script rewrites
+          # the PANEL_VERSION assignment and nothing else: the placeholder also
+          # sits in the installer's own check for an unstamped copy, and
+          # replacing it there shipped installers that always refused to run.
+          version="${GITHUB_REF_NAME#v}"
+          ./scripts/stamp-install-sh.sh "$version" dist/install.sh
+          # Published assets are signed and not replaced afterwards, so check
+          # the file itself rather than take the script's word: the assignment
+          # must carry this version, and none may still hold the placeholder.
+          # (Elsewhere in the file the placeholder is expected to remain.)
+          if ! grep -qxF "PANEL_VERSION=\"$version\"" dist/install.sh \
+             || grep -q '^PANEL_VERSION=.*__PANEL_VERSION__' dist/install.sh; then
             echo "install.sh version substitution failed" >&2
             exit 1
           fi
