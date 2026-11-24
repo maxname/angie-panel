@@ -59,6 +59,13 @@ The end-to-end test needs Docker and runs a real Angie against
 cd e2e && ./run.sh
 ```
 
+If you touch `packaging/install.sh` or how a release stamps its version into it, run the
+installer test too (also Docker; it has no network inside and installs nothing):
+
+```bash
+./packaging/test-install-version.sh
+```
+
 ## Changing the generated config
 
 Config generation is covered by golden files in `backend/tests/golden/`. If your change

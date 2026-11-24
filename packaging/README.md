@@ -16,6 +16,7 @@ reverse proxy, deployed as a native systemd service on Debian 12/13
 | `angie-panel.toml` | `/etc/angie-panel.toml` (dpkg conffile) | Default panel configuration. Root-owned; privilege-relevant switches live here, not in the panel DB. |
 | `debian/postinst`, `debian/prerm`, `debian/postrm` | maintainer scripts | For `cargo-deb` (with the `systemd-units` feature, which fills in the `#DEBHELPER#` token). Create/remove the service account and `/var/lib/angie-panel`. |
 | `install.sh` | run by the user | End-user installer: preflight checks, Angie apt repo, both packages, safe bind-address selection, setup token output. Messages are in Russian (target audience). |
+| `test-install-version.sh` | not shipped (CI) | Stamps a copy of `install.sh` the way a release does (`scripts/stamp-install-sh.sh`) and runs it in a Debian container: the stamped copy must reach the package download, the unstamped one must refuse. Needs Docker. |
 
 Package dependencies (set manually in `Cargo.toml` / cargo-deb metadata —
 auto-detection is empty for a static musl binary):

@@ -1,4 +1,5 @@
-# CI: frontend (lint/test/build) -> backend (fmt/clippy/test), plus shellcheck on packaging scripts.
+# CI: frontend (lint/test/build) -> backend (fmt/clippy/test), plus shellcheck on packaging
+# scripts and a run of the release-stamped install.sh.
 # The backend embeds frontend assets via rust-embed, so the frontend build artifact
 # is downloaded into frontend/dist before any cargo command runs.
 name: CI
@@ -160,6 +161,21 @@ jobs:
             exit 0
           fi
           shellcheck "${files[@]}"
+
+  # The install.sh published with a release is packaging/install.sh with the
+  # tag's version stamped in — a file no other job ever executes. v0.2.3 and
+  # v0.3.0 shipped one that refused to download the package, because the
+  # stamping also rewrote the installer's own check for an unstamped copy.
+  # This stamps a copy the way the release workflow does and runs it, and the
+  # unstamped original, as root in a Debian container up to the download.
+  install-sh:
+    name: install.sh (release version stamp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stamped install.sh reaches the download, unstamped refuses
+        run: ./packaging/test-install-version.sh
 
   acme-e2e:
     name: ACME e2e (real Angie + pebble)
