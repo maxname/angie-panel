@@ -47,6 +47,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # The build below runs `tsc -b` too; this step exists so the command the
+      # docs tell contributors to run is itself exercised and cannot go missing.
+      - name: Typecheck
+        run: pnpm typecheck
+
       - name: Test
         run: pnpm test
 
