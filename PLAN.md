@@ -188,7 +188,7 @@ apply_history id, timestamp(UTC epoch), db_revision, diff, result, report(JSON)
 
 ```
 /etc/angie/http.d/
-  00-panel.conf     # resolver <127.0.0.53 по умолчанию | override из настроек>;
+  00-panel.conf     # resolver <из /etc/resolv.conf | override из настроек>;
                     # proxy_cache_path ... keys_zone=assets:10m (для cache_assets);
                     # server 127.0.0.1:8100 { api /status/; api_config_files on; }
   05-default.conf   # default_server :80 и :443: ssl_reject_handshake on; (без dummy-сертов!)
@@ -197,7 +197,7 @@ apply_history id, timestamp(UTC epoch), db_revision, diff, result, report(JSON)
                     #   [challenge=dns|alpn] [key_type=…] [email=…] [enabled=off];
                     # + скрытый server-блок с server_name <domains> и acme <name>;
   20-host-<id>-<slug>.conf   # по одному файлу на proxy-хост
-/usr/share/angie-panel/snippets/   # block-exploits.conf, map.conf, cache-assets.conf —
+/usr/share/angie-panel/snippets/   # block-exploits.conf, cache-assets.conf —
                     # включаются absolute-путём, принадлежат пакету (апгрейд обновляет,
                     # детектор дрейфа их игнорирует)
 ```
@@ -222,15 +222,26 @@ server {
     ssl_certificate_key $acme_cert_key_<name>;
     # hsts → add_header Strict-Transport-Security (+ preload не ставим);
     # block_exploits/cache_assets → include /usr/share/angie-panel/snippets/...
+    # Заголовки запроса — ОДИН набор на хост, на уровне server: его наследуют все
+    # location. proxy_set_header наследуется «всё или ничего» (уровень, объявивший
+    # хоть один свой, не получает ничего сверху), поэтому они собраны в одном месте.
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;   # trust_forwarded_proto=true →
+    # websockets → + Upgrade/Connection                прокидываем входящий
+    # свой заголовок запроса с тем же именем ЗАМЕНЯЕТ стандартный, а не дублирует
     location / {
         proxy_pass http://host_<id>;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;   # trust_forwarded_proto=true →
-        # websockets → proxy_http_version 1.1 + Upgrade/Connection    прокидываем входящий
+        # websockets → proxy_http_version 1.1
     }
 }
 ```
+
+Исключения из «один набор на уровне server»: location, чей сниппет сам объявляет
+`proxy_set_header` (или делает `include`), получает полный набор внутрь — иначе он остался бы
+только со сниппетным заголовком; а хост, чей advanced_snippet содержит `proxy_set_header`,
+`location` или `include`, целиком остаётся на раскладке «заголовки в каждом location», чтобы
+смысл уже написанного сниппета не изменился при перегенерации.
 
 Семантика `enabled=false`: файл хоста просто не генерируется, трафик падает в default_server;
 SAN сертификата не затрагивается (см. §3); на дашборде хост показан как выключенный.
@@ -425,9 +436,9 @@ openssl-sys/native-tls. SQLite: WAL, busy_timeout, synchronous=NORMAL, запи�
 - **Поведение `angie -t` от root при новом acme_client** (создание каталогов/ключей на этапе
   теста staging-конфига): проверить на M0 — не оставляет ли тест staging-валидации мусорный
   state; при необходимости — отдельный acme_client_path для staging-теста.
-- **resolver для acme_client** обязателен; используется 127.0.0.53 по умолчанию.
-  Если локальный DNS фильтрует запросы, задаётся resolver_override (например, 1.1.1.1/9.9.9.9)
-  в Settings.
+- **resolver для acme_client** обязателен; из /etc/resolv.conf может прийти фильтрующий
+  локальный DNS → резолвинг ACME CA ломается. Настройка resolver_override (1.1.1.1/9.9.9.9)
+  видна в Settings.
 - **Console Light рядом** (опция install.sh): чисто статический мониторинг, не конфликтует;
   наш /status-сервер на 8100 переиспользуется его location-блоком при желании.
 - **Апгрейды Angie**: сверять changelog (EAB появится — добавить в UI; поведение acme_http_port

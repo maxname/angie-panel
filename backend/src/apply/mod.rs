@@ -81,6 +81,7 @@ pub fn lint_policy(cfg: &PanelConfig) -> LintPolicy {
         public_dir: cfg.public_dir(),
         allow_advanced_snippets: cfg.allow_advanced_snippets,
         acme_account_key: cfg.angie.acme_account_key.clone(),
+        allow_loopback_upstreams: cfg.allow_loopback_upstreams,
     }
 }
 

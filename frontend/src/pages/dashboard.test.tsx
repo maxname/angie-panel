@@ -53,6 +53,7 @@ const angieUp: Dashboard = {
       domains: ['app.example.com'],
       enabled: true,
       forward: 'http://192.168.1.10:3000',
+      upstream_pool: null,
       certificate_id: 10,
       https_active: true,
       zone: {

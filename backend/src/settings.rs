@@ -1,6 +1,6 @@
 //! Effective-settings resolution and FileSet assembly. Bridges the DB/config
-//! to the generator: reads the settings table, uses the systemd-resolved stub
-//! by default (or an explicit resolver override), and builds the full GeneratorInput.
+//! to the generator: reads the settings table, discovers resolvers from
+//! /etc/resolv.conf (override-able), and builds the full GeneratorInput.
 
 use std::sync::Arc;
 
@@ -43,15 +43,21 @@ pub const KEY_HEALTH_RETENTION_DAYS: &str = "health_retention_days";
 /// pending user edits. Not user-editable.
 pub const KEY_LAST_APPLIED_REVISION: &str = "last_applied_revision";
 
-fn effective_resolvers(resolver_override: Option<&str>) -> Vec<String> {
-    match resolver_override.filter(|value| !value.trim().is_empty()) {
-        Some(value) => value
-            .split([' ', ','])
-            .filter(|resolver| !resolver.is_empty())
-            .map(String::from)
-            .collect(),
-        None => vec!["127.0.0.53".into()],
+/// Parse nameserver lines out of resolv.conf. systemd-resolved's stub
+/// (127.0.0.53) is a valid resolver and kept as-is.
+fn resolvers_from_resolv_conf() -> Vec<String> {
+    let text = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(ns) = line.strip_prefix("nameserver ") {
+            let ns = ns.trim();
+            if !ns.is_empty() && !out.contains(&ns.to_string()) {
+                out.push(ns.to_string());
+            }
+        }
     }
+    out
 }
 
 /// Detect a global (non-loopback, non-link-local) IPv6 address on any
@@ -98,7 +104,14 @@ pub async fn effective_settings(state: &AppState) -> ApiResult<EffectiveSettings
         _ => host_has_global_ipv6(),
     };
 
-    let resolvers = effective_resolvers(map.get(KEY_RESOLVER_OVERRIDE).map(String::as_str));
+    let resolvers = match map.get(KEY_RESOLVER_OVERRIDE) {
+        Some(o) if !o.trim().is_empty() => o
+            .split([' ', ','])
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect(),
+        _ => resolvers_from_resolv_conf(),
+    };
 
     Ok(EffectiveSettings {
         default_site,
@@ -353,7 +366,6 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
 
     Ok(GeneratorInput {
         hosts,
-        upstream_pools: repo::list_upstream_pools(&state.db).await?,
         settings,
         snippets_dir: state.cfg.angie.snippets_dir.clone(),
         status_port: status_port(state),
@@ -363,6 +375,7 @@ pub async fn build_generator_input(state: &AppState) -> ApiResult<GeneratorInput
         acme_hook_target: hook_target(state),
         acme_hook_token: ensure_acme_hook_token(state).await?,
         access_lists,
+        upstream_pools: repo::list_upstream_pools(&state.db).await?,
         http_d_dir: state.cfg.angie.http_d_dir.clone(),
         redirect_hosts: repo::list_redirects(&state.db).await?,
         dead_hosts: repo::list_dead(&state.db).await?,
@@ -405,23 +418,4 @@ pub async fn build_fileset(state: &Arc<AppState>) -> ApiResult<FileSet> {
         ));
     }
     Ok(wrapped)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::effective_resolvers;
-
-    #[test]
-    fn resolver_defaults_to_systemd_resolved_stub() {
-        assert_eq!(effective_resolvers(None), ["127.0.0.53"]);
-        assert_eq!(effective_resolvers(Some("  ")), ["127.0.0.53"]);
-    }
-
-    #[test]
-    fn resolver_override_replaces_default() {
-        assert_eq!(
-            effective_resolvers(Some("1.1.1.1, 2001:4860:4860::8888")),
-            ["1.1.1.1", "2001:4860:4860::8888"]
-        );
-    }
 }

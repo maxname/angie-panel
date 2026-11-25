@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -123,46 +123,6 @@ describe('certificates page', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/certificates', expect.anything())
     // Each row names its CA.
     expect(await screen.findAllByText("Let's Encrypt")).toHaveLength(2)
-  })
-
-  it('deletes selected certificates sequentially and retains failures in the selection', async () => {
-    const user = userEvent.setup()
-    const order: string[] = []
-    let activeWrites = 0
-    let overlappingWrites = false
-    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
-      if (input === '/api/certificates' && (!init?.method || init.method === 'GET')) {
-        return jsonResponse({ certificates: [unknownCert, validCert] })
-      }
-      if (input === '/api/acme/cas') return jsonResponse(acmeCas)
-      if (input.startsWith('/api/certificates/') && init?.method === 'DELETE') {
-        activeWrites += 1
-        if (activeWrites > 1) overlappingWrites = true
-        order.push(input)
-        await new Promise((resolve) => setTimeout(resolve, 5))
-        activeWrites -= 1
-        if (input.endsWith('/2')) {
-          return jsonResponse({ error: { code: 'test_failure', message: 'certificate delete failed' } }, 409)
-        }
-        return jsonResponse({ ok: true })
-      }
-      return Promise.reject(new Error(`unexpected fetch ${input}`))
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
-
-    renderPage()
-    await user.click(await screen.findByRole('checkbox', { name: 'Select all certificates' }))
-    await user.click(screen.getByRole('button', { name: 'Delete' }))
-
-    await waitFor(() => expect(order).toHaveLength(2))
-    expect(order).toEqual(['/api/certificates/1', '/api/certificates/2'])
-    expect(overlappingWrites).toBe(false)
-    await waitFor(() => {
-      expect(screen.getByRole('checkbox', { name: 'Select certificate for unknown.example.com' })).not.toBeChecked()
-      expect(screen.getByRole('checkbox', { name: 'Select certificate for example.com' })).toBeChecked()
-    })
-    confirmSpy.mockRestore()
   })
 })
 
@@ -334,5 +294,70 @@ describe('certificate wizard', () => {
       ca: 'zerossl',
       staging: false,
     })
+  })
+})
+
+describe('certificates bulk delete', () => {
+  it('deletes what it can and reports the certificate that is still in use', async () => {
+    let certs = [unknownCert, validCert]
+    const inUse =
+      'certificate is used by proxy #1 (example.com); detach it there first'
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/certificates' && init?.method === 'GET') {
+        return Promise.resolve(jsonResponse({ certificates: certs }))
+      }
+      if (input === '/api/acme/cas') {
+        return Promise.resolve(jsonResponse(acmeCas))
+      }
+      if (init?.method === 'DELETE' && input === '/api/certificates/1') {
+        certs = certs.filter((c) => c.id !== 1)
+        return Promise.resolve(jsonResponse({ ok: true }))
+      }
+      if (init?.method === 'DELETE' && input === '/api/certificates/2') {
+        return Promise.resolve(
+          jsonResponse({ error: { code: 'cert_in_use', message: inUse } }, 409),
+        )
+      }
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByText('unknown.example.com')
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select all' }))
+    await user.click(
+      within(screen.getByRole('toolbar')).getByRole('button', { name: 'Delete' }),
+    )
+    // Certificates have no on/off state: delete is the only bulk action.
+    expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull()
+    const confirm = await screen.findByRole('dialog', {
+      name: 'Delete the selected (2)?',
+    })
+    await user.click(within(confirm).getByRole('button', { name: 'Delete' }))
+
+    // The in-use certificate is refused by the server with its usual 409; the
+    // report quotes the reason next to the certificate it is about.
+    const report = await screen.findByRole('dialog', {
+      name: 'Could not delete 1 of 2',
+    })
+    expect(within(report).getByText('example.com')).toBeInTheDocument()
+    expect(within(report).getByText(new RegExp(inUse.slice(0, 30)))).toBeInTheDocument()
+    await user.click(within(report).getByRole('button', { name: 'OK' }))
+
+    // The other one is gone from the list; the refused one is still there,
+    // and still ticked.
+    await vi.waitFor(() =>
+      expect(screen.queryByText('unknown.example.com')).toBeNull(),
+    )
+    expect(
+      screen.getByRole('checkbox', { name: 'Select example.com' }),
+    ).toBeChecked()
+    expect(
+      fetchMock.mock.calls
+        .filter(([, init]) => init?.method === 'DELETE')
+        .map(([url]) => url),
+    ).toEqual(['/api/certificates/1', '/api/certificates/2'])
   })
 })

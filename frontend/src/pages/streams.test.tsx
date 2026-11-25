@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import i18n from '@/i18n'
-import type { Stream } from '@/lib/api'
+import type { Stream, StreamTemplate } from '@/lib/api'
 
 import { StreamEditorForm, StreamsPage } from './streams'
 
@@ -111,59 +111,6 @@ describe('streams page', () => {
 
     expect(await screen.findByText(/No streams yet/i)).toBeInTheDocument()
   })
-
-  it('runs selected stream actions sequentially and keeps failed rows selected', async () => {
-    const user = userEvent.setup()
-    const second: Stream = { ...sampleStream, id: 2, incoming_port: 5433 }
-    const calls: string[] = []
-    let activeWrites = 0
-    let overlappingWrites = false
-    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
-      if (input === '/api/streams' && (!init?.method || init.method === 'GET')) {
-        return jsonResponse({ streams: [sampleStream, second] })
-      }
-      if (input === '/api/dashboard') {
-        return jsonResponse({
-          angie: { up: false, version: null, generation: null, load_time: null, connections: null },
-          hosts: [],
-          certificates: [],
-          streams: { configured: 2, enabled: 2, context_active: true },
-          drift: { detected: false, foreign_files: [] },
-          pending_changes: false,
-          alerts: [],
-        })
-      }
-      if (input.startsWith('/api/streams/') && input.endsWith('/enable')) {
-        activeWrites += 1
-        if (activeWrites > 1) overlappingWrites = true
-        calls.push(input)
-        await new Promise((resolve) => setTimeout(resolve, 5))
-        activeWrites -= 1
-        if (input.endsWith('/2/enable')) {
-          return jsonResponse({ error: { code: 'test_failure', message: 'second stream failed' } }, 500)
-        }
-        return jsonResponse({ ok: true, enabled: true })
-      }
-      return Promise.reject(new Error(`unexpected fetch ${input}`))
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    render(
-      <QueryClientProvider client={makeClient()}>
-        <StreamsPage />
-      </QueryClientProvider>,
-    )
-
-    await user.click(await screen.findByRole('checkbox', { name: 'Select all' }))
-    await user.click(screen.getByRole('button', { name: 'Enable' }))
-    await waitFor(() => expect(calls).toHaveLength(2))
-
-    expect(calls).toEqual(['/api/streams/1/enable', '/api/streams/2/enable'])
-    expect(overlappingWrites).toBe(false)
-    await waitFor(() => {
-      expect(screen.getByRole('checkbox', { name: 'Select 5432' })).not.toBeChecked()
-      expect(screen.getByRole('checkbox', { name: 'Select 5433' })).toBeChecked()
-    })
-  })
 })
 
 describe('stream editor', () => {
@@ -230,7 +177,7 @@ describe('stream editor', () => {
     await user.type(screen.getByLabelText('Forward host'), '192.168.1.20')
     await user.type(screen.getByLabelText('Forward port'), '5432')
     // Switch the TLS mode Select to "Terminate TLS".
-    await user.click(screen.getByRole('combobox', { name: 'TLS' }))
+    await user.click(screen.getByRole('combobox'))
     await user.click(screen.getByRole('option', { name: 'Terminate TLS' }))
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -269,7 +216,7 @@ describe('stream editor', () => {
     await user.type(screen.getByLabelText('Forward host'), '192.168.1.20')
     await user.type(screen.getByLabelText('Forward port'), '5432')
     // Mode Select → Terminate TLS.
-    await user.click(screen.getByRole('combobox', { name: 'TLS' }))
+    await user.click(screen.getByRole('combobox'))
     await user.click(screen.getByRole('option', { name: 'Terminate TLS' }))
     // Certificate Select (the second combobox) → the streamcert cert.
     const combos = screen.getAllByRole('combobox')
@@ -331,5 +278,150 @@ describe('stream editor', () => {
       '/api/streams',
       expect.objectContaining({ method: 'POST' }),
     )
+  })
+})
+
+describe('stream templates', () => {
+  const dbForward: StreamTemplate = {
+    id: 9,
+    kind: 'stream',
+    name: 'Database forward',
+    config: {
+      forward_host: '10.0.0.20',
+      forward_port: 5432,
+      tcp: true,
+      udp: true,
+      tls: 'none',
+      certificate_id: null,
+    },
+    created_at: 1751700000,
+    updated_at: 1751700000,
+  }
+
+  /** Answers the certificate lookup, and accepts a stream or a template save. */
+  function stubApi() {
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET') {
+        return input === '/api/certificates'
+          ? Promise.resolve(jsonResponse({ certificates: [] }))
+          : Promise.reject(new Error(`unexpected fetch ${input}`))
+      }
+      return Promise.resolve(jsonResponse({ id: 1 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  function renderEditor(props: Parameters<typeof StreamEditorForm>[0]) {
+    return render(
+      <QueryClientProvider client={makeClient()}>
+        <StreamEditorForm {...props} />
+      </QueryClientProvider>,
+    )
+  }
+
+  async function savedRequest(fetchMock: ReturnType<typeof stubApi>) {
+    const isWrite = ([, init]: [string, RequestInit?]) =>
+      init?.method !== undefined && init.method !== 'GET'
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.filter(isWrite)).toHaveLength(1),
+    )
+    const [url, init] = fetchMock.mock.calls.filter(isWrite)[0]
+    return { url, method: init?.method, body: JSON.parse(String(init?.body)) }
+  }
+
+  it('starts a new stream from a template: only the incoming port is left', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({ stream: null, fromTemplate: dbForward, onDone: () => {} })
+
+    expect(screen.getByLabelText('Forward host')).toHaveValue('10.0.0.20')
+    expect(screen.getByLabelText('Forward port')).toHaveValue('5432')
+    expect(screen.getByLabelText('UDP')).toBeChecked()
+    // The incoming port is each stream's own, so the template has none.
+    expect(screen.getByLabelText('Incoming port')).toHaveValue('')
+
+    await user.type(screen.getByLabelText('Incoming port'), '15432')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const { url, method, body } = await savedRequest(fetchMock)
+    expect([url, method]).toEqual(['/api/streams', 'POST'])
+    expect(body).toMatchObject({
+      incoming_port: 15432,
+      forward_host: '10.0.0.20',
+      forward_port: 5432,
+      tcp: true,
+      udp: true,
+      tls: 'none',
+    })
+  })
+
+  it('edits a template: a name instead of the incoming port, target optional', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({ stream: null, templateEdit: { template: null }, onDone: () => {} })
+
+    expect(screen.queryByLabelText('Incoming port')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(
+      await screen.findByText('Enter a name for the template.'),
+    ).toBeInTheDocument()
+
+    // Name only: no host, no port — both asked for when a stream is created.
+    await user.type(screen.getByLabelText('Template name'), 'Plain TCP')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const { url, method, body } = await savedRequest(fetchMock)
+    expect([url, method]).toEqual(['/api/templates', 'POST'])
+    expect(body).toEqual({
+      kind: 'stream',
+      name: 'Plain TCP',
+      config: {
+        forward_host: '',
+        forward_port: 0,
+        tcp: true,
+        udp: false,
+        tls: 'none',
+        certificate_id: null,
+      },
+    })
+  })
+
+  it('makes a template from a stream without the port it listens on', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({
+      stream: null,
+      templateEdit: { template: null, seed: sampleStream },
+      onDone: () => {},
+    })
+
+    expect(screen.getByLabelText('Forward host')).toHaveValue('192.168.1.20')
+    await user.type(screen.getByLabelText('Template name'), 'Postgres')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const { body } = await savedRequest(fetchMock)
+    expect(body.config).toMatchObject({
+      forward_host: '192.168.1.20',
+      forward_port: 5432,
+    })
+    expect(body.config).not.toHaveProperty('incoming_port')
+  })
+
+  it('still asks for a port when a template names a host', async () => {
+    const user = userEvent.setup()
+    const fetchMock = stubApi()
+    renderEditor({ stream: null, templateEdit: { template: null }, onDone: () => {} })
+
+    await user.type(screen.getByLabelText('Template name'), 'Half a target')
+    await user.type(screen.getByLabelText('Forward host'), '10.0.0.20')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(
+      await screen.findByText('Enter the forward port (1–65535).'),
+    ).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(0)
   })
 })

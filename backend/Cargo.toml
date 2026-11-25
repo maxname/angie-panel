@@ -11,7 +11,7 @@ members = ["apctl"]
 default-members = [".", "apctl"]
 
 [workspace.package]
-version = "0.2.4"
+version = "0.3.0"
 
 [package]
 name = "angie-panel"
@@ -76,7 +76,7 @@ strip = true
 # documented one-liner install would 404.
 revision = ""
 maintainer = "Angie Panel contributors"
-depends = "angie (>= 1.12), dbus, polkitd, bash, curl"
+depends = "angie (>= 1.11), dbus, polkitd, bash, curl"
 section = "admin"
 priority = "optional"
 conf-files = ["/etc/angie-panel.toml"]

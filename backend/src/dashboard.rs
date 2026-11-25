@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use crate::auth::AuthUser;
 use crate::error::ApiResult;
+use crate::model::UpstreamPool;
 use crate::state::AppState;
 use crate::{apply, repo, settings};
 
@@ -69,6 +70,7 @@ pub async fn get_dashboard(
         repo::list_streams(&state.db),
         settings::build_fileset(&state),
     );
+    let pools = repo::list_upstream_pools(&state.db).await?;
 
     let hosts = hosts?;
     let certs = certs?;
@@ -84,7 +86,10 @@ pub async fn get_dashboard(
         "connections": connections,
     });
 
-    // --- per-host rows (zone + upstream keyed by host_<id>) ---
+    // --- per-host rows (zone keyed by host_<id>; upstream by host_<id>, or by
+    // pool_<id> for a host that proxies to a shared pool) ---
+    let pool_by_id: std::collections::HashMap<i64, &UpstreamPool> =
+        pools.iter().map(|p| (p.id, p)).collect();
     let zones = server_zones.as_ref().and_then(Value::as_object);
     let ups = upstreams.as_ref().and_then(Value::as_object);
     let cert_by_id: std::collections::HashMap<i64, &crate::model::Certificate> =
@@ -96,7 +101,21 @@ pub async fn get_dashboard(
         .map(|h| {
             let key = zone_key(h.id);
             let zone = zones.and_then(|z| z.get(&key));
-            let upstream = ups.and_then(|u| u.get(&key)).map(upstream_health);
+            let pool = h.upstream_pool_id.and_then(|pid| pool_by_id.get(&pid));
+            let upstream_key = match h.upstream_pool_id {
+                Some(pid) => UpstreamPool::zone(pid),
+                None => key.clone(),
+            };
+            let upstream = ups.and_then(|u| u.get(&upstream_key)).map(upstream_health);
+            let forward = match pool {
+                Some(p) => format!("{}://{}", h.forward_scheme.as_str(), p.name),
+                None => format!(
+                    "{}://{}:{}",
+                    h.forward_scheme.as_str(),
+                    h.forward_host,
+                    h.forward_port
+                ),
+            };
             // HTTPS is "active" when a cert is attached and Angie reports it valid.
             let cert = h.certificate_id.and_then(|cid| cert_by_id.get(&cid));
             let https_active = cert
@@ -108,7 +127,9 @@ pub async fn get_dashboard(
                 "id": h.id,
                 "domains": h.domains,
                 "enabled": h.enabled,
-                "forward": format!("{}://{}:{}", h.forward_scheme.as_str(), h.forward_host, h.forward_port),
+                "forward": forward,
+                // Set when `forward` names a shared pool rather than a host:port.
+                "upstream_pool": pool.map(|p| json!({ "id": p.id, "name": p.name })),
                 "certificate_id": h.certificate_id,
                 "https_active": https_active,
                 "zone": zone,

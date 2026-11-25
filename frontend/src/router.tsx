@@ -77,12 +77,6 @@ const hostsRoute = createRoute({
   component: lazyRouteComponent(() => import('@/pages/hosts'), 'HostsPage'),
 })
 
-const templatesRoute = createRoute({
-  getParentRoute: () => appRoute,
-  path: '/templates',
-  component: lazyRouteComponent(() => import('@/pages/templates'), 'TemplatesPage'),
-})
-
 const redirectHostsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/redirect-hosts',
@@ -101,16 +95,25 @@ const streamsRoute = createRoute({
   component: lazyRouteComponent(() => import('@/pages/streams'), 'StreamsPage'),
 })
 
-const upstreamPoolsRoute = createRoute({
-  getParentRoute: () => appRoute,
-  path: '/upstream-pools',
-  component: lazyRouteComponent(() => import('@/pages/upstream-pools'), 'UpstreamPoolsPage'),
-})
-
 const sniRoutersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/sni-routers',
   component: lazyRouteComponent(() => import('@/pages/sni-routers'), 'SniRoutersPage'),
+})
+
+const upstreamPoolsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/upstream-pools',
+  component: lazyRouteComponent(
+    () => import('@/pages/upstream-pools'),
+    'UpstreamPoolsPage',
+  ),
+})
+
+const templatesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/templates',
+  component: lazyRouteComponent(() => import('@/pages/templates'), 'TemplatesPage'),
 })
 
 const certificatesRoute = createRoute({
@@ -173,12 +176,12 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     dashboardRoute,
     hostsRoute,
-    templatesRoute,
     redirectHostsRoute,
     deadHostsRoute,
     streamsRoute,
-    upstreamPoolsRoute,
     sniRoutersRoute,
+    upstreamPoolsRoute,
+    templatesRoute,
     certificatesRoute,
     dnsProvidersRoute,
     accessListsRoute,

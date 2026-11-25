@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::net::TcpStream;
 
-use crate::model::{HealthCheck, HealthCheckKind, ProxyHost};
+use crate::model::{HealthCheck, HealthCheckKind, ProxyHost, UpstreamPool};
 use crate::state::AppState;
 use crate::{repo, settings};
 
@@ -94,6 +94,17 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
         std::collections::HashSet::new()
     };
 
+    // Shared pools, for hosts whose backend is one: the TCP check has to know
+    // which servers stand behind the host. Read only when such a check is due.
+    let pools = if due
+        .iter()
+        .any(|(h, c)| c.kind == HealthCheckKind::Tcp && h.upstream_pool_id.is_some())
+    {
+        repo::list_upstream_pools(&state.db).await?
+    } else {
+        Vec::new()
+    };
+
     for chunk in due.chunks(MAX_CONCURRENT) {
         let mut set = tokio::task::JoinSet::new();
         for (host, check) in chunk.iter().cloned() {
@@ -101,8 +112,9 @@ async fn tick(state: &Arc<AppState>) -> anyhow::Result<()> {
                 check.timeout_secs.unwrap_or(defaults.timeout_secs),
             ));
             let https = https_hosts.contains(&host.id);
+            let targets = tcp_targets(&host, &check, &pools);
             set.spawn(async move {
-                let beat = probe(&host, &check, timeout, https).await;
+                let beat = probe(&host, &check, &targets, timeout, https).await;
                 (host.id, check.kind, beat)
             });
         }
@@ -124,10 +136,16 @@ pub struct Beat {
     pub error: Option<String>,
 }
 
-async fn probe(host: &ProxyHost, check: &HealthCheck, timeout: Duration, https: bool) -> Beat {
+async fn probe(
+    host: &ProxyHost,
+    check: &HealthCheck,
+    tcp_targets: &[String],
+    timeout: Duration,
+    https: bool,
+) -> Beat {
     let started = Instant::now();
     let result = match check.kind {
-        HealthCheckKind::Tcp => probe_tcp(host, check, timeout).await,
+        HealthCheckKind::Tcp => probe_tcp(tcp_targets, timeout).await,
         HealthCheckKind::Http => probe_http(host, check, timeout, https, angie_port(https)).await,
     };
     let elapsed = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
@@ -250,16 +268,79 @@ async fn https_host_ids(state: &AppState) -> std::collections::HashSet<i64> {
         .collect()
 }
 
+/// The `host:port` addresses a TCP check connects to.
+///
+/// A host with its own upstream has one: its primary. A host on a shared pool
+/// has every pool member that can take traffic — the ones not marked `down`,
+/// backups included. A port set on the check overrides each server's own.
+/// Empty when the pool has nothing left in rotation (or has vanished).
+fn tcp_targets(host: &ProxyHost, check: &HealthCheck, pools: &[UpstreamPool]) -> Vec<String> {
+    let Some(pool_id) = host.upstream_pool_id else {
+        let port = check.port.unwrap_or(host.forward_port);
+        return vec![format!("{}:{}", host.forward_host, port)];
+    };
+    pools
+        .iter()
+        .find(|p| p.id == pool_id)
+        .map(|pool| {
+            pool.servers
+                .iter()
+                .filter(|s| !s.down)
+                .map(|s| format!("{}:{}", s.host, check.port.unwrap_or(s.port)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Open a socket to the host's backend. Answers "is my upstream listening",
 /// nothing more — no bytes are exchanged.
-async fn probe_tcp(host: &ProxyHost, check: &HealthCheck, timeout: Duration) -> anyhow::Result<()> {
-    let port = check.port.unwrap_or(host.forward_port);
-    let addr = format!("{}:{}", host.forward_host, port);
-    let stream = tokio::time::timeout(timeout, TcpStream::connect(&addr))
+///
+/// Several targets (a shared pool) are tried at once, under the one timeout,
+/// and the first to accept settles it: Angie fails over between pool members,
+/// so the site is up for as long as any one of them listens. Reporting a pool
+/// down because its first server is would be a false alarm; which members are
+/// failing is Angie's to say, and the dashboard shows it.
+async fn probe_tcp(targets: &[String], timeout: Duration) -> anyhow::Result<()> {
+    if targets.is_empty() {
+        anyhow::bail!("no backend server in rotation");
+    }
+    let mut set = tokio::task::JoinSet::new();
+    for addr in targets.iter().cloned() {
+        set.spawn(async move {
+            match TcpStream::connect(&addr).await {
+                Ok(stream) => {
+                    drop(stream);
+                    Ok(())
+                }
+                Err(e) => Err((addr, e)),
+            }
+        });
+    }
+    let total = targets.len();
+    let any_accepts = async {
+        let mut first_error = None;
+        while let Some(joined) = set.join_next().await {
+            match joined? {
+                Ok(()) => return Ok(()),
+                Err(failure) => {
+                    first_error.get_or_insert(failure);
+                }
+            }
+        }
+        let (addr, error) = first_error.expect("at least one target was tried");
+        if total == 1 {
+            // One backend: its own error, exactly as it reads for any host.
+            Err(anyhow::Error::from(error))
+        } else {
+            Err(anyhow::anyhow!(
+                "none of the {total} pool servers accepted ({addr}: {error})"
+            ))
+        }
+    };
+    // Dropping the set on a timeout aborts the connects still in flight.
+    tokio::time::timeout(timeout, any_accepts)
         .await
-        .map_err(|_| anyhow::anyhow!("timed out after {}s", timeout.as_secs()))??;
-    drop(stream);
-    Ok(())
+        .map_err(|_| anyhow::anyhow!("timed out after {}s", timeout.as_secs()))?
 }
 
 async fn defaults(state: &AppState) -> Defaults {
@@ -298,7 +379,7 @@ mod tests {
     use super::*;
     use crate::model::{
         ErrorPages, ForwardAuth, Gzip, HealthCheckKind, Maintenance, Mtls, ProxyTuning, RateLimit,
-        Scheme, Upstream,
+        Scheme, Upstream, UpstreamServer,
     };
 
     fn host(port: u16) -> ProxyHost {
@@ -319,12 +400,12 @@ mod tests {
             trust_forwarded_proto: false,
             certificate_id: None,
             access_list_id: None,
-            upstream_pool_id: None,
             locations: vec![],
             advanced_snippet: None,
             rate_limit: RateLimit::default(),
             health_checks: vec![],
             upstream: Upstream::default(),
+            upstream_pool_id: None,
             mtls: Mtls::default(),
             forward_auth: ForwardAuth::default(),
             custom_headers: vec![],
@@ -336,6 +417,11 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         }
+    }
+
+    /// The single target a host with its own upstream is probed at.
+    fn own_target(port: u16) -> Vec<String> {
+        tcp_targets(&host(port), &check(HealthCheckKind::Tcp), &[])
     }
 
     fn check(kind: HealthCheckKind) -> HealthCheck {
@@ -361,6 +447,7 @@ mod tests {
         let beat = probe(
             &host(port),
             &check(HealthCheckKind::Tcp),
+            &own_target(port),
             Duration::from_secs(2),
             false,
         )
@@ -373,6 +460,7 @@ mod tests {
         let beat = probe(
             &host(port),
             &check(HealthCheckKind::Tcp),
+            &own_target(port),
             Duration::from_secs(2),
             false,
         )
@@ -381,6 +469,98 @@ mod tests {
         // Failures carry no latency — timing an error is not timing the service.
         assert_eq!(beat.latency_ms, None);
         assert!(beat.error.is_some());
+    }
+
+    fn pool(servers: Vec<UpstreamServer>) -> UpstreamPool {
+        UpstreamPool {
+            id: 7,
+            name: "apps".into(),
+            servers,
+            method: crate::model::BalanceMethod::RoundRobin,
+            max_fails: 1,
+            fail_timeout_secs: 10,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn server(port: u16, backup: bool, down: bool) -> UpstreamServer {
+        UpstreamServer {
+            host: "127.0.0.1".into(),
+            port,
+            weight: 1,
+            backup,
+            down,
+        }
+    }
+
+    /// A host on a shared pool has no `forward_host` of its own: the check must
+    /// follow the pool, skip members taken out of rotation, and keep backups.
+    #[test]
+    fn tcp_targets_follow_the_pool() {
+        let mut h = host(0);
+        h.forward_host = String::new();
+        h.upstream_pool_id = Some(7);
+        let pools = [pool(vec![
+            server(8001, false, false),
+            server(8002, false, true),
+            server(8003, true, false),
+        ])];
+
+        let mut c = check(HealthCheckKind::Tcp);
+        assert_eq!(
+            tcp_targets(&h, &c, &pools),
+            vec!["127.0.0.1:8001", "127.0.0.1:8003"]
+        );
+        // A port on the check overrides each server's own.
+        c.port = Some(9000);
+        assert_eq!(
+            tcp_targets(&h, &c, &pools),
+            vec!["127.0.0.1:9000", "127.0.0.1:9000"]
+        );
+        // A pool that is gone leaves nothing to probe rather than probing ":0".
+        assert!(tcp_targets(&h, &c, &[]).is_empty());
+    }
+
+    /// Angie fails over between pool members, so one dead server is not a dead
+    /// site: the pool reads as up while any member listens, down when none do.
+    #[tokio::test]
+    async fn tcp_probe_of_a_pool_is_up_while_any_member_listens() {
+        let alive = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let alive_port = alive.local_addr().unwrap().port();
+        // Bind-then-drop yields a port that is certainly closed.
+        let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_port = dead.local_addr().unwrap().port();
+        drop(dead);
+
+        let mut h = host(0);
+        h.upstream_pool_id = Some(7);
+        let c = check(HealthCheckKind::Tcp);
+        let pools = [pool(vec![
+            server(dead_port, false, false),
+            server(alive_port, false, false),
+        ])];
+
+        let targets = tcp_targets(&h, &c, &pools);
+        let beat = probe(&h, &c, &targets, Duration::from_secs(2), false).await;
+        assert!(
+            beat.ok,
+            "one live member keeps the pool up: {:?}",
+            beat.error
+        );
+
+        drop(alive);
+        let beat = probe(&h, &c, &targets, Duration::from_secs(2), false).await;
+        assert!(!beat.ok, "no live member means down");
+        let error = beat.error.unwrap();
+        assert!(
+            error.contains("none of the 2 pool servers accepted"),
+            "the error should say the whole pool failed: {error}"
+        );
+
+        // Every member marked down: nothing in rotation, and it says so.
+        let beat = probe(&h, &c, &[], Duration::from_secs(2), false).await;
+        assert_eq!(beat.error.as_deref(), Some("no backend server in rotation"));
     }
 
     /// The whole HTTP probe rests on reqwest's resolve() overriding the address

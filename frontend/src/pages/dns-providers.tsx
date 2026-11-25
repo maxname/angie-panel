@@ -3,6 +3,11 @@ import { Loader2, MoreHorizontal, Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -44,10 +49,17 @@ import {
   type DnsCredentialProfile,
   type DnsProviderInfo,
 } from '@/lib/api'
+import { deleteAction } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
+import { useSelection } from '@/lib/use-selection'
+
+const PROFILE_BULK_ACTIONS = deleteAction<DnsCredentialProfile>(
+  api.deleteDnsCredential,
+)
 
 export function DnsProvidersPage() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [editing, setEditing] = useState<DnsCredentialProfile | null>(null)
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<DnsCredentialProfile | null>(
@@ -64,6 +76,7 @@ export function DnsProvidersPage() {
   })
   const profiles = profilesQuery.data?.credentials ?? []
   const types = typesQuery.data?.providers ?? []
+  const selection = useSelection(profiles)
 
   return (
     <div className="space-y-6">
@@ -120,6 +133,7 @@ export function DnsProvidersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('dnsProviders.table.name')}</TableHead>
                   <TableHead>{t('dnsProviders.table.provider')}</TableHead>
                   <TableHead>{t('dnsProviders.table.status')}</TableHead>
@@ -132,7 +146,17 @@ export function DnsProvidersPage() {
               </TableHeader>
               <TableBody>
                 {profiles.map((profile) => (
-                  <TableRow key={profile.id}>
+                  <TableRow
+                    key={profile.id}
+                    data-state={
+                      selection.isSelected(profile.id) ? 'selected' : undefined
+                    }
+                  >
+                    <SelectRowCell
+                      selection={selection}
+                      item={profile}
+                      name={profile.name}
+                    />
                     <TableCell className="font-medium">{profile.name}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {profile.provider_label}
@@ -180,6 +204,15 @@ export function DnsProvidersPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(profile) => profile.name}
+        actions={PROFILE_BULK_ACTIONS}
+        onChanged={() =>
+          void queryClient.invalidateQueries({ queryKey: ['dns-credentials'] })
+        }
+      />
 
       <ProfileDialog
         open={creating || editing !== null}

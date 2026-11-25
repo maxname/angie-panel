@@ -40,6 +40,9 @@ allow_advanced_snippets = false
 # 169.254/16, fe80::/10). Disabled by default: such targets can expose the
 # panel itself or Angie's status API (an SSRF risk). Enable only if you
 # knowingly proxy to a service on this same machine.
+# Custom locations and forward-auth endpoints are covered as well, with one
+# exception: on this machine they can never target port 8100 (Angie's status
+# API) or 8080 (the panel's default port).
 allow_loopback_upstreams = false
 
 # Add the `Secure` attribute to the session cookie so browsers never send it
@@ -64,9 +67,9 @@ status_api_url = "http://127.0.0.1:8100/status"
 # from it (include rewritten to staging) for pre-flight validation.
 angie_conf = "/etc/angie/angie.conf"
 
-# Directory of read-only shared snippet files (block-exploits.conf,
-# map.conf, cache-assets.conf) shipped with the package and included by
-# absolute path from generated config. Package-owned, so upgrades refresh them.
+# Directory of read-only shared snippet files (block-exploits.conf, map.conf,
+# cache-assets.conf) shipped with the package and included by absolute path
+# from generated config. Package-owned, so upgrades refresh them.
 snippets_dir = "/usr/share/angie-panel/snippets"
 
 # Directory for the ACME collector unix sockets (one per certificate).

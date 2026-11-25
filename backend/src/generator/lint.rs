@@ -26,6 +26,11 @@ pub struct LintPolicy {
     pub allow_advanced_snippets: bool,
     /// The only file an `acme_client … account_key=` may name (root config).
     pub acme_account_key: std::path::PathBuf,
+    /// Root's opt-in to proxying to this machine (`allow_loopback_upstreams`).
+    /// It lifts the loopback rule for a literal `proxy_pass` target, as it does
+    /// for a forward host when a host is saved. The management ports stay
+    /// off-limits either way.
+    pub allow_loopback_upstreams: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -177,7 +182,12 @@ fn check_file(name: &str, body: &str, policy: &LintPolicy, out: &mut Vec<LintVio
 
             // --- upstream targets ---
             "proxy_pass" | "grpc_pass" | "fastcgi_pass" | "uwsgi_pass" | "scgi_pass" => {
-                if let Some(v) = check_proxy_pass(&directive, args, after_acme_hook) {
+                if let Some(v) = check_proxy_pass(
+                    &directive,
+                    args,
+                    after_acme_hook,
+                    policy.allow_loopback_upstreams,
+                ) {
                     push(out, st.line, v);
                 }
             }
@@ -382,9 +392,15 @@ fn check_ssl_cert(directive: &str, args: &str) -> Option<String> {
     None
 }
 
-/// proxy_pass (and friends) must not target a unix socket, a loopback/link-local
-/// address, or a management port (status API / panel).
-fn check_proxy_pass(directive: &str, args: &str, after_acme_hook: bool) -> Option<String> {
+/// proxy_pass (and friends) must not target a unix socket, a management port
+/// (status API / panel), or — unless root opted in with `allow_loopback` — any
+/// other loopback/link-local address.
+fn check_proxy_pass(
+    directive: &str,
+    args: &str,
+    after_acme_hook: bool,
+    allow_loopback: bool,
+) -> Option<String> {
     let target = args.trim();
     if target.is_empty() {
         return Some(format!("{directive} with no target"));
@@ -420,38 +436,27 @@ fn check_proxy_pass(directive: &str, args: &str, after_acme_hook: bool) -> Optio
         && (after_acme_hook || path.trim_start_matches('/').starts_with("acme/hook"));
 
     if let Some((host, port)) = split_host_port(authority) {
-        let is_local = match host.parse::<IpAddr>() {
-            Ok(ip) => is_management_ip(ip),
-            Err(_) => host.eq_ignore_ascii_case("localhost"),
-        };
-
-        // Any loopback/link-local target is denied outright: it can reach the
-        // panel, the status API, or any other privileged local service, on any
-        // port (PLAN.md §7: 127.0.0.0/8, ::1, link-local — no explicit override
-        // in v1). The management-port callout below is a clearer message for the
-        // specific 8100 / panel-port case; a non-local LAN upstream on an
-        // otherwise-management port (e.g. 192.168.1.10:8080) is legitimate and
-        // allowed.
-        if is_local {
+        // A loopback/link-local target can reach the panel, the status API, or
+        // any other privileged local service, so it is denied on any port
+        // (PLAN.md §7: 127.0.0.0/8, ::1, link-local) unless root opted in. The
+        // management ports are denied even then, and get a clearer message; a
+        // non-local LAN upstream on an otherwise-management port (e.g.
+        // 192.168.1.10:8080) is legitimate and allowed.
+        if is_local_host(&host) {
             if let Some(p) = port {
                 // The status API is never a legitimate proxy target — not even
-                // for the ACME hook.
-                if p == STATUS_PORT {
-                    return Some(format!(
-                        "{directive} targets a local management port ({p}): {target:?}"
-                    ));
-                }
-                // The panel port is a management port too, except for the hook,
-                // whose whole purpose is to reach the panel over loopback.
-                if p == PANEL_PORT && !is_acme_hook {
+                // for the ACME hook. The panel port is a management port too,
+                // except for the hook, whose whole purpose is to reach the panel
+                // over loopback.
+                if p == STATUS_PORT || (p == PANEL_PORT && !is_acme_hook) {
                     return Some(format!(
                         "{directive} targets a local management port ({p}): {target:?}"
                     ));
                 }
             }
-            // A bare loopback target (no port, or a non-management port) is only
-            // sanctioned for the hook.
-            if !is_acme_hook {
+            // Any other loopback target (no port, or a non-management port) is
+            // sanctioned for the hook, and for whatever root opted in to.
+            if !is_acme_hook && !allow_loopback {
                 return Some(format!(
                     "{directive} targets a loopback/link-local address: {target:?}"
                 ));
@@ -459,6 +464,24 @@ fn check_proxy_pass(directive: &str, args: &str, after_acme_hook: bool) -> Optio
         }
     }
     None
+}
+
+/// The management port a literal proxy target on this machine would hit, if
+/// any: a `proxy_pass` to it is refused whatever the policy. Validation asks
+/// the same question when a host is saved, so that a location or an auth
+/// endpoint the linter is bound to refuse is turned down on its own field
+/// instead of being stored and then failing every apply.
+pub fn local_management_port(host: &str, port: Option<u16>) -> Option<u16> {
+    port.filter(|p| is_local_host(host) && (*p == STATUS_PORT || *p == PANEL_PORT))
+}
+
+/// True for a host that is this machine: a loopback/link-local address, or the
+/// one name the linter knows to resolve there.
+fn is_local_host(host: &str) -> bool {
+    match host.parse::<IpAddr>() {
+        Ok(ip) => is_management_ip(ip),
+        Err(_) => host.eq_ignore_ascii_case("localhost"),
+    }
 }
 
 /// Split an authority into (host, port). Handles bracketed IPv6 (`[::1]:80`).

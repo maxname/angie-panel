@@ -48,10 +48,9 @@ jobs:
           path: frontend/dist
           if-no-files-found: error
 
-  build-packages:
-    name: Build Linux packages (${{ matrix.target }})
+  build-deb:
+    name: Build .deb (${{ matrix.target }})
     needs: frontend
-    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -62,8 +61,17 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             rpm_arch: x86_64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+
+      - name: Require a version tag for manual releases
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF_NAME" != v* ]]; then
+            echo "::error::Select a v* tag when dispatching a release manually"
+            exit 1
+          fi
 
       # rust-embed picks up ../frontend/dist at compile time — the release binary
       # must embed the real frontend build, so this comes before any cargo step.
@@ -91,7 +99,7 @@ jobs:
           workspaces: backend
           key: ${{ matrix.target }}
 
-      - name: Install cargo-zigbuild and cargo-deb
+      - name: Install package build tools
         run: |
           cargo install --locked cargo-zigbuild cargo-deb
           sudo apt-get update
@@ -191,7 +199,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: deb-${{ matrix.target }}
+          name: packages-${{ matrix.target }}
           path: |
             *.deb
             angie-panel-*.rpm
@@ -381,7 +389,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: [build-packages]
+    needs: [build-deb, build-cli]
     runs-on: ubuntu-latest
     # Job-level env so the sign step's `if:` can read whether a key is set
     # (secrets cannot be referenced directly in `if:` conditions).
@@ -394,18 +402,26 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          pattern: "{deb,cli}-*"
+          pattern: "{packages,cli}-*"
           merge-multiple: true
           path: dist
 
       - name: Add install.sh and generate checksums
         run: |
-          cp packaging/install.sh dist/
           # Pin the installer to this release's version so the documented
           # `releases/latest/download/install.sh` flow downloads the matching
-          # .deb (GITHUB_REF_NAME is the tag, e.g. v0.1.0).
-          sed -i "s/__PANEL_VERSION__/${GITHUB_REF_NAME#v}/g" dist/install.sh
-          if grep -q __PANEL_VERSION__ dist/install.sh; then
+          # .deb (GITHUB_REF_NAME is the tag, e.g. v0.1.0). The script rewrites
+          # the PANEL_VERSION assignment and nothing else: the placeholder also
+          # sits in the installer's own check for an unstamped copy, and
+          # replacing it there shipped installers that always refused to run.
+          version="${GITHUB_REF_NAME#v}"
+          ./scripts/stamp-install-sh.sh "$version" dist/install.sh
+          # Published assets are signed and not replaced afterwards, so check
+          # the file itself rather than take the script's word: the assignment
+          # must carry this version, and none may still hold the placeholder.
+          # (Elsewhere in the file the placeholder is expected to remain.)
+          if ! grep -qxF "PANEL_VERSION=\"$version\"" dist/install.sh \
+             || grep -q '^PANEL_VERSION=.*__PANEL_VERSION__' dist/install.sh; then
             echo "install.sh version substitution failed" >&2
             exit 1
           fi
@@ -416,7 +432,7 @@ jobs:
           sha256sum -- *.deb *.rpm apctl-*.tar.gz apctl-*.zip install.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      # GPG-sign the artifacts (detached ASCII .asc for each package, install.sh,
+      # GPG-sign the artifacts (detached ASCII .asc for each .deb, install.sh,
       # and SHA256SUMS.txt) when a signing key is configured. Gated on the
       # secret so forks / unconfigured repos still cut an (unsigned) release
       # instead of failing. Set repo secrets GPG_PRIVATE_KEY (ASCII-armored)

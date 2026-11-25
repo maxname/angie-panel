@@ -1,8 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Pencil, Trash2 } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import {
+  ChevronDown,
+  Info,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Server,
+} from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
+import { HostEditorDialog } from '@/components/hosts/host-editor-dialog'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -13,242 +28,387 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { api, ApiError, type HostTemplate, type HostTemplateKind } from '@/lib/api'
-import { toast } from '@/lib/toast'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  api,
+  ApiError,
+  type Cert,
+  type HostTemplate,
+  type StreamTemplate,
+  type Template,
+  type TemplateKind,
+  type UpstreamPool,
+} from '@/lib/api'
+import { deleteAction } from '@/lib/bulk'
+import { useSelection, type Selection } from '@/lib/use-selection'
+import { StreamEditorDialog } from '@/pages/streams'
+
+const TEMPLATE_BULK_ACTIONS = deleteAction<Template>(api.deleteTemplate)
+
+/** Which template editor is up: one of a kind, on a template or on a blank. */
+type Editing =
+  | { kind: 'proxy_host'; template: HostTemplate | null }
+  | { kind: 'stream'; template: StreamTemplate | null }
 
 export function TemplatesPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [editing, setEditing] = useState<HostTemplate | null>(null)
-  const [deleting, setDeleting] = useState<HostTemplate | null>(null)
-  const [name, setName] = useState('')
-  const httpQuery = useQuery({
-    queryKey: ['host-templates', 'http'],
-    queryFn: () => api.listHostTemplates('http'),
+  // What an editor works on is kept apart from whether it is open, so it does
+  // not blank out while it fades away.
+  const [editing, setEditing] = useState<Editing>({
+    kind: 'proxy_host',
+    template: null,
   })
-  const streamQuery = useQuery({
-    queryKey: ['host-templates', 'stream'],
-    queryFn: () => api.listHostTemplates('stream'),
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Template | null>(null)
+
+  const templatesQuery = useQuery({
+    queryKey: ['templates'],
+    queryFn: () => api.listTemplates(),
   })
-  const deleteMutation = useMutation({
-    mutationFn: ({ kind, id }: { kind: HostTemplateKind; id: number }) =>
-      api.deleteHostTemplate(kind, id),
-    onSuccess: async (_result, { kind }) => {
-      await queryClient.invalidateQueries({ queryKey: ['host-templates', kind] })
-      setDeleting(null)
-      toast({ title: t('templates.deleted') })
-    },
-    onError: (error) => toast({
-      variant: 'destructive',
-      title: t('templates.deleteFailed'),
-      description: error instanceof ApiError ? error.message : t('common.error'),
-    }),
+  const selection = useSelection(templatesQuery.data?.templates ?? [])
+  // Only to put a name on what a template points at; the list reads fine
+  // without them, so neither failing is worth an error state.
+  const certsQuery = useQuery({
+    queryKey: ['certificates'],
+    queryFn: () => api.listCertificates(),
   })
-  const updateMutation = useMutation({
-    mutationFn: ({ template, name }: { template: HostTemplate; name: string }) =>
-      api.updateHostTemplate(template.kind, template.id, { name, value: template.value }),
-    onSuccess: async (_template, { template }) => {
-      await queryClient.invalidateQueries({ queryKey: ['host-templates', template.kind] })
-      setEditing(null)
-      toast({ title: t('templates.updated') })
-    },
-    onError: (error) => toast({
-      variant: 'destructive',
-      title: t('templates.updateFailed'),
-      description: error instanceof ApiError ? error.message : t('common.error'),
-    }),
+  const poolsQuery = useQuery({
+    queryKey: ['upstream-pools'],
+    queryFn: () => api.listUpstreamPools(),
   })
+  const certsById = new Map(
+    (certsQuery.data?.certificates ?? []).map((cert) => [cert.id, cert]),
+  )
+  const poolsById = new Map(
+    (poolsQuery.data?.upstream_pools ?? []).map((pool) => [pool.id, pool]),
+  )
 
-  const failed = httpQuery.isError || streamQuery.isError
-  const pending = httpQuery.isPending || streamQuery.isPending
-
-  const edit = (template: HostTemplate) => {
-    setEditing(template)
-    setName(template.name)
+  const open = (next: Editing) => {
+    setEditing(next)
+    setEditorOpen(true)
   }
-
-  const submitRename = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const trimmed = name.trim()
-    if (!editing || !trimmed || trimmed.length > 64) return
-    updateMutation.mutate({ template: editing, name: trimmed })
-  }
-
-  const closeEdit = (open: boolean) => {
-    if (!open && !updateMutation.isPending) setEditing(null)
-  }
-
-  const closeDelete = (open: boolean) => {
-    if (!open && !deleteMutation.isPending) setDeleting(null)
-  }
+  const openNew = (kind: TemplateKind) => open({ kind, template: null })
+  const openEdit = (template: Template) =>
+    open(
+      template.kind === 'proxy_host'
+        ? { kind: 'proxy_host', template }
+        : { kind: 'stream', template },
+    )
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t('templates.title')}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{t('templates.description')}</p>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {t('templates.title')}
+        </h1>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button>
+              <Plus aria-hidden="true" />
+              {t('templates.add')}
+              <ChevronDown aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => openNew('proxy_host')}>
+              {t('templates.addHost')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openNew('stream')}>
+              {t('templates.addStream')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      {pending ? (
+      <Alert variant="info">
+        <Info aria-hidden="true" />
+        <AlertDescription>{t('templates.info.body')}</AlertDescription>
+      </Alert>
+
+      {templatesQuery.isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" aria-hidden="true" />
           {t('common.loading')}
         </div>
-      ) : failed ? (
-        <div className="space-y-3">
-          <p role="alert" className="text-sm text-destructive">{t('templates.pageLoadFailed')}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              void httpQuery.refetch()
-              void streamQuery.refetch()
-            }}
-          >
-            {t('common.retry')}
-          </Button>
-        </div>
+      ) : templatesQuery.isError ? (
+        <Card>
+          <CardContent className="flex flex-col items-start gap-3">
+            <p className="text-sm text-destructive" role="alert">
+              {t('templates.loadFailed')}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void templatesQuery.refetch()}
+            >
+              {t('common.retry')}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : templatesQuery.data.templates.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <p className="text-sm text-muted-foreground">
+              {t('templates.empty')}
+            </p>
+          </CardContent>
+        </Card>
       ) : (
-        <Tabs defaultValue="http">
-          <TabsList>
-            <TabsTrigger value="http">{t('templates.http')} <span className="text-muted-foreground">({httpQuery.data.length})</span></TabsTrigger>
-            <TabsTrigger value="stream">{t('templates.stream')} <span className="text-muted-foreground">({streamQuery.data.length})</span></TabsTrigger>
-          </TabsList>
-          <TabsContent value="http">
-            <TemplateList
-              kind="http"
-              templates={httpQuery.data}
-              empty={t('templates.empty')}
-              editLabel={(template) => t('templates.renameNamed', { name: template.name })}
-              deleteLabel={(template) => t('templates.deleteNamed', { name: template.name })}
-              onEdit={edit}
-              onDelete={setDeleting}
-            />
-          </TabsContent>
-          <TabsContent value="stream">
-            <TemplateList
-              kind="stream"
-              templates={streamQuery.data}
-              empty={t('templates.empty')}
-              editLabel={(template) => t('templates.renameNamed', { name: template.name })}
-              deleteLabel={(template) => t('templates.deleteNamed', { name: template.name })}
-              onEdit={edit}
-              onDelete={setDeleting}
-            />
-          </TabsContent>
-        </Tabs>
+        <Card className="p-0">
+          <CardContent className="px-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <SelectAllHead selection={selection} />
+                  <TableHead>{t('templates.table.name')}</TableHead>
+                  <TableHead>{t('templates.table.kind')}</TableHead>
+                  <TableHead>{t('templates.table.target')}</TableHead>
+                  <TableHead>{t('templates.table.certificate')}</TableHead>
+                  <TableHead className="w-0 text-right">
+                    <span className="sr-only">
+                      {t('templates.table.actions')}
+                    </span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {templatesQuery.data.templates.map((template) => (
+                  <TemplateRow
+                    key={template.id}
+                    template={template}
+                    selection={selection}
+                    certsById={certsById}
+                    poolsById={poolsById}
+                    onEdit={() => openEdit(template)}
+                    onDelete={() => setDeleteTarget(template)}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
-      <Dialog open={editing !== null} onOpenChange={closeEdit}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t('templates.renameTitle')}</DialogTitle>
-            <DialogDescription>{t('templates.renameDescription')}</DialogDescription>
-          </DialogHeader>
-          <form className="flex flex-col gap-4" onSubmit={submitRename}>
-            <div className="space-y-2">
-              <Label htmlFor="template-rename">{t('templates.name')}</Label>
-              <Input
-                id="template-rename"
-                autoFocus
-                maxLength={64}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => closeEdit(false)} disabled={updateMutation.isPending}>
-                {t('common.cancel')}
-              </Button>
-              <Button type="submit" disabled={!name.trim() || updateMutation.isPending}>
-                {t('common.save')}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <BulkActionsBar
+        selection={selection}
+        label={(template) => template.name}
+        actions={TEMPLATE_BULK_ACTIONS}
+        onChanged={() =>
+          void queryClient.invalidateQueries({ queryKey: ['templates'] })
+        }
+      />
 
-      <Dialog open={deleting !== null} onOpenChange={closeDelete}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t('templates.deleteTitle')}</DialogTitle>
-            <DialogDescription>
-              {t('templates.confirmDelete', { name: deleting?.name ?? '' })}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => closeDelete(false)} disabled={deleteMutation.isPending}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={!deleting || deleteMutation.isPending}
-              onClick={() => deleting && deleteMutation.mutate({ kind: deleting.kind, id: deleting.id })}
-            >
-              {deleteMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {t('templates.delete')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Both editors stay mounted; only the one of the kind being edited is
+          ever open. */}
+      <HostEditorDialog
+        open={editorOpen && editing.kind === 'proxy_host'}
+        onOpenChange={setEditorOpen}
+        host={null}
+        templateEdit={{
+          template: editing.kind === 'proxy_host' ? editing.template : null,
+        }}
+      />
+      <StreamEditorDialog
+        open={editorOpen && editing.kind === 'stream'}
+        onOpenChange={setEditorOpen}
+        stream={null}
+        templateEdit={{
+          template: editing.kind === 'stream' ? editing.template : null,
+        }}
+      />
+      <DeleteTemplateDialog
+        template={deleteTarget}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setDeleteTarget(null)
+          }
+        }}
+      />
     </div>
   )
 }
 
-function TemplateList({
-  kind,
-  templates,
-  empty,
-  editLabel,
-  deleteLabel,
+interface TemplateRowProps {
+  template: Template
+  selection: Selection<Template>
+  certsById: Map<number, Cert>
+  poolsById: Map<number, UpstreamPool>
+  onEdit: () => void
+  onDelete: () => void
+}
+
+function TemplateRow({
+  template,
+  selection,
+  certsById,
+  poolsById,
   onEdit,
   onDelete,
-}: {
-  kind: HostTemplateKind
-  templates: HostTemplate[]
-  empty: string
-  editLabel: (template: HostTemplate) => string
-  deleteLabel: (template: HostTemplate) => string
-  onEdit: (template: HostTemplate) => void
-  onDelete: (template: HostTemplate) => void
-}) {
-  return templates.length === 0 ? (
-    <Card>
-      <CardContent className="py-10 text-center text-sm text-muted-foreground">{empty}</CardContent>
-    </Card>
-  ) : (
-    <Card className="p-0">
-      <CardContent className="divide-y px-0 py-0">
-        {templates.map((template) => (
-          <div key={`${kind}-${template.id}`} className="flex items-center justify-between gap-3 px-4 py-3">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">{template.name}</span>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label={editLabel(template)}
-                onClick={() => onEdit(template)}
-              >
-                <Pencil aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label={deleteLabel(template)}
-                onClick={() => onDelete(template)}
-              >
-                <Trash2 aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
+}: TemplateRowProps) {
+  const { t } = useTranslation()
+  const { config } = template
+  const pool =
+    template.kind === 'proxy_host' && template.config.upstream_pool_id !== null
+      ? poolsById.get(template.config.upstream_pool_id)
+      : undefined
+  const cert =
+    config.certificate_id !== null
+      ? certsById.get(config.certificate_id)
+      : undefined
+
+  return (
+    <TableRow
+      data-state={selection.isSelected(template.id) ? 'selected' : undefined}
+    >
+      <SelectRowCell selection={selection} item={template} name={template.name} />
+      <TableCell className="font-medium">{template.name}</TableCell>
+      <TableCell>
+        <Badge variant="outline">{t(`templates.kind.${template.kind}`)}</Badge>
+      </TableCell>
+      <TableCell>
+        {pool !== undefined ? (
+          <span className="inline-flex items-center gap-1 font-mono text-xs">
+            <Server
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={t('hosts.table.pool')}
+            />
+            {pool.name}
+          </span>
+        ) : config.forward_host !== '' ? (
+          <span className="font-mono text-xs">
+            {template.kind === 'proxy_host'
+              ? `${template.config.forward_scheme}://`
+              : ''}
+            {config.forward_host}:{config.forward_port}
+          </span>
+        ) : (
+          // The target is the one setting a template may leave open.
+          <span className="text-muted-foreground">
+            {t('templates.targetOpen')}
+          </span>
+        )}
+      </TableCell>
+      <TableCell>
+        {template.kind === 'proxy_host' &&
+        template.config.new_certificate !== null ? (
+          t('templates.certificateNew')
+        ) : cert !== undefined ? (
+          <span className="font-mono text-xs">{cert.domains[0] ?? cert.name}</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell className="text-right">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t('templates.table.actions')}
+            >
+              <MoreHorizontal aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={onEdit}>
+              {t('templates.actions.edit')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              {t('templates.actions.delete')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+interface DeleteTemplateDialogProps {
+  template: Template | null
+  onOpenChange: (open: boolean) => void
+}
+
+function DeleteTemplateDialog({ template, onOpenChange }: DeleteTemplateDialogProps) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.deleteTemplate(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['templates'] })
+      onOpenChange(false)
+    },
+  })
+
+  const serverError =
+    deleteMutation.isError && deleteMutation.error instanceof ApiError
+      ? deleteMutation.error.message
+      : deleteMutation.isError
+        ? t('common.error')
+        : null
+
+  return (
+    <Dialog
+      open={template !== null}
+      onOpenChange={(isOpen) => {
+        if (!isOpen) {
+          deleteMutation.reset()
+        }
+        onOpenChange(isOpen)
+      }}
+    >
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{t('templates.delete.title')}</DialogTitle>
+          <DialogDescription>
+            {t('templates.delete.body', { name: template?.name ?? '' })}
+          </DialogDescription>
+        </DialogHeader>
+        {serverError !== null && (
+          <Alert variant="destructive">
+            <AlertTitle>{t('templates.delete.failed')}</AlertTitle>
+            <AlertDescription>{serverError}</AlertDescription>
+          </Alert>
+        )}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={deleteMutation.isPending}
+          >
+            {t('common.cancel')}
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() =>
+              template !== null && deleteMutation.mutate(template.id)
+            }
+            disabled={deleteMutation.isPending}
+          >
+            {deleteMutation.isPending && (
+              <Loader2 className="animate-spin" aria-hidden="true" />
+            )}
+            {t('templates.actions.delete')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

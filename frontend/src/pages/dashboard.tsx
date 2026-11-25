@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, Info, Loader2, PlayCircle } from 'lucide-react'
+import { AlertTriangle, Info, Loader2, PlayCircle, Server } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -409,7 +409,20 @@ function HostRow({ host }: { host: DashboardHost }) {
         <DomainBadges domains={host.domains} secure={host.https_active} />
       </TableCell>
       <TableCell>
-        <span className="font-mono text-xs">{host.forward}</span>
+        <span
+          className="inline-flex items-center gap-1 font-mono text-xs"
+          title={host.upstream_pool ? t('hosts.table.pool') : undefined}
+        >
+          {/* `forward` names a shared pool here, not a host:port — mark it. */}
+          {host.upstream_pool && (
+            <Server
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={t('hosts.table.pool')}
+            />
+          )}
+          {host.forward}
+        </span>
       </TableCell>
       <TableCell>
         {host.https_active ? (

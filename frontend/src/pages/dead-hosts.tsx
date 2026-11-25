@@ -4,13 +4,17 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
+  BulkActionsBar,
+  SelectAllHead,
+  SelectRowCell,
+} from '@/components/bulk-actions'
+import {
   DomainChipsField,
   HostAdvancedField,
   HostSslFields,
   SslBadge,
   type SslToggles,
 } from '@/components/hosts/host-editor-fields'
-import { BulkActionBar, type BulkAction } from '@/components/bulk-action-bar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { DomainBadges } from '@/components/domain-badges'
 import { Badge } from '@/components/ui/badge'
@@ -42,53 +46,28 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, ApiError, type DeadHost, type DeadHostInput } from '@/lib/api'
 import { useIsDirty } from '@/lib/use-dirty'
+import { lifecycleActions } from '@/lib/bulk'
 import { toast } from '@/lib/toast'
-import { runSequentially } from '@/lib/bulk-actions'
+import { useSelection, type Selection } from '@/lib/use-selection'
+
+const DEAD_HOST_BULK_ACTIONS = lifecycleActions<DeadHost>({
+  enable: api.enableDeadHost,
+  disable: api.disableDeadHost,
+  remove: api.deleteDeadHost,
+})
 
 export function DeadHostsPage() {
   const { t } = useTranslation()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<DeadHost | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeadHost | null>(null)
-  const [selected, setSelected] = useState<Set<number>>(() => new Set())
-  const [bulkRunning, setBulkRunning] = useState(false)
-  const queryClient = useQueryClient()
 
   const hostsQuery = useQuery({
     queryKey: ['dead-hosts'],
     queryFn: () => api.listDeadHosts(),
   })
-  const hostList = hostsQuery.data?.dead_hosts ?? []
-  const selectedIds = [...selected].filter((id) => hostList.some((host) => host.id === id))
-
-  const runBulk = async (action: BulkAction) => {
-    if (action === 'delete' && !window.confirm(t('common.bulk.confirmDelete', { count: selectedIds.length }))) return
-    if (bulkRunning) return
-    setBulkRunning(true)
-    try {
-      const { failed } = await runSequentially(selectedIds, (id) =>
-        action === 'enable' ? api.enableDeadHost(id)
-          : action === 'disable' ? api.disableDeadHost(id)
-            : api.deleteDeadHost(id),
-      )
-      setSelected(new Set(failed.map(({ value }) => value)))
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['dead-hosts'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-      ])
-      if (failed.length > 0) {
-        toast({
-          variant: 'destructive',
-          title: t('common.bulk.partialFailure', { failed: failed.length, total: selectedIds.length }),
-          description: failed[0].error instanceof ApiError ? failed[0].error.message : t('common.error'),
-        })
-      } else {
-        toast({ title: t('deadHosts.unappliedTitle'), description: t('deadHosts.unappliedBody') })
-      }
-    } finally {
-      setBulkRunning(false)
-    }
-  }
+  const queryClient = useQueryClient()
+  const selection = useSelection(hostsQuery.data?.dead_hosts ?? [])
 
   const openCreate = () => {
     setEditing(null)
@@ -106,22 +85,11 @@ export function DeadHostsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">
           {t('deadHosts.title')}
         </h1>
-        <Button onClick={openCreate} disabled={bulkRunning}>
+        <Button onClick={openCreate}>
           <Plus aria-hidden="true" />
           {t('deadHosts.add')}
         </Button>
       </div>
-
-      {hostList.length > 0 && (
-        <BulkActionBar
-          selectedCount={selectedIds.length}
-          totalCount={hostList.length}
-          allSelected={selectedIds.length > 0 && selectedIds.length === hostList.length}
-          disabled={bulkRunning}
-          onSelectAll={(checked) => setSelected(checked ? new Set(hostList.map((host) => host.id)) : new Set())}
-          onAction={(action) => void runBulk(action)}
-        />
-      )}
 
       {hostsQuery.isPending ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -151,7 +119,7 @@ export function DeadHostsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead><span className="sr-only">{t('common.bulk.selectAll')}</span></TableHead>
+                  <SelectAllHead selection={selection} />
                   <TableHead>{t('deadHosts.table.domains')}</TableHead>
                   <TableHead>{t('deadHosts.table.behaviour')}</TableHead>
                   <TableHead>{t('deadHosts.table.ssl')}</TableHead>
@@ -166,14 +134,7 @@ export function DeadHostsPage() {
                   <DeadHostRow
                     key={host.id}
                     host={host}
-                    selected={selected.has(host.id)}
-                    disabled={bulkRunning}
-                    onSelect={(checked) => setSelected((previous) => {
-                      const next = new Set(previous)
-                      if (checked) next.add(host.id)
-                      else next.delete(host.id)
-                      return next
-                    })}
+                    selection={selection}
                     onEdit={() => openEdit(host)}
                     onDelete={() => setDeleteTarget(host)}
                   />
@@ -183,6 +144,14 @@ export function DeadHostsPage() {
           </CardContent>
         </Card>
       )}
+
+      <BulkActionsBar
+        selection={selection}
+        label={(host) => host.domains[0] ?? `#${host.id}`}
+        actions={DEAD_HOST_BULK_ACTIONS}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey: ['dead-hosts'] })}
+        successNote={t('deadHosts.unappliedBody')}
+      />
 
       <DeadHostEditorDialog open={editorOpen} onOpenChange={setEditorOpen} host={editing} />
       <DeleteDeadHostDialog
@@ -199,14 +168,12 @@ export function DeadHostsPage() {
 
 interface DeadHostRowProps {
   host: DeadHost
-  selected: boolean
-  disabled: boolean
-  onSelect: (selected: boolean) => void
+  selection: Selection<DeadHost>
   onEdit: () => void
   onDelete: () => void
 }
 
-function DeadHostRow({ host, selected, disabled, onSelect, onEdit, onDelete }: DeadHostRowProps) {
+function DeadHostRow({ host, selection, onEdit, onDelete }: DeadHostRowProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
@@ -230,16 +197,8 @@ function DeadHostRow({ host, selected, disabled, onSelect, onEdit, onDelete }: D
   })
 
   return (
-    <TableRow>
-      <TableCell>
-        <input
-          type="checkbox"
-          aria-label={t('common.bulk.selectItem', { item: host.domains[0] ?? '' })}
-          checked={selected}
-          disabled={disabled}
-          onChange={(event) => onSelect(event.target.checked)}
-        />
-      </TableCell>
+    <TableRow data-state={selection.isSelected(host.id) ? 'selected' : undefined}>
+      <SelectRowCell selection={selection} item={host} name={host.domains[0] ?? `#${host.id}`} />
       <TableCell>
         <DomainBadges
           domains={host.domains}
@@ -269,7 +228,7 @@ function DeadHostRow({ host, selected, disabled, onSelect, onEdit, onDelete }: D
             <Button
               variant="ghost"
               size="icon-sm"
-              disabled={toggleMutation.isPending || disabled}
+              disabled={toggleMutation.isPending}
               aria-label={t('deadHosts.table.actions')}
             >
               {toggleMutation.isPending ? (
@@ -280,16 +239,16 @@ function DeadHostRow({ host, selected, disabled, onSelect, onEdit, onDelete }: D
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem disabled={disabled} onSelect={onEdit}>
+            <DropdownMenuItem onSelect={onEdit}>
               {t('deadHosts.actions.edit')}
             </DropdownMenuItem>
-            <DropdownMenuItem disabled={disabled} onSelect={() => toggleMutation.mutate()}>
+            <DropdownMenuItem onSelect={() => toggleMutation.mutate()}>
               {host.enabled
                 ? t('deadHosts.actions.disable')
                 : t('deadHosts.actions.enable')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" disabled={disabled} onSelect={onDelete}>
+            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
               {t('deadHosts.actions.delete')}
             </DropdownMenuItem>
           </DropdownMenuContent>

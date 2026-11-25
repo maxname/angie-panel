@@ -30,8 +30,9 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy, HeaderDirection, ProxyHost,
-    RateLimit, RedirectHost, Scheme, SniRouter, Stream, StreamTls, UpstreamPool,
+    BalanceMethod, Ban, CustomHeader, CustomLocation, DeadHost, GeoMode, GeoPolicy,
+    HeaderDirection, ProxyHost, RateLimit, RedirectHost, Scheme, SniRouter, Stream, StreamTls,
+    UpstreamPool, UpstreamServer,
 };
 
 /// FileSet keys with this prefix are stream configs destined for `stream.d/`
@@ -42,7 +43,6 @@ pub const STREAM_PREFIX: &str = "stream.d/";
 /// and settings. Filenames map 1:1 to /etc/angie/http.d entries.
 pub struct GeneratorInput {
     pub hosts: Vec<ProxyHost>,
-    pub upstream_pools: Vec<UpstreamPool>,
     pub settings: EffectiveSettings,
     /// Read-only shared snippet files (block-exploits.conf, map.conf,
     /// cache-assets.conf).
@@ -70,6 +70,9 @@ pub struct GeneratorInput {
     pub acme_hook_token: String,
     /// Access lists referenced by hosts via `access_list_id`.
     pub access_lists: Vec<AccessList>,
+    /// Shared upstream pools referenced by hosts via `upstream_pool_id`. Only
+    /// the ones an enabled host proxies to are emitted (17-upstream-pools.conf).
+    pub upstream_pools: Vec<UpstreamPool>,
     /// Managed config dir — where generated files (incl. htpasswd) live; used
     /// to build the absolute `auth_basic_user_file` path.
     pub http_d_dir: std::path::PathBuf,
@@ -155,7 +158,7 @@ pub struct Certificate {
 pub struct EffectiveSettings {
     pub default_site: DefaultSite,
     pub ipv6_enabled: bool,
-    /// Nameservers for the `resolver` directive (127.0.0.53 by default, or settings override).
+    /// Nameservers for the `resolver` directive (from resolv.conf or override).
     pub resolvers: Vec<String>,
 }
 
@@ -202,11 +205,10 @@ pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
     if let Some(body) = gen_rate_limits(input) {
         files.insert("15-rate-limits.conf".to_string(), body);
     }
-    if !input.upstream_pools.is_empty() {
-        files.insert(
-            "18-upstream-pools.conf".to_string(),
-            gen_upstream_pools(&input.upstream_pools),
-        );
+    // Shared upstream pools: one `upstream pool_<id>` block per pool in use,
+    // emitted before the 20-host-* files whose proxy_pass names them.
+    if let Some(body) = gen_upstream_pools(input) {
+        files.insert(UPSTREAM_POOLS_FILE.to_string(), body);
     }
 
     // Index certificates by id so hosts can resolve name + readiness in O(1).
@@ -416,7 +418,7 @@ fn gen_panel(input: &GeneratorInput) -> String {
 
     // resolver: required by upstreams that use hostnames and by the ACME
     // module. Skipping it when empty is intentional (an empty `resolver;` is a
-    // config error) — but we warn if the caller provides no resolver.
+    // config error) — but we log so the operator can spot a missing resolv.conf.
     // `ipv6=off`: many self-hosted boxes have no working IPv6, and without this
     // Angie resolves AAAA and burns connect attempts on unreachable v6 addresses
     // (seen live: ACME upstream + hostname proxy_pass failing "Network is
@@ -424,22 +426,7 @@ fn gen_panel(input: &GeneratorInput) -> String {
     if input.settings.resolvers.is_empty() {
         tracing::warn!("no resolvers configured; omitting the `resolver` directive");
     } else {
-        let list = input
-            .settings
-            .resolvers
-            .iter()
-            .map(|resolver| {
-                if matches!(
-                    resolver.parse::<std::net::IpAddr>(),
-                    Ok(std::net::IpAddr::V6(_))
-                ) {
-                    format!("[{resolver}]")
-                } else {
-                    resolver.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
+        let list = input.settings.resolvers.join(" ");
         let _ = writeln!(out, "resolver {list} valid=300s ipv6=off;");
         out.push('\n');
     }
@@ -822,9 +809,17 @@ fn emit_forward_auth_server(out: &mut String, host: &ProxyHost) {
     }
 }
 
-/// Per-location `auth_request` + identity-header copy. Emitted inside each proxy
-/// location so the whole host is gated. Header names were validated to an HTTP
-/// token; `$upstream_http_<name>` is the name lowercased with dashes→underscores.
+/// The variable an identity header from the auth response is captured into
+/// (`auth_request_set`) and then sent upstream from (`proxy_set_header`).
+fn forward_auth_var(index: usize) -> String {
+    format!("$fa_{index}")
+}
+
+/// Per-location `auth_request` + identity-header capture. Emitted inside each
+/// proxy location so the whole host is gated. The captured values are sent
+/// upstream by the host's shared header set (see [`proxy_request_headers`]).
+/// Header names were validated to an HTTP token; `$upstream_http_<name>` is the
+/// name lowercased with dashes→underscores.
 fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
     let fa = &host.forward_auth;
     if !fa.active() {
@@ -832,10 +827,9 @@ fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
     }
     let _ = writeln!(out, "{indent}auth_request {FORWARD_AUTH_LOCATION};");
     for (i, header) in fa.copy_headers.iter().enumerate() {
-        let var = format!("$fa_{i}");
+        let var = forward_auth_var(i);
         let upstream_var = format!("$upstream_http_{}", header.to_lowercase().replace('-', "_"));
         let _ = writeln!(out, "{indent}auth_request_set {var} {upstream_var};");
-        let _ = writeln!(out, "{indent}proxy_set_header {header} {var};");
     }
 }
 
@@ -843,50 +837,12 @@ fn emit_auth_request(out: &mut String, host: &ProxyHost, indent: &str) {
 
 /// Custom response headers (`add_header … always`), server scope. Emitted next
 /// to HSTS; locations define no `add_header` of their own, so they inherit
-/// these. Name is an HTTP token, value is bounded printable ASCII with quote /
-/// backslash / `$` rejected (see `model::validate_custom_headers`).
+/// these. Name is an HTTP token; value is bounded printable ASCII with quote /
+/// backslash rejected and `$` allowed only as an nginx variable (see
+/// `model::validate_custom_headers`).
 fn emit_response_headers(out: &mut String, host: &ProxyHost) {
     for h in header_iter(host, HeaderDirection::Response) {
         let _ = writeln!(out, "    add_header {} \"{}\" always;", h.name, h.value);
-    }
-}
-
-/// The complete set of host-specific proxy request headers, normally emitted
-/// at server scope. Re-emit this set inside a location before auth identity
-/// headers whenever that location adds `proxy_set_header`: Angie then replaces
-/// the inherited set instead of merging it. Custom headers remain last so they
-/// can override defaults; an empty value strips the header upstream.
-fn emit_request_headers(out: &mut String, input: &GeneratorInput, host: &ProxyHost, indent: &str) {
-    let _ = writeln!(out, "{indent}proxy_set_header Host $host;");
-    let _ = writeln!(
-        out,
-        "{indent}proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
-    );
-    if host.trust_forwarded_proto {
-        let _ = writeln!(
-            out,
-            "{indent}proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;"
-        );
-    } else {
-        let _ = writeln!(out, "{indent}proxy_set_header X-Forwarded-Proto $scheme;");
-    }
-    if host.websockets_upgrade {
-        let _ = writeln!(out, "{indent}proxy_set_header Upgrade $http_upgrade;");
-        let _ = writeln!(
-            out,
-            "{indent}proxy_set_header Connection $connection_upgrade;"
-        );
-    }
-    if let Some(list) = host
-        .access_list_id
-        .and_then(|id| input.access_lists.iter().find(|list| list.id == id))
-    {
-        if !list.pass_auth && !list.users.is_empty() {
-            let _ = writeln!(out, "{indent}proxy_set_header Authorization \"\";");
-        }
-    }
-    for h in header_iter(host, HeaderDirection::Request) {
-        let _ = writeln!(out, "{indent}proxy_set_header {} \"{}\";", h.name, h.value);
     }
 }
 
@@ -1152,45 +1108,60 @@ fn gen_bans(input: &GeneratorInput) -> Option<String> {
 
 // ------------------------------------------------------------- upstream pool
 
-/// Emit the `upstream <zone> { ... }` block: shared-memory zone, optional
-/// balancing method, the primary server, then any extra pool members. Passive
-/// health (`max_fails`/`fail_timeout`) is attached to every peer when tuned off
-/// the Angie defaults (1 / 10s). Hosts/ports were SSRF-validated upstream.
-fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
-    let up = &host.upstream;
+/// One `server` line of an `upstream` block.
+struct Peer<'a> {
+    host: &'a str,
+    port: u16,
+    weight: u32,
+    backup: bool,
+    down: bool,
+}
+
+impl<'a> From<&'a UpstreamServer> for Peer<'a> {
+    fn from(s: &'a UpstreamServer) -> Self {
+        Peer {
+            host: &s.host,
+            port: s.port,
+            weight: s.weight,
+            backup: s.backup,
+            down: s.down,
+        }
+    }
+}
+
+/// Emit an `upstream <zone> { ... }` block: shared-memory zone, optional
+/// balancing method, then one `server` per peer. Passive health
+/// (`max_fails`/`fail_timeout`) is attached to every peer when tuned off the
+/// Angie defaults (1 / 10s). Hosts/ports were SSRF-validated upstream.
+fn write_upstream_block<'a>(
+    out: &mut String,
+    zone: &str,
+    method: BalanceMethod,
+    max_fails: u32,
+    fail_timeout_secs: u32,
+    peers: impl Iterator<Item = Peer<'a>>,
+) {
     let _ = writeln!(out, "upstream {zone} {{");
     let _ = writeln!(out, "    zone {zone} 64k;");
-    if let Some(method) = up.method.directive() {
+    if let Some(method) = method.directive() {
         let _ = writeln!(out, "    {method};");
     }
     // Passive-health suffix shared by every peer (empty when at defaults).
-    let health = if up.max_fails != 1 || up.fail_timeout_secs != 10 {
-        format!(
-            " max_fails={} fail_timeout={}s",
-            up.max_fails, up.fail_timeout_secs
-        )
+    let health = if max_fails != 1 || fail_timeout_secs != 10 {
+        format!(" max_fails={max_fails} fail_timeout={fail_timeout_secs}s")
     } else {
         String::new()
     };
-    // Primary server (never backup/down — it is the host's main target).
-    let mut primary = format!("    server {}:{}", host.forward_host, host.forward_port);
-    if up.primary_weight != 1 {
-        let _ = write!(primary, " weight={}", up.primary_weight);
-    }
-    primary.push_str(&health);
-    primary.push(';');
-    let _ = writeln!(out, "{primary}");
-    // Extra pool members.
-    for s in &up.servers {
-        let mut line = format!("    server {}:{}", s.host, s.port);
-        if s.weight != 1 {
-            let _ = write!(line, " weight={}", s.weight);
+    for peer in peers {
+        let mut line = format!("    server {}:{}", peer.host, peer.port);
+        if peer.weight != 1 {
+            let _ = write!(line, " weight={}", peer.weight);
         }
         line.push_str(&health);
-        if s.backup {
+        if peer.backup {
             line.push_str(" backup");
         }
-        if s.down {
+        if peer.down {
             line.push_str(" down");
         }
         line.push(';');
@@ -1199,51 +1170,74 @@ fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
     let _ = writeln!(out, "}}");
 }
 
-fn gen_upstream_pools(pools: &[UpstreamPool]) -> String {
-    let mut out = String::new();
-    let mut sorted: Vec<&UpstreamPool> = pools.iter().collect();
-    sorted.sort_by_key(|pool| pool.id);
-    for pool in sorted {
-        let zone = format!("shared_pool_{}", pool.id);
-        let up = &pool.upstream;
-        let _ = writeln!(out, "upstream {zone} {{");
-        let _ = writeln!(out, "    zone {zone} 64k;");
-        if let Some(method) = up.method.directive() {
-            let _ = writeln!(out, "    {method};");
-        }
-        let health = if up.max_fails != 1 || up.fail_timeout_secs != 10 {
-            format!(
-                " max_fails={} fail_timeout={}s",
-                up.max_fails, up.fail_timeout_secs
-            )
-        } else {
-            String::new()
-        };
-        let mut primary = format!("    server {}:{}", pool.primary_host, pool.primary_port);
-        if up.primary_weight != 1 {
-            let _ = write!(primary, " weight={}", up.primary_weight);
-        }
-        primary.push_str(&health);
-        primary.push(';');
-        let _ = writeln!(out, "{primary}");
-        for server in &up.servers {
-            let mut line = format!("    server {}:{}", server.host, server.port);
-            if server.weight != 1 {
-                let _ = write!(line, " weight={}", server.weight);
-            }
-            line.push_str(&health);
-            if server.backup {
-                line.push_str(" backup");
-            }
-            if server.down {
-                line.push_str(" down");
-            }
-            line.push(';');
-            let _ = writeln!(out, "{line}");
-        }
-        let _ = writeln!(out, "}}\n");
+/// A host's own upstream block: the primary server (`forward_host:forward_port`,
+/// never backup/down — it is the host's main target), then any extra pool
+/// members from `host.upstream`.
+fn gen_upstream_block(out: &mut String, zone: &str, host: &ProxyHost) {
+    let up = &host.upstream;
+    let primary = Peer {
+        host: &host.forward_host,
+        port: host.forward_port,
+        weight: up.primary_weight,
+        backup: false,
+        down: false,
+    };
+    write_upstream_block(
+        out,
+        zone,
+        up.method,
+        up.max_fails,
+        up.fail_timeout_secs,
+        std::iter::once(primary).chain(up.servers.iter().map(Peer::from)),
+    );
+}
+
+/// FileSet key for the shared upstream pools.
+const UPSTREAM_POOLS_FILE: &str = "17-upstream-pools.conf";
+
+/// Shared upstream pools: one `upstream pool_<id>` block per pool that an
+/// ENABLED host proxies to, each with its own metrics zone. Returns None when
+/// no pool is in use.
+///
+/// Unreferenced pools are deliberately left out rather than emitted "just in
+/// case": an `upstream` block resolves its servers' hostnames when the config
+/// loads, so a parked pool with a stale hostname would fail `angie -t` and
+/// block every apply for a backend nothing uses.
+fn gen_upstream_pools(input: &GeneratorInput) -> Option<String> {
+    let in_use: std::collections::BTreeSet<i64> = input
+        .hosts
+        .iter()
+        .filter(|h| h.enabled)
+        .filter_map(|h| h.upstream_pool_id)
+        .collect();
+    let mut pools: Vec<&UpstreamPool> = input
+        .upstream_pools
+        .iter()
+        .filter(|p| in_use.contains(&p.id))
+        .collect();
+    if pools.is_empty() {
+        return None;
     }
-    out
+    pools.sort_by_key(|p| p.id);
+
+    let mut out = String::new();
+    for (i, pool) in pools.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        // The name is a single-line label (control characters are rejected on
+        // input), so it cannot end the comment early.
+        let _ = writeln!(out, "# {}", pool.name);
+        write_upstream_block(
+            &mut out,
+            &UpstreamPool::zone(pool.id),
+            pool.method,
+            pool.max_fails,
+            pool.fail_timeout_secs,
+            pool.servers.iter().map(Peer::from),
+        );
+    }
+    Some(out)
 }
 
 // -------------------------------------------------- 20-host-<id>-<slug>.conf
@@ -1259,11 +1253,6 @@ fn gen_host(
     cert: Option<&Certificate>,
     input: &GeneratorInput,
 ) -> anyhow::Result<(String, String)> {
-    let forward_scheme = host
-        .upstream_pool_id
-        .and_then(|id| input.upstream_pools.iter().find(|pool| pool.id == id))
-        .map(|pool| pool.scheme)
-        .unwrap_or(host.forward_scheme);
     let slug = slugify(host.domains.first().map(String::as_str).unwrap_or(""));
     let filename = format!("20-host-{}-{}.conf", host.id, slug);
 
@@ -1281,10 +1270,29 @@ fn gen_host(
     // primary server is forward_host:forward_port; extra pool members, the
     // balancing method, and passive health (max_fails/fail_timeout) come from
     // host.upstream (PLAN.md §4).
-    if host.upstream_pool_id.is_none() {
-        gen_upstream_block(&mut out, &zone, host);
-        out.push('\n');
+    //
+    // A host that references a shared pool has no block of its own: it proxies
+    // to `pool_<id>`, defined once in 17-upstream-pools.conf. The reference is
+    // checked on write and held by a foreign key; if it dangles anyway, fail
+    // the generation — emitting the proxy_pass regardless would make Angie
+    // treat `pool_<id>` as a hostname to resolve, and fail somewhere murkier.
+    match host.upstream_pool_id {
+        None => gen_upstream_block(&mut out, &zone, host),
+        Some(pool_id) => {
+            if !input.upstream_pools.iter().any(|p| p.id == pool_id) {
+                anyhow::bail!(
+                    "host #{} references upstream pool #{pool_id}, which does not exist",
+                    host.id
+                );
+            }
+            let _ = writeln!(
+                out,
+                "# upstream: shared pool {} ({UPSTREAM_POOLS_FILE})",
+                UpstreamPool::zone(pool_id)
+            );
+        }
     }
+    out.push('\n');
 
     if https {
         if host.force_ssl {
@@ -1304,15 +1312,7 @@ fn gen_host(
             // Force SSL off: :80 serves the site over plain HTTP alongside the
             // :443 server below. Both carry the same status_zone; Angie
             // aggregates the two servers' metrics into it (verified on 1.11.8).
-            gen_http_server(
-                &mut out,
-                &zone,
-                &server_names,
-                ipv6,
-                host,
-                input,
-                forward_scheme,
-            )?;
+            gen_http_server(&mut out, &zone, &server_names, ipv6, host, input)?;
         }
         out.push('\n');
 
@@ -1368,7 +1368,7 @@ fn gen_host(
                 "    add_header Alt-Svc 'h3=\":443\"; ma=86400' always;"
             );
         }
-        host_features(&mut out, host, input, /* tls */ true, forward_scheme)?;
+        host_features(&mut out, host, input, /* tls */ true)?;
         let _ = writeln!(out, "}}");
     } else {
         // No (ready) certificate: HTTP-only, and the force-ssl redirect is
@@ -1376,15 +1376,7 @@ fn gen_host(
         // render would send visitors into a TLS error (PLAN.md §4
         // first-issuance window). The redirect returns on its own once the
         // certificate goes ready.
-        gen_http_server(
-            &mut out,
-            &zone,
-            &server_names,
-            ipv6,
-            host,
-            input,
-            forward_scheme,
-        )?;
+        gen_http_server(&mut out, &zone, &server_names, ipv6, host, input)?;
     }
 
     Ok((filename, out))
@@ -1400,7 +1392,6 @@ fn gen_http_server(
     ipv6: bool,
     host: &ProxyHost,
     input: &GeneratorInput,
-    forward_scheme: Scheme,
 ) -> anyhow::Result<()> {
     let _ = writeln!(out, "server {{");
     let _ = writeln!(out, "    listen 80;");
@@ -1409,19 +1400,19 @@ fn gen_http_server(
     }
     let _ = writeln!(out, "    server_name {server_names};");
     let _ = writeln!(out, "    status_zone {zone};");
-    host_features(out, host, input, /* tls */ false, forward_scheme)?;
+    host_features(out, host, input, /* tls */ false)?;
     let _ = writeln!(out, "}}");
     Ok(())
 }
 
 /// Body shared between the HTTP-only and HTTPS server blocks: HSTS, shared
-/// snippets, the main `location /`, custom locations, and the advanced snippet.
+/// snippets, the request headers, the main `location /`, custom locations, and
+/// the advanced snippet.
 fn host_features(
     out: &mut String,
     host: &ProxyHost,
     input: &GeneratorInput,
     tls: bool,
-    forward_scheme: Scheme,
 ) -> anyhow::Result<()> {
     // Country access policy: reject early (before anything else in the server).
     // The ACME http-01 challenge is unaffected — the ACME module answers it at
@@ -1510,12 +1501,17 @@ fn host_features(
     // Proxy fine-tuning (body size, timeouts, buffering) at server scope.
     emit_proxy_tuning(out, host);
 
-    // Shared proxy request-header policy belongs at server scope. Locations
-    // inherit these directives unless they explicitly set their own.
-    if host.websockets_upgrade {
-        let _ = writeln!(out, "    proxy_http_version 1.1;");
+    // Request headers for the upstream: one set per host, written once at
+    // server scope and inherited by every proxy location below — the same
+    // "all at one scope" rule the response headers follow above, and for the
+    // same reason. The locations that do NOT inherit it are the ones that
+    // declare headers of their own: the forward-auth verify location (its own
+    // set, on purpose) and a custom location whose snippet sets some.
+    let headers = proxy_request_headers(host, input);
+    let scope = header_scope(host);
+    if scope == HeaderScope::Server {
+        emit_proxy_headers(out, &headers, "    ");
     }
-    emit_request_headers(out, input, host, "    ");
 
     // Custom error pages (server scope): proxy_intercept_errors + error_page +
     // named error locations. Not reachable for a maintenance host (that path
@@ -1532,11 +1528,11 @@ fn host_features(
     // location/proxy_pass) and MUST be included inside this location, next to
     // proxy_pass — so it is emitted here rather than at server scope.
     let _ = writeln!(out, "    location / {{");
-    if host.forward_auth.active() && !host.forward_auth.copy_headers.is_empty() {
-        emit_request_headers(out, input, host, "        ");
-    }
     emit_auth_request(out, host, "        ");
-    proxy_body(out, forward_scheme, &host_upstream_ref(host));
+    proxy_body(out, host.forward_scheme, &host_upstream_ref(host), host);
+    if scope == HeaderScope::Location {
+        emit_proxy_headers(out, &headers, "        ");
+    }
     if host.cache_assets {
         let p = snippet_path(&input.snippets_dir, "cache-assets.conf")?;
         let _ = writeln!(out, "        include {p};");
@@ -1552,11 +1548,19 @@ fn host_features(
             // `break` = stop rewrite processing and use the rewritten URI.
             let _ = writeln!(out, "        rewrite ^ {rewrite} break;");
         }
-        if host.forward_auth.active() && !host.forward_auth.copy_headers.is_empty() {
-            emit_request_headers(out, input, host, "        ");
-        }
         emit_auth_request(out, host, "        ");
-        proxy_body(out, loc.forward_scheme, &location_upstream_ref(loc));
+        proxy_body(out, loc.forward_scheme, &location_upstream_ref(loc), host);
+        // A snippet that sets request headers makes this location declare its
+        // own, which cuts it off from the server's: write the shared set here
+        // too, so the snippet adds to it as it always has instead of replacing
+        // it.
+        let declares_own = loc
+            .snippet
+            .as_deref()
+            .is_some_and(snippet_declares_proxy_headers);
+        if scope == HeaderScope::Location || declares_own {
+            emit_proxy_headers(out, &headers, "        ");
+        }
         // Per-location snippet (validated + gated upstream; re-linted on output).
         if let Some(snip) = &loc.snippet {
             emit_snippet(out, snip, "        ");
@@ -1732,12 +1736,14 @@ fn gen_dead(dh: &DeadHost, cert: Option<&Certificate>, input: &GeneratorInput) -
 
 /// The upstream reference used by the main `location /` proxy_pass.
 ///
-/// The main location always proxies to the named `upstream host_<id>` block
-/// (which carries the metrics zone). The scheme comes from `forward_scheme`.
+/// The main location always proxies to a named `upstream` block (which carries
+/// the metrics zone): the host's own `host_<id>`, or the shared `pool_<id>`
+/// when it references one. The scheme comes from `forward_scheme`.
 fn host_upstream_ref(host: &ProxyHost) -> String {
-    host.upstream_pool_id
-        .map(|id| format!("shared_pool_{id}"))
-        .unwrap_or_else(|| format!("host_{}", host.id))
+    match host.upstream_pool_id {
+        Some(pool_id) => UpstreamPool::zone(pool_id),
+        None => format!("host_{}", host.id),
+    }
 }
 
 /// Custom locations proxy directly to `host:port` rather than a named upstream
@@ -1747,10 +1753,158 @@ fn location_upstream_ref(loc: &CustomLocation) -> String {
     format!("{}:{}", loc.forward_host, loc.forward_port)
 }
 
-/// Emit proxy_pass into an open `location` block. Common proxy headers are
-/// inherited from the enclosing server block.
-fn proxy_body(out: &mut String, scheme: Scheme, target: &str) {
+/// Emit `proxy_pass` into an open `location` block. `target` is either a named
+/// upstream (`host_<id>`, `pool_<id>`) or `host:port`. The request headers are
+/// not here: they are the host's shared set (see [`proxy_request_headers`]).
+fn proxy_body(out: &mut String, scheme: Scheme, target: &str, host: &ProxyHost) {
     let _ = writeln!(out, "        proxy_pass {}://{target};", scheme.as_str());
+    // WebSocket upgrade needs HTTP/1.1 to the upstream; the Upgrade/Connection
+    // headers that go with it are part of the shared header set.
+    if host.websockets_upgrade {
+        let _ = writeln!(out, "        proxy_http_version 1.1;");
+    }
+}
+
+// --------------------------------------------------------- request headers
+
+/// One `proxy_set_header` line: the header's name, and its value exactly as it
+/// is written in the config (a bare variable, or an already-quoted literal).
+struct ProxyHeader {
+    name: String,
+    value: String,
+}
+
+/// Every header a host sets on the request it forwards upstream, as ONE list:
+/// the standard proxy headers, then whatever the host's features add, then the
+/// operator's own custom request headers.
+///
+/// One list, because Angie inherits `proxy_set_header` all-or-nothing: a level
+/// that declares any of its own gets none from the level above. Headers
+/// scattered over several places silently knock each other out — a config that
+/// still passes `angie -t`. So they are gathered here and written in one place
+/// per host (see [`HeaderScope`]).
+///
+/// A later header REPLACES an earlier one of the same name rather than being
+/// added next to it: Angie sends every `proxy_set_header` it is given, so two
+/// lines for one name put the header on the wire twice. That is how a custom
+/// header overrides a standard one — give it the standard name; an empty value
+/// then drops the header from the upstream request altogether.
+fn proxy_request_headers(host: &ProxyHost, input: &GeneratorInput) -> Vec<ProxyHeader> {
+    let mut headers: Vec<ProxyHeader> = Vec::new();
+    let mut set = |name: &str, value: String| {
+        headers.retain(|h| !h.name.eq_ignore_ascii_case(name));
+        headers.push(ProxyHeader {
+            name: name.to_string(),
+            value,
+        });
+    };
+
+    set("Host", "$host".into());
+    set("X-Forwarded-For", "$proxy_add_x_forwarded_for".into());
+    // X-Forwarded-Proto: when we trust an inbound proxy we forward its value
+    // (`$scheme` reflects the connection to *us*; to honour an upstream L7 LB we
+    // pass the incoming header through). Otherwise we assert our own scheme.
+    let proto = if host.trust_forwarded_proto {
+        "$http_x_forwarded_proto"
+    } else {
+        "$scheme"
+    };
+    set("X-Forwarded-Proto", proto.into());
+
+    // WebSocket upgrade support (with `proxy_http_version 1.1` in the location).
+    if host.websockets_upgrade {
+        set("Upgrade", "$http_upgrade".into());
+        set("Connection", "$connection_upgrade".into());
+    }
+
+    // When the host's access list has basic auth and "pass auth to upstream" is
+    // OFF, strip the Authorization header so the upstream never sees the gate's
+    // credentials.
+    if let Some(list) = host
+        .access_list_id
+        .and_then(|id| input.access_lists.iter().find(|l| l.id == id))
+    {
+        if !list.pass_auth && !list.users.is_empty() {
+            set("Authorization", "\"\"".into());
+        }
+    }
+
+    // Forward auth: identity headers captured from the auth response by each
+    // location's `auth_request_set` (see `emit_auth_request`).
+    if host.forward_auth.active() {
+        for (i, header) in host.forward_auth.copy_headers.iter().enumerate() {
+            set(header, forward_auth_var(i));
+        }
+    }
+
+    // The operator's custom request headers come last and win: one named like a
+    // header above takes its place. They are kept exactly as entered otherwise
+    // — including a name entered twice, which is theirs to send twice.
+    let custom: Vec<&CustomHeader> = header_iter(host, HeaderDirection::Request).collect();
+    headers.retain(|h| !custom.iter().any(|c| c.name.eq_ignore_ascii_case(&h.name)));
+    headers.extend(custom.into_iter().map(|c| ProxyHeader {
+        name: c.name.clone(),
+        value: format!("\"{}\"", c.value),
+    }));
+
+    headers
+}
+
+fn emit_proxy_headers(out: &mut String, headers: &[ProxyHeader], indent: &str) {
+    for h in headers {
+        let _ = writeln!(out, "{indent}proxy_set_header {} {};", h.name, h.value);
+    }
+}
+
+/// Where a host's `proxy_set_header` lines are written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderScope {
+    /// Once, at server scope: every proxy location inherits the same set
+    /// instead of repeating it.
+    Server,
+    /// Inside each proxy location, with nothing at server scope — for a host
+    /// whose raw server-level snippet would be changed by a shared set.
+    Location,
+}
+
+/// Decide where a host's request headers go.
+///
+/// Server scope, unless the host's advanced snippet could mean something
+/// different with a header set next to it. Such a snippet is inserted verbatim
+/// at server scope, and three things in it interact with headers there:
+///
+/// - its own `proxy_set_header` — on the same level it would merge with ours,
+///   where it has so far been inert (every location declared its own);
+/// - a `location` — a raw proxy location with no headers of its own would start
+///   inheriting ours, `Host $host` instead of Angie's default included;
+/// - an `include` — whatever it pulls in could be either of the above.
+///
+/// Config is re-applied without review when the generator changes under an
+/// unchanged database, so a snippet must keep meaning what it meant. Those
+/// hosts keep the per-location layout, where nothing a snippet declares is
+/// touched. The match is on the bare word, comments included: a false positive
+/// only costs a few repeated lines, a false negative changes what a site sends.
+fn header_scope(host: &ProxyHost) -> HeaderScope {
+    match &host.advanced_snippet {
+        Some(snippet) if mentions(snippet, &["proxy_set_header", "location", "include"]) => {
+            HeaderScope::Location
+        }
+        _ => HeaderScope::Server,
+    }
+}
+
+/// Whether a custom location's snippet makes the location declare request
+/// headers of its own — directly, or through an `include`. Such a location
+/// inherits nothing from the server, so the shared set has to be written into
+/// it as well, or its upstream would lose every header but the snippet's.
+fn snippet_declares_proxy_headers(snippet: &str) -> bool {
+    mentions(snippet, &["proxy_set_header", "include"])
+}
+
+/// Case-insensitive "does this snippet contain any of these words".
+fn mentions(snippet: &str, words: &[&str]) -> bool {
+    let lower = snippet.to_ascii_lowercase();
+    words.iter().any(|w| lower.contains(w))
 }
 
 /// Insert a validated snippet verbatim, re-indented so the output stays tidy.
