@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -90,6 +90,28 @@ describe('redirection hosts page', () => {
     expect(
       await screen.findByText(/No redirection hosts yet/i),
     ).toBeInTheDocument()
+  })
+
+  it('selects and disables a redirection host in bulk', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/redirect-hosts') return Promise.resolve(jsonResponse({ redirect_hosts: [sampleRedirect] }))
+      if (input === '/api/redirect-hosts/1/disable') return Promise.resolve(jsonResponse({ ok: true, enabled: false }))
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <RedirectHostsPage />
+      </QueryClientProvider>,
+    )
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select old.example.com' }))
+    await user.click(screen.getByRole('button', { name: 'Disable' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/redirect-hosts/1/disable',
+      expect.objectContaining({ method: 'POST' }),
+    ))
   })
 })
 

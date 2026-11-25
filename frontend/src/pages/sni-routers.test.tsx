@@ -101,6 +101,35 @@ describe('SNI routers page', () => {
     expect(await screen.findByText(/No SNI routers yet/i)).toBeInTheDocument()
   })
 
+  it('selects and disables an SNI router in bulk', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/sni-routers') return Promise.resolve(jsonResponse({ sni_routers: [sampleRouter] }))
+      if (input === '/api/dashboard') {
+        return Promise.resolve(jsonResponse({
+          angie: { up: false, version: null, generation: null, load_time: null, connections: null },
+          hosts: [],
+          certificates: [],
+          streams: { configured: 1, enabled: 1, context_active: true },
+          drift: { detected: false, foreign_files: [] },
+          pending_changes: false,
+          alerts: [],
+        }))
+      }
+      if (input === '/api/sni-routers/1/disable') return Promise.resolve(jsonResponse({ ok: true, enabled: false }))
+      return Promise.reject(new Error(`unexpected fetch ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select edge' }))
+    await user.click(screen.getByRole('button', { name: 'Disable' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sni-routers/1/disable',
+      expect.objectContaining({ method: 'POST' }),
+    ))
+  })
+
   it('preserves the disabled state when editing a router', async () => {
     const user = userEvent.setup()
     const disabled: SniRouter = { ...sampleRouter, enabled: false }
