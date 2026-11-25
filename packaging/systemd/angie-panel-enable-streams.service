@@ -22,6 +22,8 @@ Description=Angie Panel root helper — enable the Angie stream {} context (one-
 Type=oneshot
 User=root
 ExecStart=/usr/bin/angie-panel helper enable-streams
+# Angie config tests may open many included files on large installations.
+LimitNOFILE=524288
 
 # No [Install] section on purpose: started on demand only — by the panel over
 # D-Bus, or manually by root (systemctl start angie-panel-enable-streams.service).

@@ -25,6 +25,8 @@ Description=Angie Panel root helper — apply staged Angie configuration
 Type=oneshot
 User=root
 ExecStart=/usr/bin/angie-panel helper apply
+# Angie config tests may open many included files on large installations.
+LimitNOFILE=524288
 
 # No [Install] section on purpose: this unit must never be enabled or run
 # at boot. It is started on demand — by the panel over D-Bus, or manually

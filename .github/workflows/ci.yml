@@ -177,6 +177,15 @@ jobs:
       - name: Stamped install.sh reaches the download, unstamped refuses
         run: ./packaging/test-install-version.sh
 
+  rpm-install:
+    name: RPM install (Fedora)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build and install RPM in Fedora
+        run: ./packaging/test-rpm-install.sh
+
   acme-e2e:
     name: ACME e2e (real Angie + pebble)
     runs-on: ubuntu-latest
