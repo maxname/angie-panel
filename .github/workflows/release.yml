@@ -1,11 +1,11 @@
-# Release: on v* tags, build the frontend, cross-compile static musl binaries for
-# arm64 + x86_64 with cargo-zigbuild, package them as .deb and .rpm, and publish
-# a GitHub release with both package formats, install.sh and SHA256 checksums.
+# Release: v* tags publish stable releases. Manual runs build the selected branch
+# and publish an isolated draft pre-release, without touching the Homebrew tap.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,11 +18,33 @@ jobs:
   frontend:
     name: Frontend build
     runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.package-version.outputs.value }}
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+
+      - name: Read package version
+        id: package-version
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          version=$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && /^version = / {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' backend/Cargo.toml)
+          if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "::error::Cargo version '$version' is not a valid RPM release version"
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
 
       # pnpm version is read from the "packageManager" field of frontend/package.json.
       - uses: pnpm/action-setup@v6
@@ -50,6 +72,12 @@ jobs:
   build-deb:
     name: Build .deb (${{ matrix.target }})
     needs: frontend
+    env:
+      PACKAGE_VERSION: ${{ needs.frontend.outputs.package_version }}
+    outputs:
+      package_version: ${{ needs.frontend.outputs.package_version }}
+      release_tag: ${{ steps.validate-ref.outputs.release_tag }}
+      is_test_release: ${{ steps.validate-ref.outputs.is_test_release }}
     strategy:
       fail-fast: false
       matrix:
@@ -64,26 +92,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Validate release tag and package version
+      - name: Validate release ref
+        id: validate-ref
         run: |
-          version=$(awk '
-            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
-            /^\[/ { in_workspace_package = 0 }
-            in_workspace_package && /^version = / {
-              gsub(/"/, "", $3)
-              print $3
-              exit
-            }
-          ' backend/Cargo.toml)
-          if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
-            echo "::error::Cargo version '$version' is not a valid RPM release version"
-            exit 1
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            release_tag="test-v${PACKAGE_VERSION}-${GITHUB_SHA:0:12}-${GITHUB_RUN_ID}"
+            is_test_release=true
+          else
+            if [[ "$GITHUB_REF_NAME" != "v$PACKAGE_VERSION" ]]; then
+              echo "::error::Release tag '$GITHUB_REF_NAME' must match Cargo version v$PACKAGE_VERSION"
+              exit 1
+            fi
+            release_tag="$GITHUB_REF_NAME"
+            is_test_release=false
           fi
-          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "::error::Release tag '$GITHUB_REF_NAME' must match Cargo version v$version"
-            exit 1
-          fi
-          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "is_test_release=$is_test_release" >> "$GITHUB_OUTPUT"
 
       # rust-embed picks up ../frontend/dist at compile time — the release binary
       # must embed the real frontend build, so this comes before any cargo step.
@@ -228,10 +253,12 @@ jobs:
   # D-Bus by nature).
   build-cli:
     name: Build apctl (${{ matrix.target }})
+    needs: frontend
     runs-on: ${{ matrix.os }}
     # Job-level so the macOS signing step's `if:` can test whether a certificate
     # is configured (secrets cannot be referenced directly in `if:`).
     env:
+      PACKAGE_VERSION: ${{ needs.frontend.outputs.package_version }}
       APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
       APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -382,7 +409,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="$PACKAGE_VERSION"
           name="apctl-${version}-${{ matrix.target }}"
           mkdir -p "staging/$name"
           cp "backend/target/${{ matrix.target }}/release/apctl${{ matrix.ext }}" "staging/$name/"
@@ -407,9 +434,12 @@ jobs:
     name: Publish GitHub release
     needs: [build-deb, build-cli]
     runs-on: ubuntu-latest
-    # Job-level env so the sign step's `if:` can read whether a key is set
-    # (secrets cannot be referenced directly in `if:` conditions).
+    # Job-level env lets the signing step test whether a key is configured;
+    # secrets cannot be referenced directly in `if:` conditions.
     env:
+      PACKAGE_VERSION: ${{ needs.build-deb.outputs.package_version }}
+      RELEASE_TAG: ${{ needs.build-deb.outputs.release_tag }}
+      IS_TEST_RELEASE: ${{ needs.build-deb.outputs.is_test_release }}
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
@@ -430,22 +460,25 @@ jobs:
           # the PANEL_VERSION assignment and nothing else: the placeholder also
           # sits in the installer's own check for an unstamped copy, and
           # replacing it there shipped installers that always refused to run.
-          version="${GITHUB_REF_NAME#v}"
-          ./scripts/stamp-install-sh.sh "$version" dist/install.sh
-          # Published assets are signed and not replaced afterwards, so check
-          # the file itself rather than take the script's word: the assignment
-          # must carry this version, and none may still hold the placeholder.
-          # (Elsewhere in the file the placeholder is expected to remain.)
-          if ! grep -qxF "PANEL_VERSION=\"$version\"" dist/install.sh \
-             || grep -q '^PANEL_VERSION=.*__PANEL_VERSION__' dist/install.sh; then
-            echo "install.sh version substitution failed" >&2
-            exit 1
+          if [[ "$IS_TEST_RELEASE" == "true" ]]; then
+            echo "Skipping install.sh in the isolated test pre-release"
+          else
+            ./scripts/stamp-install-sh.sh "$PACKAGE_VERSION" dist/install.sh
+            # Published assets are signed and not replaced afterwards, so check
+            # the file itself rather than take the script's word.
+            if ! grep -qxF "PANEL_VERSION=\"$PACKAGE_VERSION\"" dist/install.sh \
+               || grep -q '^PANEL_VERSION=.*__PANEL_VERSION__' dist/install.sh; then
+              echo "install.sh version substitution failed" >&2
+              exit 1
+            fi
           fi
           cd dist
-          # nullglob: a CLI target whose runner was unavailable must leave the
-          # checksum list short, not insert a literal "apctl-*.zip" entry.
           shopt -s nullglob
-          sha256sum -- *.deb *.rpm apctl-*.tar.gz apctl-*.zip install.sh > SHA256SUMS.txt
+          assets=( *.deb *.rpm apctl-*.tar.gz apctl-*.zip )
+          if [[ -f install.sh ]]; then
+            assets+=( install.sh )
+          fi
+          sha256sum -- "${assets[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # GPG-sign the artifacts (detached ASCII .asc for each .deb, install.sh,
@@ -459,8 +492,12 @@ jobs:
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
           shopt -s nullglob
-          for f in dist/*.deb dist/*.rpm dist/apctl-*.tar.gz dist/apctl-*.zip \
-                   dist/install.sh dist/SHA256SUMS.txt; do
+          assets=( dist/*.deb dist/*.rpm dist/apctl-*.tar.gz dist/apctl-*.zip \
+                   dist/SHA256SUMS.txt )
+          if [[ -f dist/install.sh ]]; then
+            assets+=( dist/install.sh )
+          fi
+          for f in "${assets[@]}"; do
             gpg --batch --yes --pinentry-mode loopback \
                 --passphrase "${GPG_PASSPHRASE:-}" \
                 --local-user "$keyid" \
@@ -472,6 +509,11 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ env.IS_TEST_RELEASE == 'true' && format('Test build {0}', env.RELEASE_TAG) || env.RELEASE_TAG }}
+          draft: ${{ env.IS_TEST_RELEASE == 'true' }}
+          prerelease: ${{ env.IS_TEST_RELEASE == 'true' }}
           generate_release_notes: true
 
   # Update the Homebrew tap so `brew install maxname/tap/apctl` gets this
@@ -481,6 +523,7 @@ jobs:
   update-tap:
     name: Update Homebrew tap
     needs: release
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
