@@ -42,9 +42,9 @@ systemctl status angie-panel-apply.service
   либо порт 53 занят локальным резолвером (AdGuard/dnsmasq — типично на R4S).
 - **Часы сбиты** (у R4S нет RTC) — ACME/TLS падают загадочно. Проверьте:
   `timedatectl show -p NTPSynchronized`.
-- **resolver** не настроен — `acme_client` не может резолвить адрес CA. По умолчанию панель
-  использует `127.0.0.53`; если локальный DNS фильтрует запросы или недоступен, задайте
-  resolver override в Настройках.
+- **resolver** не настроен — `acme_client` не может резолвить адрес CA. Без override панель
+  читает nameserver из `/etc/resolv.conf` (там может быть `127.0.0.53` у systemd-resolved).
+  Если этот DNS фильтрует запросы или недоступен, задайте resolver override в Настройках.
 
 ### HTTPS не включается после выпуска
 
@@ -83,8 +83,8 @@ sudo angie-panel reset-password           # новый setup-токен
   `packaging/README.md`).
 - **Cert not issuing:** check the status pill (`/status/http/acme_clients/`). HTTP-01 → domain
   must point here + port 80 reachable (mind IPv6/AAAA); DNS-01 → NS delegation +
-  reachable/free UDP/53; clock must be NTP-synced (R4S has no RTC); a `resolver` must be
-  configured.
+  reachable/free UDP/53; clock must be NTP-synced (R4S has no RTC); the panel reads resolver
+  nameservers from `/etc/resolv.conf` unless Settings overrides them.
 - **HTTPS not activating after issuance:** normally auto-activates within ~30s (reconciler).
   If not, you have pending edits (apply them) or drift (a managed file was hand-edited — the
   dashboard flags it; re-apply to restore).

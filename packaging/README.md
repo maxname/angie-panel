@@ -18,6 +18,7 @@ Debian 12/13; RPM packages target x86_64 and aarch64 RPM-based distributions.
 | `rpm/angie-panel.spec.in` | RPM spec template | Release workflow substitutes the version, stages build assets, and builds `.rpm` packages with `rpmbuild`. |
 | `install.sh` | run by the user | End-user installer: preflight checks, Angie apt repo, both packages, safe bind-address selection, setup token output. Messages are in Russian (target audience). |
 | `test-install-version.sh` | not shipped (CI) | Stamps a copy of `install.sh` the way a release does (`scripts/stamp-install-sh.sh`) and runs it in a Debian container: the stamped copy must reach the package download, the unstamped one must refuse. Needs Docker. |
+| `test-rpm-install.sh` | not shipped (release CI) | Installs the built RPM in Fedora and checks the package payload and scriptlets. Needs Docker; skips dependency resolution for Angie, which is hosted separately. |
 
 Package dependencies (set manually in `Cargo.toml` / cargo-deb metadata —
 auto-detection is empty for a static musl binary):

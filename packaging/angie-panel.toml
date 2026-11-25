@@ -67,7 +67,7 @@ status_api_url = "http://127.0.0.1:8100/status"
 # from it (include rewritten to staging) for pre-flight validation.
 angie_conf = "/etc/angie/angie.conf"
 
-# Directory of read-only shared snippet files (block-exploits.conf, map.conf,
+# Directory of read-only shared snippet files (block-exploits.conf,
 # cache-assets.conf) shipped with the package and included by absolute path
 # from generated config. Package-owned, so upgrades refresh them.
 snippets_dir = "/usr/share/angie-panel/snippets"

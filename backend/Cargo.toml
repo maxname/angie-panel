@@ -98,7 +98,6 @@ assets = [
     ["../packaging/systemd/angie-panel-enable-streams.service", "lib/systemd/system/", "644"],
     ["../packaging/polkit/10-angie-panel.rules", "usr/share/polkit-1/rules.d/", "644"],
     ["../packaging/snippets/block-exploits.conf", "usr/share/angie-panel/snippets/", "644"],
-    ["../packaging/snippets/map.conf", "usr/share/angie-panel/snippets/", "644"],
     ["../packaging/snippets/cache-assets.conf", "usr/share/angie-panel/snippets/", "644"],
     # Country -> CIDR dataset for geo blocking. The committed file is a small
     # dev fixture; release.yml runs scripts/build-geoip-data.sh to replace it

@@ -226,14 +226,18 @@ fn golden_00_panel() {
 }
 
 #[test]
-fn golden_00_map() {
+fn obsolete_request_maps_are_not_generated() {
     let files = generate(&input(
         vec![],
         vec![],
         settings(DefaultSite::NotFound, false),
     ))
     .unwrap();
-    assert_golden("00-map.conf", &files["00-map.conf"]);
+
+    assert!(!files.contains_key("00-map.conf"));
+    assert!(files
+        .values()
+        .all(|body| !body.contains("$block_request") && !body.contains("$limit_bots")));
 }
 
 #[test]

@@ -22,6 +22,8 @@ Group=angie-panel
 ExecStart=/usr/bin/angie-panel serve
 Restart=on-failure
 RestartSec=2
+# Match the helper units' headroom: `angie -t` can exceed the default limit
+# while opening ACME account keys and certificates for 500+ domains.
 LimitNOFILE=524288
 
 # --- Hardening ---------------------------------------------------------------

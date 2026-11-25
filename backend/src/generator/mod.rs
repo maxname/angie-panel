@@ -44,7 +44,7 @@ pub const STREAM_PREFIX: &str = "stream.d/";
 pub struct GeneratorInput {
     pub hosts: Vec<ProxyHost>,
     pub settings: EffectiveSettings,
-    /// Read-only shared snippet files (block-exploits.conf, map.conf,
+    /// Read-only shared snippet files (block-exploits.conf,
     /// cache-assets.conf).
     pub snippets_dir: std::path::PathBuf,
     /// Where the status API server listens (127.0.0.1:<port>).
@@ -178,15 +178,9 @@ pub type FileSet = BTreeMap<String, String>;
 /// `cache_assets`. Owned by Angie's workers; created by the root helper.
 const CACHE_ASSETS_PATH: &str = "/var/cache/angie-panel-assets";
 
-fn gen_map(input: &GeneratorInput) -> anyhow::Result<String> {
-    let path = snippet_path(&input.snippets_dir, "map.conf")?;
-    Ok(format!("include {path};\n"))
-}
-
 pub fn generate(input: &GeneratorInput) -> anyhow::Result<FileSet> {
     let mut files = FileSet::new();
 
-    files.insert("00-map.conf".to_string(), gen_map(input)?);
     files.insert("00-panel.conf".to_string(), gen_panel(input));
     // Global IP blocklist (http-scope `deny`). Emitted early so the deny rules
     // are inherited by every server that has no access rules of its own.
