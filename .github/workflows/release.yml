@@ -1,14 +1,14 @@
-# Release: on v* tags, build the frontend, cross-compile static musl binaries for
-# arm64 + x86_64 with cargo-zigbuild, package them as .deb and .rpm, and publish
-# a GitHub release with both package formats, install.sh and SHA256 checksums.
+# Tagged pushes publish release assets. Manual dispatch builds and stages the
+# same assets for inspection, but never signs, publishes, or updates the tap.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,7 +26,7 @@ jobs:
         id: version
         run: |
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "::error::Release tag $GITHUB_REF_NAME must match Cargo version v$version"
             exit 1
           fi
@@ -226,9 +226,8 @@ jobs:
     name: Build apctl (${{ matrix.target }})
     needs: validate-version
     runs-on: ${{ matrix.os }}
-    # Job-level so the macOS signing step's `if:` can test whether a certificate
-    # is configured (secrets cannot be referenced directly in `if:`).
     env:
+      PACKAGE_VERSION: ${{ needs.validate-version.outputs.version }}
       APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
       APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -379,7 +378,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="$PACKAGE_VERSION"
           name="apctl-${version}-${{ matrix.target }}"
           mkdir -p "staging/$name"
           cp "backend/target/${{ matrix.target }}/release/apctl${{ matrix.ext }}" "staging/$name/"
@@ -400,15 +399,14 @@ jobs:
             apctl-*.zip
           if-no-files-found: error
 
-  release:
-    name: Publish GitHub release
-    needs: [build-deb, build-cli]
+  release-assets:
+    name: Prepare release assets
+    needs: [build-deb, build-cli, validate-version]
     runs-on: ubuntu-latest
-    # Job-level env so the sign step's `if:` can read whether a key is set
-    # (secrets cannot be referenced directly in `if:` conditions).
+    permissions:
+      contents: read
     env:
-      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      PACKAGE_VERSION: ${{ needs.validate-version.outputs.version }}
     steps:
       # Needed for packaging/install.sh.
       - uses: actions/checkout@v6
@@ -421,17 +419,16 @@ jobs:
 
       - name: Add install.sh and generate checksums
         run: |
-          # Pin the installer to this release's version so the documented
+          # Pin the installer to this package version so the documented
           # `releases/latest/download/install.sh` flow downloads the matching
-          # .deb (GITHUB_REF_NAME is the tag, e.g. v0.1.0). The script rewrites
+          # .deb. The script rewrites
           # the PANEL_VERSION assignment and nothing else: the placeholder also
           # sits in the installer's own check for an unstamped copy, and
           # replacing it there shipped installers that always refused to run.
-          version="${GITHUB_REF_NAME#v}"
+          version="$PACKAGE_VERSION"
           ./scripts/stamp-install-sh.sh "$version" dist/install.sh
-          # Published assets are signed and not replaced afterwards, so check
-          # the file itself rather than take the script's word: the assignment
-          # must carry this version, and none may still hold the placeholder.
+          # Check the file itself rather than take the script's word: the
+          # assignment must carry this version, and none may hold the placeholder.
           # (Elsewhere in the file the placeholder is expected to remain.)
           if ! grep -qxF "PANEL_VERSION=\"$version\"" dist/install.sh \
              || grep -q '^PANEL_VERSION=.*__PANEL_VERSION__' dist/install.sh; then
@@ -445,11 +442,31 @@ jobs:
           sha256sum -- *.deb *.rpm apctl-*.tar.gz apctl-*.zip install.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      # GPG-sign the artifacts (detached ASCII .asc for each .deb, install.sh,
-      # and SHA256SUMS.txt) when a signing key is configured. Gated on the
-      # secret so forks / unconfigured repos still cut an (unsigned) release
-      # instead of failing. Set repo secrets GPG_PRIVATE_KEY (ASCII-armored)
-      # and optionally GPG_PASSPHRASE to enable authenticated releases.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs: release-assets
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: dist
+
+      # GPG-sign artifacts when a key is configured. Forks and unconfigured
+      # repositories still publish unsigned releases. Set GPG_PRIVATE_KEY
+      # (ASCII-armored) and optionally GPG_PASSPHRASE to enable signing.
       - name: GPG-sign artifacts
         if: ${{ env.GPG_PRIVATE_KEY != '' }}
         run: |
@@ -471,13 +488,11 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-  # Update the Homebrew tap so `brew install maxname/tap/apctl` gets this
-  # version. Separate repo, so it needs a token with contents:write there —
-  # HOMEBREW_TAP_TOKEN (a fine-grained PAT). Gated on it like the signing steps:
-  # without the token the release still publishes, the tap just isn't bumped.
+  # Update the Homebrew tap only after publishing a tagged release.
   update-tap:
     name: Update Homebrew tap
-    needs: release
+    needs: publish-release
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
