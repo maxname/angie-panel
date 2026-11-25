@@ -12,9 +12,9 @@ echo "==> Detecting operating system environment..."
 
 # Identify OS
 if [ -f /etc/os-release ]; then
+    # shellcheck source=/etc/os-release
     . /etc/os-release
     OS=$ID
-    VERSION_ID=$VERSION_ID
 else
     echo "Error: Unsupported OS or /etc/os-release not found."
     exit 1
