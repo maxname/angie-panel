@@ -230,6 +230,8 @@ jobs:
             echo "::error::RPM spec version substitution failed"
             exit 1
           fi
+          # Let --target choose the package arch; BuildArch: %{_target_cpu}
+          # conflicts with cross-architecture builds on the Ubuntu RPM toolchain.
           rpmbuild --define "_topdir $topdir" --target "${RPM_ARCH}-redhat-linux" \
             -bb "$topdir/SPECS/angie-panel.spec"
           find "$topdir/RPMS" -type f -name '*.rpm' -exec cp {} . \;
