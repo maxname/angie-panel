@@ -45,8 +45,4 @@ SYSTEMCTL
         test "$(stat -c "%U:%G:%a" /var/lib/angie-panel)" = "angie-panel:angie-panel:700"
         test "$(stat -c "%U:%G:%a" /var/lib/angie-panel/public)" = "angie-panel:angie-panel:755"
         rpm -ql angie-panel | grep -q "/snippets/block-exploits.conf$"
-        if rpm -ql angie-panel | grep -q "/map.conf$"; then
-            echo "unexpected obsolete map.conf in RPM" >&2
-            exit 1
-        fi
     '

@@ -259,14 +259,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Job-level so the macOS signing step's `if:` can test whether a certificate
     # is configured (secrets cannot be referenced directly in `if:`).
+    # Manual (workflow_dispatch) test builds get empty values: they build an
+    # arbitrary branch and must never carry the release signature, so the
+    # signing step is skipped exactly as it is when no certificate is set.
     env:
       PACKAGE_VERSION: ${{ needs.frontend.outputs.package_version }}
-      APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
-      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-      APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+      APPLE_CERT_P12_BASE64: ${{ github.event_name != 'workflow_dispatch' && secrets.APPLE_CERT_P12_BASE64 || '' }}
+      APPLE_CERT_PASSWORD: ${{ github.event_name != 'workflow_dispatch' && secrets.APPLE_CERT_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ github.event_name != 'workflow_dispatch' && secrets.APPLE_TEAM_ID || '' }}
+      APPLE_API_KEY_ID: ${{ github.event_name != 'workflow_dispatch' && secrets.APPLE_API_KEY_ID || '' }}
+      APPLE_API_ISSUER_ID: ${{ github.event_name != 'workflow_dispatch' && secrets.APPLE_API_ISSUER_ID || '' }}
+      APPLE_API_KEY_P8_BASE64: ${{ github.event_name != 'workflow_dispatch' && secrets.APPLE_API_KEY_P8_BASE64 || '' }}
     strategy:
       # One unavailable runner or toolchain must not sink the other five.
       fail-fast: false
@@ -438,12 +441,14 @@ jobs:
     runs-on: ubuntu-latest
     # Job-level env lets the signing step test whether a key is configured;
     # secrets cannot be referenced directly in `if:` conditions.
+    # The GPG key is withheld from manual (workflow_dispatch) test builds, so
+    # a draft built from an arbitrary branch is never signed as a release.
     env:
       PACKAGE_VERSION: ${{ needs.build-deb.outputs.package_version }}
       RELEASE_TAG: ${{ needs.build-deb.outputs.release_tag }}
       IS_TEST_RELEASE: ${{ needs.build-deb.outputs.is_test_release }}
-      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      GPG_PRIVATE_KEY: ${{ github.event_name != 'workflow_dispatch' && secrets.GPG_PRIVATE_KEY || '' }}
+      GPG_PASSPHRASE: ${{ github.event_name != 'workflow_dispatch' && secrets.GPG_PASSPHRASE || '' }}
     steps:
       # Needed for packaging/install.sh.
       - uses: actions/checkout@v6
