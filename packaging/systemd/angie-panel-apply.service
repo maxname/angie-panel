@@ -25,6 +25,9 @@ Description=Angie Panel root helper — apply staged Angie configuration
 Type=oneshot
 User=root
 ExecStart=/usr/bin/angie-panel helper apply
+# `angie -t` can open many certificate and ACME account-key file descriptors
+# on installations with hundreds of domains (observed with 500+ domains).
+LimitNOFILE=524288
 
 # No [Install] section on purpose: this unit must never be enabled or run
 # at boot. It is started on demand — by the panel over D-Bus, or manually

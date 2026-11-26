@@ -19,6 +19,18 @@
 sudo ./install.sh angie-panel_<версия>_arm64.deb
 ```
 
+На RPM-системах с настроенным репозиторием Angie скачайте подходящий RPM из релиза
+(`x86_64` или `aarch64`) и установите его через `dnf`:
+
+```sh
+sudo dnf install ./angie-panel-<версия>-1.<архитектура>.rpm
+```
+
+RPM-пакет создаёт пользователя и каталоги данных, устанавливает службу и включает её,
+но не запускает при первой установке. После настройки `/etc/angie-panel.toml` запустите
+`sudo systemctl start angie-panel` и прочитайте токен: `sudo cat /var/lib/angie-panel/setup-token`.
+Angie, D-Bus и polkit должны быть доступны из подключённых репозиториев.
+
 `install.sh` делает:
 
 1. **Префлайт** — архитектура, версия ОС (читает `ID`/`ID_LIKE` из `/etc/os-release`),
@@ -81,6 +93,7 @@ gpg --keyserver hkps://keys.openpgp.org --recv-keys 21773F03FDFC43ED
 gpg --fingerprint 21773F03FDFC43ED
 
 gpg --verify angie-panel_<версия>_arm64.deb.asc angie-panel_<версия>_arm64.deb
+gpg --verify angie-panel-<версия>-1.x86_64.rpm.asc angie-panel-<версия>-1.x86_64.rpm
 sha256sum -c SHA256SUMS.txt
 ```
 
@@ -108,6 +121,19 @@ sudo ./install.sh angie-panel_<version>_arm64.deb
 The installer runs preflight checks (arch, OS, NTP, free ports), sets up the official Angie
 repo, installs Angie + the panel, lets you pick a bind address (refusing the WAN interface
 without explicit confirmation), and prints the setup URL + one-time token.
+
+On RPM-based systems with the Angie repository configured, download the matching release
+RPM (`x86_64` or `aarch64`) and install it with:
+
+```sh
+sudo dnf install ./angie-panel-<version>-1.<arch>.rpm
+```
+
+The RPM creates the service account and data directories, installs and enables the service,
+but does not start it on a fresh install. After configuring `/etc/angie-panel.toml`, start it
+with `sudo systemctl start angie-panel` and read the setup token from
+`sudo cat /var/lib/angie-panel/setup-token`. Angie, D-Bus, and polkit must be available from
+configured repositories.
 
 ### First login
 
@@ -147,6 +173,7 @@ gpg --keyserver hkps://keys.openpgp.org --recv-keys 21773F03FDFC43ED
 gpg --fingerprint 21773F03FDFC43ED
 
 gpg --verify angie-panel_<version>_arm64.deb.asc angie-panel_<version>_arm64.deb
+gpg --verify angie-panel-<version>-1.x86_64.rpm.asc angie-panel-<version>-1.x86_64.rpm
 sha256sum -c SHA256SUMS.txt
 ```
 

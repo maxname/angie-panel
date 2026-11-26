@@ -271,7 +271,7 @@ pub async fn put_settings(
         if k == settings::KEY_DEFAULT_SITE_REDIRECT && !v.is_empty() {
             validate_redirect_url(v)?;
         }
-        // The resolver override is split on space/comma and emitted verbatim into
+        // The resolver override is split on space/comma and formatted for Angie in
         // `resolver <list> valid=300s ipv6=off;` — require each token be an IP so
         // it can't inject directives or a bogus address into the generated conf.
         if k == settings::KEY_RESOLVER_OVERRIDE && !v.trim().is_empty() {

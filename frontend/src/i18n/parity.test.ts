@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { en } from './en'
 import { ru } from './ru'
+import { zh } from './zh'
 import { pickLanguage } from './index'
 
 type Tree = { [key: string]: string | Tree }
@@ -19,8 +20,11 @@ describe('translation catalogues', () => {
   it('carry the same keys in both locales', () => {
     const inEn = new Set(keys(en as Tree))
     const inRu = new Set(keys(ru as Tree))
+    const inZh = new Set(keys(zh as Tree))
     expect([...inEn].filter((k) => !inRu.has(k))).toEqual([])
     expect([...inRu].filter((k) => !inEn.has(k))).toEqual([])
+    expect([...inEn].filter((k) => !inZh.has(k))).toEqual([])
+    expect([...inZh].filter((k) => !inEn.has(k))).toEqual([])
   })
 
   it('leave no value empty', () => {
@@ -35,7 +39,11 @@ describe('translation catalogues', () => {
           )
         return typeof value === 'string' && value.trim() === ''
       }).map((k) => `${locale}:${k}`)
-    expect([...empty(en as Tree, 'en'), ...empty(ru as Tree, 'ru')]).toEqual([])
+    expect([
+      ...empty(en as Tree, 'en'),
+      ...empty(ru as Tree, 'ru'),
+      ...empty(zh as Tree, 'zh'),
+    ]).toEqual([])
   })
 })
 
@@ -43,11 +51,13 @@ describe('pickLanguage', () => {
   it('honours a stored choice over the browser', () => {
     expect(pickLanguage('ru', ['en-US'])).toBe('ru')
     expect(pickLanguage('en', ['ru-RU'])).toBe('en')
+    expect(pickLanguage('zh', ['en-US'])).toBe('zh')
   })
 
   it('falls through to the browser when nothing is stored', () => {
     expect(pickLanguage(null, ['ru-RU', 'en-US'])).toBe('ru')
     expect(pickLanguage(null, ['en-GB'])).toBe('en')
+    expect(pickLanguage(null, ['zh-CN', 'en-US'])).toBe('zh')
   })
 
   it('ignores a stored language we no longer ship', () => {

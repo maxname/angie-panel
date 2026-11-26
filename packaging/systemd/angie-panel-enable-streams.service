@@ -22,6 +22,9 @@ Description=Angie Panel root helper — enable the Angie stream {} context (one-
 Type=oneshot
 User=root
 ExecStart=/usr/bin/angie-panel helper enable-streams
+# This helper also validates the full Angie config, which can open many
+# certificate and ACME account-key descriptors on installations with 500+ domains.
+LimitNOFILE=524288
 
 # No [Install] section on purpose: started on demand only — by the panel over
 # D-Bus, or manually by root (systemctl start angie-panel-enable-streams.service).

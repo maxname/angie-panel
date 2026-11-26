@@ -122,14 +122,16 @@ rm -f /tmp/angie-tuning.txt
 angie -t && systemctl reload angie
 ```
 
-> **Не добавляйте `resolver` в `angie.conf`.** Встроенному ACME он нужен (без резолвера не
-> резолвится адрес УЦ, а `proxy_pass` — хосты по имени), НО панель эмитит свой
-> `resolver` (взятый из `/etc/resolv.conf`) в генерируемом `00-panel.conf`. Второй
+> **Не добавляйте `resolver` в `angie.conf`, если используете панель.** Панель эмитит
+> `resolver` в генерируемом `00-panel.conf`: берёт nameserver из `/etc/resolv.conf`,
+> если не задан override в Настройках. `127.0.0.53` — не встроенный адрес по умолчанию,
+> но часто встречается с systemd-resolved. Второй
 > `resolver` в `http {}` — дубликат, и `angie -t` при первом Apply падает с
-> `"resolver" directive is duplicate`. Резолвером на этом хосте владеет панель.
+> `"resolver" directive is duplicate`. Для голого Angie без панели настройте resolver
+> вручную в `angie.conf`.
 >
-> Если панель НЕ используется (голый Angie), тогда наоборот — добавьте
-> `resolver 127.0.0.53 valid=300s ipv6=off;` (стаб systemd-resolved) сюда же.
+> Например, если systemd-resolved доступен на `127.0.0.53`, можно добавить
+> `resolver 127.0.0.53 valid=300s ipv6=off;` в `http {}`.
 
 ## 4. Проверка
 
@@ -218,11 +220,12 @@ verified live:
 2. **Install**: `apt-get install -y angie angie-console-light`. The build already ships
    `http_acme`, `http_v3`, and the full `stream` module set the panel relies on.
 3. **Tune**: the packaged `angie.conf` is already good (auto workers, 65536 conns,
-   sendfile, commented `stream {}` that the panel activates). Add a `resolver`
-   (`127.0.0.53`, needed for built-in ACME + hostname `proxy_pass`) plus
-   `server_tokens off`, `tcp_nopush/nodelay`, and global TLS session defaults inside
-   `http {}`. The panel manages `http.d/`/`stream.d/`, not `angie.conf`, so these edits
-   are safe. `angie -t && systemctl reload angie`.
+   sendfile, commented `stream {}` that the panel activates). Add `server_tokens off`,
+   `tcp_nopush/nodelay`, and global TLS session defaults inside `http {}`. Do not add a
+   `resolver` there when using the panel: it reads nameservers from `/etc/resolv.conf`
+   unless Settings has an override. `127.0.0.53` is common with systemd-resolved, not a
+   built-in default. For Angie without the panel, configure a resolver such as
+   `127.0.0.53` yourself. Then run `angie -t && systemctl reload angie`.
 4. **Verify**: `/status` returns 200, outbound to `acme-v02.api.letsencrypt.org` is
    reachable (HTTP/2 200), and the clock is NTP-synced (required for ACME).
 5. **Next**: install the Angie Panel `.deb` (arm64) — see `installation.md`.

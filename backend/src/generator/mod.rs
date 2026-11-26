@@ -44,7 +44,8 @@ pub const STREAM_PREFIX: &str = "stream.d/";
 pub struct GeneratorInput {
     pub hosts: Vec<ProxyHost>,
     pub settings: EffectiveSettings,
-    /// Read-only shared snippet files (block-exploits.conf, cache-assets.conf).
+    /// Read-only shared snippet files (block-exploits.conf,
+    /// cache-assets.conf).
     pub snippets_dir: std::path::PathBuf,
     /// Where the status API server listens (127.0.0.1:<port>).
     pub status_port: u16,
