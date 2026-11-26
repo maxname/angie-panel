@@ -1,11 +1,12 @@
 #!/bin/sh
 # postinst for angie-panel (used by cargo-deb).
 #
-# cargo-deb splices its unit and tmpfiles handling in at the debhelper token
-# near the bottom. Never spell that token out anywhere else in this file,
-# comments included: EVERY occurrence is substituted, so a mention in prose gets
-# the generated block dropped into the middle of the sentence and leaves the
-# tail of it running as a command. That is not hypothetical — this very line
+# cargo-deb splices generated code in at the debhelper token near the bottom
+# (nothing at present: units and tmpfiles are both handled by hand below).
+# Never spell that token out anywhere else in this file, comments included:
+# EVERY occurrence is substituted, so a mention in prose gets the generated
+# block dropped into the middle of the sentence and leaves the tail of it
+# running as a command. That is not hypothetical — this very line
 # used to name the token, and installs ended up executing "token below — ..."
 # and printing `postinst: 13: token: not found`. It only stayed harmless
 # because the stray line landed above the `set -e` below.
@@ -50,6 +51,18 @@ case "$1" in
             install -d -o angie -g angie -m 0750 /var/cache/angie-panel-assets
         else
             install -d -m 0750 /var/cache/angie-panel-assets
+        fi
+
+        # /run/angie-panel holds the ACME collector sockets; Angie fails
+        # `angie -t` with "bind() ... (2: No such file or directory)" on the
+        # first certificate when it is missing. The tmpfiles.d entry creates
+        # it at boot, but nothing applies it at install time: cargo-deb adds
+        # no tmpfiles handling for a file shipped as a plain asset, and
+        # Debian's systemd has no dpkg trigger on /usr/lib/tmpfiles.d. So a
+        # fresh install had no directory until the next reboot. Best-effort,
+        # like dh_installtmpfiles: a chroot without the tool still installs.
+        if [ -x "$(command -v systemd-tmpfiles)" ]; then
+            systemd-tmpfiles --create angie-panel.conf >/dev/null || true
         fi
 
         # Enable the panel so it survives a reboot. Only the main unit: the
